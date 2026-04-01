@@ -189,11 +189,19 @@ func (c *apiClient) getSkillContent(id string) (string, error) {
 
 // createSkill uploads a new personal skill.
 func (c *apiClient) createSkill(name, description, content string, tools []string) (*apiSkill, error) {
+	return c.createSkillFull(name, description, content, tools, "")
+}
+
+// createSkillFull uploads a new skill with optional forked_from reference.
+func (c *apiClient) createSkillFull(name, description, content string, tools []string, forkedFrom string) (*apiSkill, error) {
 	payload := map[string]interface{}{
 		"name":         name,
 		"description":  description,
 		"content":      content,
 		"tool_formats": tools,
+	}
+	if forkedFrom != "" {
+		payload["forked_from"] = forkedFrom
 	}
 	body, err := c.post("/api/v1/skills", payload)
 	if err != nil {

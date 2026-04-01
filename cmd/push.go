@@ -20,6 +20,16 @@ type airskillsMarker struct {
 	SkillID string `json:"skill_id"`
 	Version string `json:"version"`
 	Tool    string `json:"tool"`
+	// Source tracks the original skill for no-auth installs.
+	// When the user later syncs with an account, unchanged sourced skills
+	// get linked (forked_from) rather than duplicated.
+	Source *skillSource `json:"source,omitempty"`
+}
+
+type skillSource struct {
+	Owner string `json:"owner"` // username of the original author
+	Slug  string `json:"slug"`  // original skill slug
+	ID    string `json:"id"`    // original skill ID from the server
 }
 
 type conflictInfo struct {
@@ -133,14 +143,21 @@ var pushCmd = &cobra.Command{
 
 			archiveSize := int64(len(archive))
 
-			if !s.hasMarker {
-				// New skill — create on server first
+			if !s.hasMarker || (s.marker != nil && s.marker.SkillID == "") {
+				// New skill or sourced skill (installed via add without account)
 				lines[i].status = "creating"
 				lines[i].pct = 0.5
 				renderProgress(lines)
 
 				content, _ := os.ReadFile(filepath.Join(s.dir, "SKILL.md"))
-				skill, err := client.createSkill(s.name, "", string(content), []string{"claude-code"})
+
+				// If sourced, pass forked_from so the server links to the original
+				var forkedFrom string
+				if s.marker != nil && s.marker.Source != nil {
+					forkedFrom = s.marker.Source.ID
+				}
+
+				skill, err := client.createSkillFull(s.name, "", string(content), []string{"claude-code"}, forkedFrom)
 				if err != nil {
 					lines[i].status = "failed"
 					renderProgress(lines)
@@ -148,8 +165,12 @@ var pushCmd = &cobra.Command{
 					continue
 				}
 
-				// Write marker
-				s.marker = &airskillsMarker{SkillID: skill.ID, Version: skill.Version, Tool: "claude-code"}
+				// Write marker — preserve source, add skill_id
+				newMarker := &airskillsMarker{SkillID: skill.ID, Version: skill.Version, Tool: "claude-code"}
+				if s.marker != nil {
+					newMarker.Source = s.marker.Source
+				}
+				s.marker = newMarker
 				writeMarker(filepath.Join(s.dir, ".airskills"), s.marker)
 				created++
 			} else {

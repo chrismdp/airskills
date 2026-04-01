@@ -22,9 +22,16 @@ var addCmd = &cobra.Command{
 	Long:  "Install a skill from airskills.ai to all detected AI coding agents.",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		parts := strings.SplitN(args[0], "/", 2)
-		if len(parts) != 2 {
-			return fmt.Errorf("expected format: username/skill-name")
+		input := args[0]
+
+		// Strip github.com/ or https://github.com/ prefix
+		input = strings.TrimPrefix(input, "https://")
+		input = strings.TrimPrefix(input, "http://")
+		input = strings.TrimPrefix(input, "github.com/")
+
+		parts := strings.SplitN(input, "/", 2)
+		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+			return fmt.Errorf("expected format: username/skill-name or github.com/username/skill-name")
 		}
 		username, slug := parts[0], parts[1]
 
@@ -108,11 +115,23 @@ var addCmd = &cobra.Command{
 		lines[0].size = fmt.Sprintf("%d agents", len(installed))
 		renderProgress(lines)
 
-		// Write marker to the first agent's directory (Claude Code) for upstream tracking
+		// Write marker — track source for later linking when user creates an account
 		home, _ := os.UserHomeDir()
 		primaryDir := filepath.Join(home, ".claude", "skills", result.Slug)
 		os.MkdirAll(primaryDir, 0755)
-		marker := airskillsMarker{SkillID: result.ID, Version: result.Version, Tool: "claude-code"}
+		marker := airskillsMarker{
+			Version: result.Version,
+			Tool:    "claude-code",
+			Source: &skillSource{
+				Owner: username,
+				Slug:  slug,
+				ID:    result.ID,
+			},
+		}
+		// If logged in, this is a proper install — set the skill_id
+		if authHeader != "" {
+			marker.SkillID = result.ID
+		}
 		writeMarker(filepath.Join(primaryDir, ".airskills"), &marker)
 
 		fmt.Println()
