@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -60,17 +59,7 @@ func runPull(cmd *cobra.Command, args []string) error {
 		lines[i].pct = 0.5
 		renderProgress(lines)
 
-		// Download archive from Storage
-		archiveBody, err := client.get(fmt.Sprintf("/api/v1/skills/%s/archive", remote.ID))
-		if err != nil {
-			lines[i].status = "failed"
-			renderProgress(lines)
-			failed++
-			continue
-		}
-
-		// Extract files from tar.gz
-		files, err := extractTarGzToMap(bytes.NewReader(archiveBody))
+		files, err := downloadSkillFiles(client, remote.ID)
 		if err != nil || len(files) == 0 {
 			lines[i].status = "failed"
 			renderProgress(lines)

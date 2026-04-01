@@ -83,10 +83,9 @@ var pushCmd = &cobra.Command{
 
 		// Collect skills to push
 		type skillEntry struct {
-			name      string
-			dir       string
-			marker    *airskillsMarker
-			hasMarker bool
+			name   string
+			dir    string
+			marker *airskillsMarker
 		}
 
 		var skills []skillEntry
@@ -105,7 +104,7 @@ var pushCmd = &cobra.Command{
 				var m airskillsMarker
 				if json.Unmarshal(markerData, &m) == nil {
 					se.marker = &m
-					se.hasMarker = true
+					// marker is now non-nil
 				}
 			}
 			skills = append(skills, se)
@@ -128,12 +127,6 @@ var pushCmd = &cobra.Command{
 		var pushed, created, conflicts, failed int
 
 		for i, s := range skills {
-			lines[i].status = "compressing"
-			lines[i].pct = 0.3
-			renderProgress(lines)
-
-			// Create tar.gz of the skill folder
-			// Compress skill directory
 			lines[i].status = "compressing"
 			lines[i].pct = 0.2
 			renderProgress(lines)
@@ -163,7 +156,8 @@ var pushCmd = &cobra.Command{
 				}
 			}
 
-			if !s.hasMarker || (s.marker != nil && s.marker.SkillID == "") {
+			isNew := s.marker == nil || s.marker.SkillID == ""
+			if isNew {
 				// New skill — create metadata shell first
 				lines[i].status = "creating"
 				lines[i].pct = 0.4
@@ -183,7 +177,7 @@ var pushCmd = &cobra.Command{
 				}
 
 				s.marker = &airskillsMarker{SkillID: skill.ID, Version: skill.Version, Tool: "claude-code"}
-				if s.hasMarker {
+				if s.marker != nil {
 					// Preserve source from add
 					markerData, _ := os.ReadFile(filepath.Join(s.dir, ".airskills"))
 					var oldMarker airskillsMarker
@@ -244,7 +238,7 @@ var pushCmd = &cobra.Command{
 			}
 
 			// Update marker
-			if !s.hasMarker || (s.marker != nil && s.marker.SkillID != "" && updated == nil) {
+			if isNew {
 				created++
 			} else {
 				pushed++
@@ -369,5 +363,4 @@ func writeMarker(path string, marker *airskillsMarker) {
 	os.WriteFile(path, data, 0644)
 }
 
-// sha256Hex is defined in hash.go
 

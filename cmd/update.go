@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -45,24 +44,15 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("fetching skills: %w", err)
 	}
 
-	_ = home // used for marker path
-
 	var updated, unchanged int
 	for _, skill := range skills {
 		if filterName != "" && skill.Name != filterName {
 			continue
 		}
 
-		// Download archive
-		archiveBody, err := client.get(fmt.Sprintf("/api/v1/skills/%s/archive", skill.ID))
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "  ! %s: %v\n", skill.Name, err)
-			continue
-		}
-
-		files, err := extractTarGzToMap(bytes.NewReader(archiveBody))
+		files, err := downloadSkillFiles(client, skill.ID)
 		if err != nil || len(files) == 0 {
-			fmt.Fprintf(os.Stderr, "  ! %s: no files in archive\n", skill.Name)
+			fmt.Fprintf(os.Stderr, "  ! %s: %v\n", skill.Name, err)
 			continue
 		}
 
