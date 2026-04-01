@@ -1,8 +1,8 @@
 # airskills
 
-Save, share, and install AI coding skills across every AI coding agent.
+Save, share, and install AI coding skills across every AI agent.
 
-Airskills manages **skills** — reusable SKILL.md files that tell AI coding agents how to behave. Install once, sync everywhere. No account needed to get started.
+Airskills manages **skills** — reusable SKILL.md files that tell AI agents how to behave. Install once, sync everywhere. No account needed to get started.
 
 ## Install
 
@@ -29,7 +29,7 @@ airskills add chrismdp/retro            # install a public skill
 airskills add github.com/user/skill     # also accepts GitHub-style paths
 ```
 
-This fetches the skill and writes it to every detected AI coding agent on your machine (`~/.claude/skills/`, `~/.cursor/skills/`, etc.).
+This fetches the skill and writes it to every detected AI agent on your machine (`~/.claude/skills/`, `~/.cursor/skills/`, etc.).
 
 ## Sync across machines (free account)
 

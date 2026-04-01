@@ -5,6 +5,8 @@ import (
 	"bufio"
 	"bytes"
 	"compress/gzip"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -27,9 +29,10 @@ type airskillsMarker struct {
 }
 
 type skillSource struct {
-	Owner string `json:"owner"` // username of the original author
-	Slug  string `json:"slug"`  // original skill slug
-	ID    string `json:"id"`    // original skill ID from the server
+	Owner       string `json:"owner"`                  // username of the original author
+	Slug        string `json:"slug"`                   // original skill slug
+	ID          string `json:"id"`                     // original skill ID from the server
+	ContentHash string `json:"content_hash,omitempty"` // sha256 of original content at add time
 }
 
 type conflictInfo struct {
@@ -144,14 +147,24 @@ var pushCmd = &cobra.Command{
 			archiveSize := int64(len(archive))
 
 			if !s.hasMarker || (s.marker != nil && s.marker.SkillID == "") {
-				// New skill or sourced skill (installed via add without account)
+				content, _ := os.ReadFile(filepath.Join(s.dir, "SKILL.md"))
+
+				// Sourced skill with no changes — skip it, don't create a copy
+				if s.marker != nil && s.marker.Source != nil && s.marker.Source.ContentHash != "" {
+					currentHash := sha256Hex(content)
+					if currentHash == s.marker.Source.ContentHash {
+						lines[i].status = "unchanged"
+						lines[i].pct = 1
+						renderProgress(lines)
+						continue
+					}
+				}
+
+				// New skill or modified sourced skill — create on server
 				lines[i].status = "creating"
 				lines[i].pct = 0.5
 				renderProgress(lines)
 
-				content, _ := os.ReadFile(filepath.Join(s.dir, "SKILL.md"))
-
-				// If sourced, pass forked_from so the server links to the original
 				var forkedFrom string
 				if s.marker != nil && s.marker.Source != nil {
 					forkedFrom = s.marker.Source.ID
@@ -281,7 +294,7 @@ var pushCmd = &cobra.Command{
 				remoteLines := len(strings.Split(string(remoteData), "\n"))
 				fmt.Printf("  Local: %d lines, Remote: %d lines\n", localLines, remoteLines)
 
-				fmt.Printf("\n  To resolve, tell your AI coding agent:\n")
+				fmt.Printf("\n  To resolve, tell your AI agent:\n")
 				fmt.Printf("  \"Merge %s (remote) with %s (my version),\n", c.remotePath, c.localPath)
 				fmt.Printf("   keeping my local changes where possible. Show me the diff before saving.\"\n")
 			}
@@ -374,5 +387,10 @@ func uploadArchive(client *apiClient, skillID string, data []byte) error {
 func writeMarker(path string, marker *airskillsMarker) {
 	data, _ := json.MarshalIndent(marker, "", "  ")
 	os.WriteFile(path, data, 0644)
+}
+
+func sha256Hex(data []byte) string {
+	h := sha256.Sum256(data)
+	return hex.EncodeToString(h[:])
 }
 

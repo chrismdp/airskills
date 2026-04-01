@@ -15,11 +15,11 @@ var (
 
 var rootCmd = &cobra.Command{
 	Use:   "airskills",
-	Short: "Manage AI coding skills across Claude Code, Cursor, and Copilot",
-	Long: `Airskills manages your AI coding skills from a single source of truth.
+	Short: "Manage AI skills across Claude Code, Cursor, Copilot, Cowork, and more",
+	Long: `Airskills manages your AI skills from a single source of truth.
 
-Add skills from Git repos, sync them to every AI tool's expected directory,
-and keep everything up to date with one command.`,
+Install public skills without an account, sync across machines with a free
+account, and share with your team. Works with 18 AI agents.`,
 }
 
 func Execute() {

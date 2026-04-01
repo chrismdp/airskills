@@ -19,7 +19,7 @@ import (
 var addCmd = &cobra.Command{
 	Use:   "add <username/skill>",
 	Short: "Install a shared skill",
-	Long:  "Install a skill from airskills.ai to all detected AI coding agents.",
+	Long:  "Install a skill from airskills.ai to all detected AI agents.",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		input := args[0]
@@ -121,13 +121,16 @@ var addCmd = &cobra.Command{
 		home, _ := os.UserHomeDir()
 		primaryDir := filepath.Join(home, ".claude", "skills", result.Slug)
 		os.MkdirAll(primaryDir, 0755)
+		// Hash the original content so push can detect modifications
+		originalContent, _ := os.ReadFile(filepath.Join(primaryDir, "SKILL.md"))
 		marker := airskillsMarker{
 			Version: result.Version,
 			Tool:    "claude-code",
 			Source: &skillSource{
-				Owner: username,
-				Slug:  slug,
-				ID:    result.ID,
+				Owner:       username,
+				Slug:        slug,
+				ID:          result.ID,
+				ContentHash: sha256Hex(originalContent),
 			},
 		}
 		writeMarker(filepath.Join(primaryDir, ".airskills"), &marker)
