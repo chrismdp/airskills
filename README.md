@@ -12,9 +12,9 @@ Airskills manages **skills** — reusable SKILL.md files that tell AI agents how
 | Accounts & sharing | Free accounts, share skills by email, org distribution | No accounts or sharing |
 | Standalone binary | Single Go binary, no runtime needed | Requires Node.js / npx |
 | Self-updating | `airskills self-update` | Re-download via npm |
-| Version history | Full commit DAG with rollback | No versioning |
-| Conflict detection | Detects edits from multiple machines, shows both versions | N/A |
-| Skill provenance | Tracks forks and original authors across the ecosystem | No provenance tracking |
+| Version history | Built-in commit DAG with rollback | Via git (manual forks, tech-heavy) |
+| Conflict detection | Detects multi-machine edits, shows both versions | Via git (manual merge) |
+| Skill provenance | Tracks forks and original authors automatically | Via git (manual fork tracking) |
 | Install without account | `airskills add user/skill` — no login needed | Same |
 | Open source | MIT | MIT |
 
