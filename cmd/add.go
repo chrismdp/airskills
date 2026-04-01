@@ -115,7 +115,9 @@ var addCmd = &cobra.Command{
 		lines[0].size = fmt.Sprintf("%d agents", len(installed))
 		renderProgress(lines)
 
-		// Write marker — track source for later linking when user creates an account
+		// Write marker — always track source, never set skill_id.
+		// The user's own skill_id is set later when they push (creates their copy
+		// with forked_from linking back to the original).
 		home, _ := os.UserHomeDir()
 		primaryDir := filepath.Join(home, ".claude", "skills", result.Slug)
 		os.MkdirAll(primaryDir, 0755)
@@ -127,10 +129,6 @@ var addCmd = &cobra.Command{
 				Slug:  slug,
 				ID:    result.ID,
 			},
-		}
-		// If logged in, this is a proper install — set the skill_id
-		if authHeader != "" {
-			marker.SkillID = result.ID
 		}
 		writeMarker(filepath.Join(primaryDir, ".airskills"), &marker)
 
