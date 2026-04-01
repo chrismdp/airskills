@@ -4,6 +4,20 @@ Save, share, and install AI coding skills across every AI agent.
 
 Airskills manages **skills** — reusable SKILL.md files that tell AI agents how to behave. Install once, sync everywhere. No account needed to get started.
 
+## Why airskills over `npx skills`?
+
+|  | airskills | npx skills |
+|--|-----------|------------|
+| Cross-machine sync | Push/pull skills across machines with conflict detection | No sync — local install only |
+| Accounts & sharing | Free accounts, share skills by email, org distribution | No accounts or sharing |
+| Standalone binary | Single Go binary, no runtime needed | Requires Node.js / npx |
+| Self-updating | `airskills self-update` | Re-download via npm |
+| Version history | Full commit DAG with rollback | No versioning |
+| Conflict detection | Detects edits from multiple machines, shows both versions | N/A |
+| Skill provenance | Tracks forks and original authors across the ecosystem | No provenance tracking |
+| Install without account | `airskills add user/skill` — no login needed | Same |
+| Open source | MIT | MIT |
+
 ## Install
 
 ```bash
@@ -14,12 +28,6 @@ Or with Go:
 
 ```bash
 go install github.com/chrismdp/airskills@latest
-```
-
-Or with Homebrew:
-
-```bash
-brew install chrismdp/tap/airskills
 ```
 
 ## Quick start (no account needed)
