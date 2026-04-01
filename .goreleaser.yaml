@@ -1,0 +1,54 @@
+project_name: airskills
+version: 2
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - main: .
+    binary: airskills
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X github.com/chrismdp/airskills/cmd.version={{.Version}}
+      - -X github.com/chrismdp/airskills/cmd.commit={{.ShortCommit}}
+      - -X github.com/chrismdp/airskills/cmd.date={{.Date}}
+
+archives:
+  - format: tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: "checksums.txt"
+
+signs:
+  - cmd: cosign
+    artifacts: checksum
+    args:
+      - "sign-blob"
+      - "--yes"
+      - "--output-signature=${signature}"
+      - "${artifact}"
+
+release:
+  github:
+    owner: chrismdp
+    name: airskills
+  draft: false
+  prerelease: auto
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^e2e:"
