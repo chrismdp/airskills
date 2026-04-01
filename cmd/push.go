@@ -205,20 +205,19 @@ var pushCmd = &cobra.Command{
 					lines[i].status = "CONFLICT"
 					renderProgress(lines)
 
-					// Download remote for merge
+					// Parse remote version from 409 body
+					var conflict struct {
+						RemoteVersion string `json:"remote_version"`
+					}
+					json.Unmarshal([]byte(err.Error()), &conflict)
+
+					// Download remote SKILL.md for merge
 					tmpDir := filepath.Join(os.TempDir(), "airskills-conflicts", s.name)
 					os.MkdirAll(tmpDir, 0755)
-					// Download remote SKILL.md via raw endpoint
 					rawBody, rawErr := client.get(fmt.Sprintf("/api/v1/skills/%s/raw", s.marker.SkillID))
 					if rawErr == nil {
 						tmpPath := filepath.Join(tmpDir, "SKILL.md")
 						os.WriteFile(tmpPath, rawBody, 0644)
-
-						var conflict struct {
-							RemoteVersion string `json:"remote_version"`
-						}
-						json.Unmarshal([]byte(err.Error()), &conflict)
-
 						conflictMessages = append(conflictMessages, conflictInfo{
 							name:       s.name,
 							localPath:  filepath.Join(s.dir, "SKILL.md"),

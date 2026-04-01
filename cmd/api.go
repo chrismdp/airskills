@@ -235,12 +235,12 @@ func (c *apiClient) putArchive(skillID string, archive []byte, expectedVersion, 
 		return nil, resp.StatusCode, err
 	}
 
-	if resp.StatusCode >= 400 {
-		return nil, resp.StatusCode, fmt.Errorf("%s", string(body))
-	}
-
 	var skill apiSkill
 	json.Unmarshal(body, &skill)
+
+	if resp.StatusCode >= 400 {
+		return &skill, resp.StatusCode, fmt.Errorf("%s", string(body))
+	}
 	return &skill, resp.StatusCode, nil
 }
 
