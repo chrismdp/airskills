@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"archive/zip"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -23,9 +24,9 @@ var exportCmd = &cobra.Command{
 	Long: `Exports skills from your airskills account into portable formats.
 
 Formats:
-  zip   A zip file containing SKILL.md — drag into Claude.ai's Upload Skill
+  zip   A zip file containing all skill files — drag into Claude.ai's Upload Skill
         dialog, ChatGPT's Skills page, or Cowork. (default)
-  dir   A directory with SKILL.md inside — the Claude Code plugin structure.
+  dir   A directory with skill files — the Claude Code plugin structure.
         Copy into ~/.claude/skills/ or a project's .claude/skills/.
 
 Examples:
@@ -68,14 +69,12 @@ func runExport(cmd *cobra.Command, args []string) error {
 
 		var exported int
 		for _, skill := range skills {
-			content, err := client.getSkillContent(skill.ID)
+			files, err := downloadSkillFiles(client, skill.ID)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "  ! %s: %v\n", skill.Name, err)
 				continue
 			}
-			skill.Content = content
-
-			if err := exportSkill(skill, format, dir, ""); err != nil {
+			if err := exportSkill(skill, files, format, dir, ""); err != nil {
 				fmt.Fprintf(os.Stderr, "  ! %s: %v\n", skill.Name, err)
 				continue
 			}
@@ -98,11 +97,10 @@ func runExport(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("skill %q not found in your account", name)
 	}
 
-	content, err := client.getSkillContent(target.ID)
+	files, err := downloadSkillFiles(client, target.ID)
 	if err != nil {
-		return fmt.Errorf("fetching skill content: %w", err)
+		return fmt.Errorf("downloading skill files: %w", err)
 	}
-	target.Content = content
 
 	dir := "."
 	outFile := output
@@ -114,21 +112,29 @@ func runExport(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	return exportSkill(*target, format, dir, outFile)
+	return exportSkill(*target, files, format, dir, outFile)
 }
 
-func exportSkill(skill apiSkill, format, dir, outFile string) error {
+func downloadSkillFiles(client *apiClient, skillID string) (map[string][]byte, error) {
+	archiveBody, err := client.get(fmt.Sprintf("/api/v1/skills/%s/archive", skillID))
+	if err != nil {
+		return nil, err
+	}
+	return extractTarGzToMap(bytes.NewReader(archiveBody))
+}
+
+func exportSkill(skill apiSkill, files map[string][]byte, format, dir, outFile string) error {
 	switch format {
 	case "zip":
-		return exportZip(skill, dir, outFile)
+		return exportZip(skill, files, dir, outFile)
 	case "dir":
-		return exportDir(skill, dir, outFile)
+		return exportDir(skill, files, dir, outFile)
 	default:
 		return fmt.Errorf("unknown format %q — use 'zip' or 'dir'", format)
 	}
 }
 
-func exportZip(skill apiSkill, dir, outFile string) error {
+func exportZip(skill apiSkill, files map[string][]byte, dir, outFile string) error {
 	if outFile == "" {
 		outFile = filepath.Join(dir, skill.Name+".zip")
 	}
@@ -141,16 +147,18 @@ func exportZip(skill apiSkill, dir, outFile string) error {
 
 	w := zip.NewWriter(f)
 
-	// Add SKILL.md at root of zip
-	fw, err := w.Create("SKILL.md")
-	if err != nil {
-		return err
-	}
-	if _, err := fw.Write([]byte(skill.Content)); err != nil {
-		return err
+	// Add all skill files
+	for path, content := range files {
+		fw, err := w.Create(path)
+		if err != nil {
+			return err
+		}
+		if _, err := fw.Write(content); err != nil {
+			return err
+		}
 	}
 
-	// Add metadata.json for tool compatibility
+	// Add metadata.json
 	meta := map[string]interface{}{
 		"name":        skill.Name,
 		"description": skill.Description,
@@ -173,25 +181,26 @@ func exportZip(skill apiSkill, dir, outFile string) error {
 		return err
 	}
 
-	fmt.Printf("  exported: %s → %s\n", skill.Name, outFile)
+	fmt.Printf("  exported: %s → %s (%d files)\n", skill.Name, outFile, len(files))
 	return nil
 }
 
-func exportDir(skill apiSkill, dir, outFile string) error {
+func exportDir(skill apiSkill, files map[string][]byte, dir, outFile string) error {
 	skillDir := outFile
 	if skillDir == "" {
 		skillDir = filepath.Join(dir, skill.Name)
 	}
 
-	if err := os.MkdirAll(skillDir, 0o755); err != nil {
-		return fmt.Errorf("creating directory: %w", err)
+	for path, content := range files {
+		fullPath := filepath.Join(skillDir, path)
+		if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
+			return fmt.Errorf("creating directory: %w", err)
+		}
+		if err := os.WriteFile(fullPath, content, 0o644); err != nil {
+			return err
+		}
 	}
 
-	skillPath := filepath.Join(skillDir, "SKILL.md")
-	if err := os.WriteFile(skillPath, []byte(skill.Content), 0o644); err != nil {
-		return err
-	}
-
-	fmt.Printf("  exported: %s → %s\n", skill.Name, skillPath)
+	fmt.Printf("  exported: %s → %s/ (%d files)\n", skill.Name, skillDir, len(files))
 	return nil
 }

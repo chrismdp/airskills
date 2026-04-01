@@ -4,8 +4,6 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -119,7 +117,7 @@ func runSelfUpdate(cmd *cobra.Command, args []string) error {
 
 	// Verify checksum
 	if expectedHash != "" {
-		actualHash := sha256sum(archiveData)
+		actualHash := sha256Hex(archiveData)
 		if actualHash != expectedHash {
 			return fmt.Errorf("checksum mismatch: expected %s, got %s", expectedHash, actualHash)
 		}
@@ -168,10 +166,7 @@ func httpGet(client *http.Client, url string) ([]byte, error) {
 	return io.ReadAll(resp.Body)
 }
 
-func sha256sum(data []byte) string {
-	h := sha256.Sum256(data)
-	return hex.EncodeToString(h[:])
-}
+// sha256sum is sha256Hex from hash.go
 
 func extractBinaryFromTarGz(data []byte, name string) ([]byte, error) {
 	gr, err := gzip.NewReader(bytes.NewReader(data))

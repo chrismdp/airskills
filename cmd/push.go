@@ -5,12 +5,9 @@ import (
 	"bufio"
 	"bytes"
 	"compress/gzip"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,9 +16,10 @@ import (
 )
 
 type airskillsMarker struct {
-	SkillID string `json:"skill_id"`
-	Version string `json:"version"`
-	Tool    string `json:"tool"`
+	SkillID     string `json:"skill_id"`
+	Version     string `json:"version"`
+	ContentHash string `json:"content_hash,omitempty"`
+	Tool        string `json:"tool"`
 	// Source tracks the original skill for no-auth installs.
 	// When the user later syncs with an account, unchanged sourced skills
 	// get linked (forked_from) rather than duplicated.
@@ -135,6 +133,11 @@ var pushCmd = &cobra.Command{
 			renderProgress(lines)
 
 			// Create tar.gz of the skill folder
+			// Compress skill directory
+			lines[i].status = "compressing"
+			lines[i].pct = 0.2
+			renderProgress(lines)
+
 			archive, err := createTarGz(s.dir)
 			if err != nil {
 				lines[i].status = "failed"
@@ -146,23 +149,24 @@ var pushCmd = &cobra.Command{
 
 			archiveSize := int64(len(archive))
 
-			if !s.hasMarker || (s.marker != nil && s.marker.SkillID == "") {
-				content, _ := os.ReadFile(filepath.Join(s.dir, "SKILL.md"))
+			// Compute Merkle content hash from local files
+			localFiles := readSkillFiles(s.dir)
+			contentHash := computeMerkleHash(localFiles)
 
-				// Sourced skill with no changes — skip it, don't create a copy
-				if s.marker != nil && s.marker.Source != nil && s.marker.Source.ContentHash != "" {
-					currentHash := sha256Hex(content)
-					if currentHash == s.marker.Source.ContentHash {
-						lines[i].status = "unchanged"
-						lines[i].pct = 1
-						renderProgress(lines)
-						continue
-					}
+			// Sourced skill with no changes — skip
+			if s.marker != nil && s.marker.Source != nil && s.marker.Source.ContentHash != "" {
+				if contentHash == s.marker.Source.ContentHash {
+					lines[i].status = "unchanged"
+					lines[i].pct = 1
+					renderProgress(lines)
+					continue
 				}
+			}
 
-				// New skill or modified sourced skill — create on server
+			if !s.hasMarker || (s.marker != nil && s.marker.SkillID == "") {
+				// New skill — create metadata shell first
 				lines[i].status = "creating"
-				lines[i].pct = 0.5
+				lines[i].pct = 0.4
 				renderProgress(lines)
 
 				var forkedFrom string
@@ -170,7 +174,7 @@ var pushCmd = &cobra.Command{
 					forkedFrom = s.marker.Source.ID
 				}
 
-				skill, err := client.createSkillFull(s.name, "", string(content), []string{"claude-code"}, forkedFrom)
+				skill, err := client.createSkill(s.name, "", []string{"claude-code"}, forkedFrom)
 				if err != nil {
 					lines[i].status = "failed"
 					renderProgress(lines)
@@ -178,54 +182,49 @@ var pushCmd = &cobra.Command{
 					continue
 				}
 
-				// Write marker — preserve source, add skill_id
-				newMarker := &airskillsMarker{SkillID: skill.ID, Version: skill.Version, Tool: "claude-code"}
-				if s.marker != nil {
-					newMarker.Source = s.marker.Source
-				}
-				s.marker = newMarker
-				writeMarker(filepath.Join(s.dir, ".airskills"), s.marker)
-				created++
-			} else {
-				// Existing skill — push with version check
-				lines[i].status = "pushing"
-				lines[i].pct = 0.5
-				renderProgress(lines)
-
-				content, _ := os.ReadFile(filepath.Join(s.dir, "SKILL.md"))
-				payload := map[string]interface{}{
-					"content": string(content),
-				}
-				if !pushForce {
-					payload["expected_version"] = s.marker.Version
-				}
-
-				body, statusCode, err := client.put(
-					fmt.Sprintf("/api/v1/skills/%s", s.marker.SkillID),
-					payload,
-				)
-				if err != nil {
-					lines[i].status = "failed"
-					renderProgress(lines)
-					failed++
-					continue
-				}
-
-				if statusCode == 409 {
-					var conflict struct {
-						RemoteVersion string `json:"remote_version"`
+				s.marker = &airskillsMarker{SkillID: skill.ID, Version: skill.Version, Tool: "claude-code"}
+				if s.hasMarker {
+					// Preserve source from add
+					markerData, _ := os.ReadFile(filepath.Join(s.dir, ".airskills"))
+					var oldMarker airskillsMarker
+					if json.Unmarshal(markerData, &oldMarker) == nil {
+						s.marker.Source = oldMarker.Source
 					}
-					json.Unmarshal(body, &conflict)
+				}
+			}
+
+			// Upload archive — single write path
+			lines[i].status = "uploading"
+			lines[i].pct = 0.6
+			renderProgress(lines)
+
+			expectedVersion := ""
+			if !pushForce && s.marker.Version != "" {
+				expectedVersion = s.marker.Version
+			}
+
+			updated, statusCode, err := client.putArchive(
+				s.marker.SkillID, archive, expectedVersion, contentHash,
+			)
+			if err != nil {
+				if statusCode == 409 {
 					lines[i].status = "CONFLICT"
 					renderProgress(lines)
 
-					// Download remote version to tmp for merge
+					// Download remote for merge
 					tmpDir := filepath.Join(os.TempDir(), "airskills-conflicts", s.name)
 					os.MkdirAll(tmpDir, 0755)
-					remoteContent, err := client.getSkillContent(s.marker.SkillID)
-					if err == nil {
+					// Download remote SKILL.md via raw endpoint
+					rawBody, rawErr := client.get(fmt.Sprintf("/api/v1/skills/%s/raw", s.marker.SkillID))
+					if rawErr == nil {
 						tmpPath := filepath.Join(tmpDir, "SKILL.md")
-						os.WriteFile(tmpPath, []byte(remoteContent), 0644)
+						os.WriteFile(tmpPath, rawBody, 0644)
+
+						var conflict struct {
+							RemoteVersion string `json:"remote_version"`
+						}
+						json.Unmarshal([]byte(err.Error()), &conflict)
+
 						conflictMessages = append(conflictMessages, conflictInfo{
 							name:       s.name,
 							localPath:  filepath.Join(s.dir, "SKILL.md"),
@@ -238,37 +237,23 @@ var pushCmd = &cobra.Command{
 					continue
 				}
 
-				if statusCode >= 400 {
-					lines[i].status = "failed"
-					renderProgress(lines)
-					failed++
-					continue
-				}
-
-				// Update marker with new version
-				var updated struct {
-					Version string `json:"version"`
-				}
-				json.Unmarshal(body, &updated)
-				s.marker.Version = updated.Version
-				writeMarker(filepath.Join(s.dir, ".airskills"), s.marker)
-				pushed++
-			}
-
-			// Upload archive
-			lines[i].status = "uploading"
-			lines[i].pct = 0.7
-			renderProgress(lines)
-
-			err = uploadArchive(client, s.marker.SkillID, archive)
-			if err != nil {
-				// Non-fatal — metadata pushed, archive upload failed
-				lines[i].status = fmt.Sprintf("done (archive failed)")
-				lines[i].size = formatSize(archiveSize)
-				lines[i].pct = 1
+				lines[i].status = "failed"
 				renderProgress(lines)
+				failed++
 				continue
 			}
+
+			// Update marker
+			if !s.hasMarker || (s.marker != nil && s.marker.SkillID != "" && updated == nil) {
+				created++
+			} else {
+				pushed++
+			}
+			if updated != nil {
+				s.marker.Version = updated.Version
+				s.marker.ContentHash = updated.ContentHash
+			}
+			writeMarker(filepath.Join(s.dir, ".airskills"), s.marker)
 
 			lines[i].status = "done"
 			lines[i].size = formatSize(archiveSize)
@@ -362,26 +347,21 @@ func createTarGz(dir string) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func uploadArchive(client *apiClient, skillID string, data []byte) error {
-	url := client.baseURL + fmt.Sprintf("/api/v1/skills/%s/archive", skillID)
-	req, err := http.NewRequest("PUT", url, bytes.NewReader(data))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Authorization", "Bearer "+client.token)
-	req.Header.Set("Content-Type", "application/gzip")
-
-	resp, err := client.http.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 400 {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("upload failed (%d): %s", resp.StatusCode, string(body))
-	}
-	return nil
+// readSkillFiles reads all files in a skill directory (excluding .airskills marker).
+func readSkillFiles(dir string) map[string][]byte {
+	files := map[string][]byte{}
+	filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() || info.Name() == ".airskills" {
+			return nil
+		}
+		rel, _ := filepath.Rel(dir, path)
+		data, err := os.ReadFile(path)
+		if err == nil {
+			files[rel] = data
+		}
+		return nil
+	})
+	return files
 }
 
 func writeMarker(path string, marker *airskillsMarker) {
@@ -389,8 +369,5 @@ func writeMarker(path string, marker *airskillsMarker) {
 	os.WriteFile(path, data, 0644)
 }
 
-func sha256Hex(data []byte) string {
-	h := sha256.Sum256(data)
-	return hex.EncodeToString(h[:])
-}
+// sha256Hex is defined in hash.go
 

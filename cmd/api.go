@@ -16,8 +16,8 @@ type apiSkill struct {
 	ID          string   `json:"id"`
 	Name        string   `json:"name"`
 	Description string   `json:"description"`
-	Content     string   `json:"content"`
 	Version     string   `json:"version"`
+	ContentHash string   `json:"content_hash"`
 	OrgID       *string  `json:"org_id"`
 	ToolFormats []string `json:"tool_formats"`
 }
@@ -174,30 +174,24 @@ func (c *apiClient) listSkills(scope string) ([]apiSkill, error) {
 	return resp.Skills, nil
 }
 
-// getSkillContent fetches the full content of a skill.
-func (c *apiClient) getSkillContent(id string) (string, error) {
+// getSkill fetches skill metadata (no content — files are in Storage).
+func (c *apiClient) getSkill(id string) (*apiSkill, error) {
 	body, err := c.get(fmt.Sprintf("/api/v1/skills/%s", id))
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	var skill apiSkill
 	if err := json.Unmarshal(body, &skill); err != nil {
-		return "", err
+		return nil, err
 	}
-	return skill.Content, nil
+	return &skill, nil
 }
 
-// createSkill uploads a new personal skill.
-func (c *apiClient) createSkill(name, description, content string, tools []string) (*apiSkill, error) {
-	return c.createSkillFull(name, description, content, tools, "")
-}
-
-// createSkillFull uploads a new skill with optional forked_from reference.
-func (c *apiClient) createSkillFull(name, description, content string, tools []string, forkedFrom string) (*apiSkill, error) {
+// createSkill creates a skill metadata shell (files uploaded separately via archive).
+func (c *apiClient) createSkill(name, description string, tools []string, forkedFrom string) (*apiSkill, error) {
 	payload := map[string]interface{}{
 		"name":         name,
 		"description":  description,
-		"content":      content,
 		"tool_formats": tools,
 	}
 	if forkedFrom != "" {
@@ -212,6 +206,42 @@ func (c *apiClient) createSkillFull(name, description, content string, tools []s
 		return nil, err
 	}
 	return &skill, nil
+}
+
+// putArchive uploads a tar.gz to the archive endpoint (single write path).
+func (c *apiClient) putArchive(skillID string, archive []byte, expectedVersion, contentHash string) (*apiSkill, int, error) {
+	url := c.baseURL + fmt.Sprintf("/api/v1/skills/%s/archive", skillID)
+	req, err := http.NewRequest("PUT", url, bytes.NewReader(archive))
+	if err != nil {
+		return nil, 0, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Content-Type", "application/gzip")
+	if expectedVersion != "" {
+		req.Header.Set("X-Expected-Version", expectedVersion)
+	}
+	if contentHash != "" {
+		req.Header.Set("X-Content-Hash", contentHash)
+	}
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, resp.StatusCode, err
+	}
+
+	if resp.StatusCode >= 400 {
+		return nil, resp.StatusCode, fmt.Errorf("%s", string(body))
+	}
+
+	var skill apiSkill
+	json.Unmarshal(body, &skill)
+	return &skill, resp.StatusCode, nil
 }
 
 // recordInstallation records that a skill was installed for a tool.

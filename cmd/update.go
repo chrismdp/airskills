@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -44,15 +45,7 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("fetching skills: %w", err)
 	}
 
-	type toolDirEntry struct {
-		tool string
-		dir  string
-	}
-	toolDirs := []toolDirEntry{
-		{"claude-code", filepath.Join(home, ".claude", "skills")},
-		{"cursor", filepath.Join(home, ".cursor", "rules")},
-		{"copilot", filepath.Join(home, ".github", "instructions")},
-	}
+	_ = home // used for marker path
 
 	var updated, unchanged int
 	for _, skill := range skills {
@@ -60,60 +53,39 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 			continue
 		}
 
-		content, err := client.getSkillContent(skill.ID)
+		// Download archive
+		archiveBody, err := client.get(fmt.Sprintf("/api/v1/skills/%s/archive", skill.ID))
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "  ! %s: %v\n", skill.Name, err)
 			continue
 		}
 
-		tools := skill.ToolFormats
-		if len(tools) == 0 {
-			tools = []string{"claude-code"}
-		}
-		toolSet := make(map[string]bool)
-		for _, t := range tools {
-			toolSet[t] = true
+		files, err := extractTarGzToMap(bytes.NewReader(archiveBody))
+		if err != nil || len(files) == 0 {
+			fmt.Fprintf(os.Stderr, "  ! %s: no files in archive\n", skill.Name)
+			continue
 		}
 
-		skillChanged := false
-		for _, td := range toolDirs {
-			if !toolSet[td.tool] {
-				continue
-			}
-
-			skillDir := filepath.Join(td.dir, skill.Name)
-			skillPath := filepath.Join(skillDir, "SKILL.md")
-
-			existing, err := os.ReadFile(skillPath)
-			if err == nil && string(existing) == content {
-				continue
-			}
-
-			if err := os.MkdirAll(skillDir, 0o755); err != nil {
-				fmt.Fprintf(os.Stderr, "  ! %s -> %s: %v\n", skill.Name, td.tool, err)
-				continue
-			}
-
-			if err := os.WriteFile(skillPath, []byte(content), 0o644); err != nil {
-				fmt.Fprintf(os.Stderr, "  ! %s -> %s: %v\n", skill.Name, td.tool, err)
-				continue
-			}
-
-			marker := fmt.Sprintf(`{"skill_id":"%s","version":"%s","tool":"%s"}`,
-				skill.ID, skill.Version, td.tool)
-			_ = os.WriteFile(filepath.Join(skillDir, ".airskills"), []byte(marker), 0o644)
-
-			_ = client.recordInstallation(skill.ID, td.tool, skill.Version)
-
-			fmt.Printf("  updated: %s -> %s\n", skill.Name, skillPath)
-			skillChanged = true
-		}
-
-		if skillChanged {
-			updated++
-		} else {
+		destinations, err := installSkillToAgents(skill.Name, files)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "  ! %s: %v\n", skill.Name, err)
 			unchanged++
+			continue
 		}
+
+		// Write marker
+		primaryDir := filepath.Join(home, ".claude", "skills", skill.Name)
+		os.MkdirAll(primaryDir, 0755)
+		marker := airskillsMarker{
+			SkillID:     skill.ID,
+			Version:     skill.Version,
+			ContentHash: skill.ContentHash,
+			Tool:        "claude-code",
+		}
+		writeMarker(filepath.Join(primaryDir, ".airskills"), &marker)
+
+		fmt.Printf("  updated: %s (%d agents)\n", skill.Name, len(destinations))
+		updated++
 	}
 
 	if filterName != "" && updated == 0 && unchanged == 0 {

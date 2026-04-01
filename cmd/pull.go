@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -59,7 +60,8 @@ func runPull(cmd *cobra.Command, args []string) error {
 		lines[i].pct = 0.5
 		renderProgress(lines)
 
-		content, err := client.getSkillContent(remote.ID)
+		// Download archive from Storage
+		archiveBody, err := client.get(fmt.Sprintf("/api/v1/skills/%s/archive", remote.ID))
 		if err != nil {
 			lines[i].status = "failed"
 			renderProgress(lines)
@@ -67,7 +69,14 @@ func runPull(cmd *cobra.Command, args []string) error {
 			continue
 		}
 
-		files := map[string][]byte{"SKILL.md": []byte(content)}
+		// Extract files from tar.gz
+		files, err := extractTarGzToMap(bytes.NewReader(archiveBody))
+		if err != nil || len(files) == 0 {
+			lines[i].status = "failed"
+			renderProgress(lines)
+			failed++
+			continue
+		}
 
 		lines[i].status = "installing"
 		lines[i].pct = 0.8
@@ -81,11 +90,16 @@ func runPull(cmd *cobra.Command, args []string) error {
 			continue
 		}
 
-		// Write marker
+		// Write marker with content hash
 		home, _ := os.UserHomeDir()
 		primaryDir := filepath.Join(home, ".claude", "skills", remote.Name)
 		os.MkdirAll(primaryDir, 0755)
-		marker := airskillsMarker{SkillID: remote.ID, Version: remote.Version, Tool: "claude-code"}
+		marker := airskillsMarker{
+			SkillID:     remote.ID,
+			Version:     remote.Version,
+			ContentHash: remote.ContentHash,
+			Tool:        "claude-code",
+		}
 		writeMarker(filepath.Join(primaryDir, ".airskills"), &marker)
 
 		lines[i].status = "done"
