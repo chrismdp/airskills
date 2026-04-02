@@ -187,6 +187,30 @@ func (c *apiClient) getSkill(id string) (*apiSkill, error) {
 	return &skill, nil
 }
 
+// skillCommit represents a commit from the version history endpoint.
+type skillCommit struct {
+	ID        string   `json:"id"`
+	ParentIDs []string `json:"parent_ids"`
+	Message   string   `json:"message"`
+	CreatedAt string   `json:"created_at"`
+	PushedBy  *string  `json:"pushed_by"`
+}
+
+// getVersionHistory fetches the commit history for a skill.
+func (c *apiClient) getVersionHistory(skillID string) ([]skillCommit, error) {
+	body, err := c.get(fmt.Sprintf("/api/v1/skills/%s/versions", skillID))
+	if err != nil {
+		return nil, err
+	}
+	var result struct {
+		Versions []skillCommit `json:"versions"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, err
+	}
+	return result.Versions, nil
+}
+
 // createSkill creates a skill metadata shell (files uploaded separately via archive).
 func (c *apiClient) createSkill(name, description string, tools []string, forkedFrom string) (*apiSkill, error) {
 	payload := map[string]interface{}{
