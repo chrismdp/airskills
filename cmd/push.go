@@ -37,8 +37,6 @@ type conflictInfo struct {
 	name       string
 	localPath  string
 	remotePath string
-	localHash  string
-	remoteHash string
 }
 
 var pushForce bool
@@ -104,7 +102,6 @@ var pushCmd = &cobra.Command{
 				var m airskillsMarker
 				if json.Unmarshal(markerData, &m) == nil {
 					se.marker = &m
-					// marker is now non-nil
 				}
 			}
 			skills = append(skills, se)
@@ -192,13 +189,11 @@ var pushCmd = &cobra.Command{
 				}
 
 				s.marker = &airskillsMarker{SkillID: skill.ID, Version: skill.Version, Tool: "claude-code"}
-				if s.marker != nil {
-					// Preserve source from add
-					markerData, _ := os.ReadFile(filepath.Join(s.dir, ".airskills"))
-					var oldMarker airskillsMarker
-					if json.Unmarshal(markerData, &oldMarker) == nil {
-						s.marker.Source = oldMarker.Source
-					}
+				// Preserve source from add
+				markerData, _ := os.ReadFile(filepath.Join(s.dir, ".airskills"))
+				var oldMarker airskillsMarker
+				if json.Unmarshal(markerData, &oldMarker) == nil {
+					s.marker.Source = oldMarker.Source
 				}
 			}
 
@@ -237,8 +232,6 @@ var pushCmd = &cobra.Command{
 							name:       s.name,
 							localPath:  filepath.Join(s.dir, "SKILL.md"),
 							remotePath: tmpPath,
-							localHash:  s.marker.ContentHash,
-							remoteHash: conflict.RemoteContentHash,
 						})
 					}
 					conflicts++
