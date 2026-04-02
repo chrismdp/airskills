@@ -20,6 +20,7 @@ type apiSkill struct {
 	ContentHash string   `json:"content_hash"`
 	OrgID       *string  `json:"org_id"`
 	ToolFormats []string `json:"tool_formats"`
+	Warning     string   `json:"warning,omitempty"`
 }
 
 // syncResult represents the response from the sync check endpoint.

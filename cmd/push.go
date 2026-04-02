@@ -142,14 +142,19 @@ var pushCmd = &cobra.Command{
 
 			archiveSize := int64(len(archive))
 
-			const maxSkillSize = 1024 * 1024 // 1MB
-			if archiveSize > maxSkillSize {
+			const softLimit = 1024 * 1024        // 1MB — free tier
+			const hardLimit = 100 * 1024 * 1024  // 100MB — absolute max
+			if archiveSize > hardLimit {
 				lines[i].status = "too large"
 				renderProgress(lines)
-				fmt.Fprintf(os.Stderr, "\n  %s: %.1fMB exceeds 1MB limit. Contact chris@airskills.ai to upgrade.\n",
-					s.name, float64(archiveSize)/1024/1024)
+				fmt.Fprintf(os.Stderr, "\n  %s: %dMB exceeds the 100MB hard limit.\n",
+					s.name, archiveSize/1024/1024)
 				failed++
 				continue
+			}
+			if archiveSize > softLimit {
+				fmt.Fprintf(os.Stderr, "\n  %s: %.1fMB exceeds 1MB free tier limit. Contact chris@airskills.ai to upgrade.\n",
+					s.name, float64(archiveSize)/1024/1024)
 			}
 
 			// Compute Merkle content hash from local files
@@ -255,6 +260,9 @@ var pushCmd = &cobra.Command{
 			if updated != nil {
 				s.marker.Version = updated.Version
 				s.marker.ContentHash = updated.ContentHash
+				if updated.Warning != "" {
+					fmt.Fprintf(os.Stderr, "\n  ⚠ %s: %s\n", s.name, updated.Warning)
+				}
 			}
 			writeMarker(filepath.Join(s.dir, ".airskills"), s.marker)
 
