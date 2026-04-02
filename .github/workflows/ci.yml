@@ -8,7 +8,10 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
@@ -25,3 +28,34 @@ jobs:
 
       - name: Vet
         run: go vet ./...
+
+  windows-install:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Build Windows binary
+        run: go build -o airskills.exe .
+
+      - name: Verify binary runs
+        run: ./airskills.exe version
+
+      - name: Verify help output
+        run: ./airskills.exe --help
+
+      - name: Check agent detection
+        shell: pwsh
+        run: |
+          # Create a fake skill directory to test detection
+          $skillDir = "$env:USERPROFILE\.claude\skills\test-skill"
+          New-Item -ItemType Directory -Path $skillDir -Force | Out-Null
+          Set-Content -Path "$skillDir\SKILL.md" -Value "---`nname: test`n---`nTest skill"
+
+          # List should not crash on Windows paths
+          ./airskills.exe list 2>&1 | Write-Host
+          Write-Host "Windows agent detection: OK"
