@@ -121,7 +121,7 @@ main() {
     SHELL_RC="$HOME/.bashrc"
   fi
 
-  if [[ -n "$SHELL_RC" ]]; then
+  if [[ -n "$SHELL_RC" ]] && [[ -t 0 ]]; then
     if ! grep -q "airskills status" "$SHELL_RC" 2>/dev/null; then
       echo ""
       echo -n "Add shell hook to check for skill updates on new terminals? [y/N] "
