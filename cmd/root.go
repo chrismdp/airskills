@@ -18,24 +18,12 @@ var rootCmd = &cobra.Command{
 	Short: "Manage AI skills across Claude Code, Cursor, Copilot, Cowork, and more",
 	Long: `Airskills manages your AI skills from a single source of truth.
 
-Run 'airskills' with no arguments to log in and sync your skills.
-Works with 18 AI agents.`,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		// Check if logged in
-		_, err := newAPIClientAuto()
-		if err != nil {
-			// Not logged in — run the login flow
-			fmt.Println("Welcome to airskills! Let's get you set up.")
-			fmt.Println()
-			if err := loginCmd.RunE(cmd, args); err != nil {
-				return err
-			}
-			fmt.Println()
-		}
+Get started:
+  airskills sync       Log in (if needed) and sync your skills
+  airskills add u/s    Install a public skill
+  airskills status     Check for updates
 
-		// Now sync
-		return syncCmd.RunE(cmd, args)
-	},
+Works with 18 AI agents.`,
 }
 
 func Execute() {
