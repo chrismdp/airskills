@@ -4,6 +4,15 @@ set -euo pipefail
 # Airskills CLI installer
 # Usage: curl -fsSL https://airskills.ai/install.sh | bash
 
+cat << 'LOGO'
+       _          _    _ _ _
+  __ _(_)_ __ ___| | _(_) | |___
+ / _` | | '__/ __| |/ / | | / __|
+| (_| | | |  \__ \   <| | | \__ \
+ \__,_|_|_|  |___/_|\_\_|_|_|___/
+LOGO
+echo ""
+
 REPO="chrismdp/airskills"
 BINARY="airskills"
 INSTALL_DIR="${AIRSKILLS_INSTALL_DIR:-$HOME/.local/bin}"
