@@ -2,8 +2,7 @@
 
 Go CLI for airskills. Public repo: `github.com/chrismdp/airskills`.
 
-The platform (Next.js API server) lives at `~/code/airskills` (private repo: `chrismdp/airskills-platform`).
-Edit platform code directly there. E2e tests live in the platform repo at `~/code/airskills/e2e/`.
+The platform (Next.js API server) is a separate private repo. E2e tests live there.
 
 ## Architecture
 
@@ -15,7 +14,7 @@ Single Go binary, no runtime dependencies. Cobra for CLI commands. Config and to
 - `cmd/pull.go` — pull flow: compare content hashes, download/update/detect divergence
 - `cmd/sync.go` — push then pull
 - `cmd/api.go` — API client, skill/commit types, HTTP methods
-- `cmd/hash.go` — Merkle content hash (must match server's `lib/storage-utils.ts:computeContentHash`)
+- `cmd/hash.go` — Merkle content hash (must match server-side computation)
 - `cmd/agents.go` — agent detection, skill scanning, file installation
 - `cmd/add.go` — install public skills without auth, tar extraction
 - `cmd/export.go` — export skills, download files from archive endpoint
@@ -47,7 +46,4 @@ GoReleaser builds cross-platform binaries on `v*` tag push. GitHub Actions workf
 
 ## Testing
 
-No unit tests in this repo yet. E2e tests live in the platform repo:
-```bash
-cd ~/code/airskills && CLI_REPO=~/code/airskills-cli bash e2e/run.sh
-```
+No unit tests in this repo yet. E2e tests live in the platform repo. Run them with `CLI_REPO` pointing here to avoid re-cloning.
