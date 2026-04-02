@@ -108,6 +108,9 @@ func runPull(cmd *cobra.Command, args []string) error {
 	var divergedDetails []conflictDetail
 	var updateDetails []updateDetail
 
+	// Unique conflict dir per sync run
+	conflictBase, _ := os.MkdirTemp("", "airskills-conflicts-")
+
 	for i, p := range toPull {
 		lines[i].status = "downloading"
 		lines[i].pct = 0.5
@@ -122,8 +125,8 @@ func runPull(cmd *cobra.Command, args []string) error {
 		}
 
 		if p.reason == "diverged" {
-			// Save remote version to conflict dir — don't overwrite local
-			conflictDir := filepath.Join(os.TempDir(), "airskills-conflicts", p.skill.Name)
+			// Save remote version to unique conflict dir — don't overwrite local
+			conflictDir := filepath.Join(conflictBase, p.skill.Name)
 			os.MkdirAll(conflictDir, 0755)
 			for name, content := range files {
 				target := filepath.Join(conflictDir, name)
