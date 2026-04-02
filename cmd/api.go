@@ -34,6 +34,7 @@ type syncSkill struct {
 	ID               string  `json:"id"`
 	Name             string  `json:"name"`
 	Version          string  `json:"version"`
+	ContentHash      string  `json:"content_hash"`
 	InstalledVersion *string `json:"installed_version"`
 }
 
@@ -234,7 +235,7 @@ func (c *apiClient) createSkill(name, description string, tools []string, forked
 }
 
 // putArchive uploads a tar.gz to the archive endpoint (single write path).
-func (c *apiClient) putArchive(skillID string, archive []byte, expectedVersion, contentHash string) (*apiSkill, int, error) {
+func (c *apiClient) putArchive(skillID string, archive []byte, expectedHash, contentHash string) (*apiSkill, int, error) {
 	url := c.baseURL + fmt.Sprintf("/api/v1/skills/%s/archive", skillID)
 	req, err := http.NewRequest("PUT", url, bytes.NewReader(archive))
 	if err != nil {
@@ -242,8 +243,8 @@ func (c *apiClient) putArchive(skillID string, archive []byte, expectedVersion, 
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	req.Header.Set("Content-Type", "application/gzip")
-	if expectedVersion != "" {
-		req.Header.Set("X-Expected-Version", expectedVersion)
+	if expectedHash != "" {
+		req.Header.Set("X-Expected-Hash", expectedHash)
 	}
 	if contentHash != "" {
 		req.Header.Set("X-Content-Hash", contentHash)

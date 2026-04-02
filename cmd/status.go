@@ -72,8 +72,11 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		if err := parseJSON(data, &marker); err != nil {
 			continue
 		}
-		if marker.Version != remote.Version {
-			updated = append(updated, fmt.Sprintf("%s (local v%s, remote v%s)", remote.Name, marker.Version, remote.Version))
+		if marker.ContentHash != "" && remote.ContentHash != "" && marker.ContentHash != remote.ContentHash {
+			updated = append(updated, fmt.Sprintf("%s (content changed)", remote.Name))
+		} else if marker.ContentHash == "" && marker.Version != remote.Version {
+			// Fallback for old markers without content hash
+			updated = append(updated, fmt.Sprintf("%s (v%s → v%s)", remote.Name, marker.Version, remote.Version))
 		}
 	}
 

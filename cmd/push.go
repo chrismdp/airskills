@@ -37,8 +37,8 @@ type conflictInfo struct {
 	name       string
 	localPath  string
 	remotePath string
-	localVer   string
-	remoteVer  string
+	localHash  string
+	remoteHash string
 }
 
 var pushForce bool
@@ -207,22 +207,22 @@ var pushCmd = &cobra.Command{
 			lines[i].pct = 0.6
 			renderProgress(lines)
 
-			expectedVersion := ""
-			if !pushForce && s.marker.Version != "" {
-				expectedVersion = s.marker.Version
+			expectedHash := ""
+			if !pushForce && s.marker.ContentHash != "" {
+				expectedHash = s.marker.ContentHash
 			}
 
 			updated, statusCode, err := client.putArchive(
-				s.marker.SkillID, archive, expectedVersion, contentHash,
+				s.marker.SkillID, archive, expectedHash, contentHash,
 			)
 			if err != nil {
 				if statusCode == 409 {
 					lines[i].status = "CONFLICT"
 					renderProgress(lines)
 
-					// Parse remote version from 409 body
+					// Parse remote hash from 409 body
 					var conflict struct {
-						RemoteVersion string `json:"remote_version"`
+						RemoteContentHash string `json:"remote_content_hash"`
 					}
 					json.Unmarshal([]byte(err.Error()), &conflict)
 
@@ -237,8 +237,8 @@ var pushCmd = &cobra.Command{
 							name:       s.name,
 							localPath:  filepath.Join(s.dir, "SKILL.md"),
 							remotePath: tmpPath,
-							localVer:   s.marker.Version,
-							remoteVer:  conflict.RemoteVersion,
+							localHash:  s.marker.ContentHash,
+							remoteHash: conflict.RemoteContentHash,
 						})
 					}
 					conflicts++
@@ -279,7 +279,7 @@ var pushCmd = &cobra.Command{
 		if len(conflictMessages) > 0 {
 			fmt.Println("\n--- Conflicts ---")
 			for _, c := range conflictMessages {
-				fmt.Printf("\n  %s (local v%s, remote v%s)\n", c.name, c.localVer, c.remoteVer)
+				fmt.Printf("\n  %s (content changed on remote)\n", c.name)
 				fmt.Printf("  Local:  %s\n", c.localPath)
 				fmt.Printf("  Remote: %s\n", c.remotePath)
 
@@ -303,7 +303,7 @@ var pushCmd = &cobra.Command{
 }
 
 func init() {
-	pushCmd.Flags().BoolVar(&pushForce, "force", false, "Skip version check (use after resolving conflicts)")
+	pushCmd.Flags().BoolVar(&pushForce, "force", false, "Skip conflict check (use after resolving conflicts)")
 	rootCmd.AddCommand(pushCmd)
 }
 
