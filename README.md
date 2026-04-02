@@ -94,6 +94,12 @@ Full list: Claude Code, Claude Desktop, Cursor, GitHub Copilot, Windsurf, Codex,
 
 Only your skill files (SKILL.md content) when you push, and auth tokens. Never your code, git history, or file system. The source is here for you to verify.
 
+## API
+
+Everything the CLI does is available via the REST API at `airskills.ai/api/v1`. Authenticate with a Bearer token. Full spec at [airskills.ai/llms.txt](https://airskills.ai/llms.txt).
+
+Use the API to pull skills programmatically, push updates from CI, or wire your agents directly.
+
 ## Free tier
 
 Install public skills without an account. Free accounts get 100 skills with cross-machine sync. Teams and orgs on [airskills.ai](https://airskills.ai).
