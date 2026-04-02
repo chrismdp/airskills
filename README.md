@@ -4,7 +4,7 @@ Your AI skills are scattered across machines, tools, and teammates. airskills fi
 
 ## The problem
 
-Every AI coding tool reads skills from a different directory. You improve a skill in Claude Code and Cursor never sees it. Your laptop has version 3, your desktop has version 1. Your team lead shared the coding standards via Slack last month. Three people copied them.
+Every AI tool reads skills from a different directory. You improve a skill in Claude Code and Cursor never sees it. Your laptop has version 3, your desktop has version 1. Your team lead shared the coding standards via Slack last month. Three people copied them.
 
 airskills manages your AI skills from a single source of truth. Install once, sync everywhere. Edit once, every agent gets the update.
 
@@ -14,31 +14,28 @@ airskills manages your AI skills from a single source of truth. Install once, sy
 curl -fsSL https://airskills.ai/install.sh | bash
 ```
 
-Or with Go:
+Windows:
 
-```bash
-go install github.com/chrismdp/airskills@latest
+```powershell
+irm https://airskills.ai/install.ps1 | iex
 ```
 
-No account needed. The CLI works fully offline with no telemetry. Accounts are only for cross-machine sync and sharing.
+## Get started
 
-## Quick start (no account needed)
+```bash
+airskills sync
+```
+
+This logs you in (opens your browser for Google or Microsoft sign-in), then syncs your skills across every detected agent on your machine. Free account, no credit card.
+
+## Add a public skill
 
 ```bash
 airskills add chrismdp/retro            # install a public skill
 airskills add github.com/user/skill     # also accepts GitHub-style paths
 ```
 
-This fetches the skill and writes it to every detected AI agent on your machine (`~/.claude/skills/`, `~/.cursor/skills/`, etc.).
-
-## Sync across machines (free account)
-
-```bash
-airskills login          # authenticate with airskills.ai
-airskills sync           # push local skills, pull remote ones
-```
-
-Skills you installed via `add` before signing up are automatically linked to the originals. Unchanged skills reference the source, modified ones become your own copy with provenance tracked.
+This fetches the skill and writes it to every detected AI agent on your machine (`~/.cursor/skills/`, `~/.claude/skills/`, etc.).
 
 ## For teams
 
@@ -46,30 +43,29 @@ Your best engineer wrote the code review skill and updates it weekly, but nobody
 
 airskills lets you curate skills so your team does not have to. Publish once, everyone receives automatically. Version history with rollback. Conflict detection across machines and teammates. Visibility into who has what installed.
 
-[Talk to us about teams](mailto:chris@airskills.ai?subject=Airskills%20for%20teams)
+[Book a call about teams](https://calendar.app.google/Qx52oPwCe1vRSi5t6)
 
 ## Supported agents
 
 airskills detects and writes skills to all agents on your machine:
 
 ```
-~/.claude/skills/       → Claude Code, Claude Desktop (Cowork)
 ~/.cursor/skills/       → Cursor
 ~/.copilot/skills/      → GitHub Copilot
+~/.claude/skills/       → Claude Code, Cowork
 ~/.windsurf/skills/     → Windsurf
 ~/.codex/skills/        → Codex
   ... and 13 more
 ```
 
-Full list: Claude Code, Claude Desktop, Cursor, GitHub Copilot, Windsurf, Codex, Cline, Roo Code, Continue, Gemini CLI, Augment, Kiro CLI, Junie, Goose, Trae, Amp, OpenCode, Aider, Amazon Q.
+Full list: Cursor, GitHub Copilot, Claude Code, Cowork, Windsurf, Codex, Cline, Roo Code, Continue, Gemini CLI, Augment, Kiro CLI, Junie, Goose, Trae, Amp, OpenCode, Aider, Amazon Q.
 
 ## Commands
 
 | Command | Description |
 |---------|-------------|
-| `airskills add <user/skill>` | Install a public or shared skill (no login needed) |
-| `airskills install` | Sync skills (alias for `sync`) |
-| `airskills sync` | Push local changes, pull remote skills |
+| `airskills sync` | Log in if needed, push local changes, pull remote skills |
+| `airskills add <user/skill>` | Install a public or shared skill |
 | `airskills push` | Upload local skill changes |
 | `airskills pull` | Download remote skills not on this machine |
 | `airskills list` | Show skills with install status |
@@ -88,11 +84,11 @@ Full list: Claude Code, Claude Desktop, Cursor, GitHub Copilot, Windsurf, Codex,
 
 **Pull** downloads remote skills to this machine. Pull never deletes local skills.
 
-**Conflicts** are detected when the same skill was edited on another machine. airskills shows both versions and lets you resolve the merge with your AI agent, then `airskills push --force`.
+**Conflicts** are detected when the same skill was edited on another machine. airskills downloads both versions side by side and lets you merge with your AI agent, then `airskills push --force`.
 
 ## What data does the CLI send?
 
-Only your skill files (SKILL.md content) when you push, and auth tokens. Never your code, git history, or file system. The source is here for you to verify.
+Only your skill files (SKILL.md content) when you push, and auth tokens. Never your code, git history, or file system. No telemetry. The source is here for you to verify.
 
 ## API
 
@@ -102,7 +98,7 @@ Use the API to pull skills programmatically, push updates from CI, or wire your 
 
 ## Free tier
 
-Install public skills without an account. Free accounts get 100 skills with cross-machine sync. Teams and orgs on [airskills.ai](https://airskills.ai).
+Free accounts get 100 skills with cross-machine sync. Teams and orgs on [airskills.ai](https://airskills.ai).
 
 ## License
 
