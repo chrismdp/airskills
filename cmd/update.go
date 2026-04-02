@@ -3,7 +3,6 @@ package cmd
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"github.com/spf13/cobra"
 )
@@ -34,15 +33,12 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 		filterName = args[0]
 	}
 
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return err
-	}
-
 	skills, err := client.listSkills("")
 	if err != nil {
 		return fmt.Errorf("fetching skills: %w", err)
 	}
+
+	syncState := loadSyncState()
 
 	var updated, unchanged int
 	for _, skill := range skills {
@@ -63,20 +59,18 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 			continue
 		}
 
-		// Write marker
-		primaryDir := filepath.Join(home, ".claude", "skills", skill.Name)
-		os.MkdirAll(primaryDir, 0755)
-		marker := airskillsMarker{
+		syncState.Skills[skill.Name] = &SyncEntry{
 			SkillID:     skill.ID,
 			Version:     skill.Version,
 			ContentHash: skill.ContentHash,
 			Tool:        "claude-code",
 		}
-		writeMarker(filepath.Join(primaryDir, ".airskills"), &marker)
 
 		fmt.Printf("  updated: %s (%d agents)\n", skill.Name, len(destinations))
 		updated++
 	}
+
+	saveSyncState(syncState)
 
 	if filterName != "" && updated == 0 && unchanged == 0 {
 		return fmt.Errorf("skill %q not found in your account", filterName)

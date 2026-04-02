@@ -4,7 +4,6 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
-	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
@@ -90,24 +89,27 @@ func TestExtractTarGzToMap(t *testing.T) {
 	}
 }
 
-func TestWriteAndReadMarker(t *testing.T) {
+func TestSyncState(t *testing.T) {
+	// Override HOME so sync state goes to temp dir
 	dir := t.TempDir()
-	path := filepath.Join(dir, ".airskills")
+	t.Setenv("HOME", dir)
 
-	marker := &airskillsMarker{SkillID: "abc-123", Version: "1.0.0", Tool: "claude-code"}
-	writeMarker(path, marker)
-
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read marker: %v", err)
+	state := loadSyncState()
+	if len(state.Skills) != 0 {
+		t.Errorf("fresh sync state should be empty, got %d entries", len(state.Skills))
 	}
 
-	var got airskillsMarker
-	if err := json.Unmarshal(data, &got); err != nil {
-		t.Fatalf("parse marker: %v", err)
+	state.Skills["test-skill"] = &SyncEntry{SkillID: "abc-123", Version: "1.0.0", Tool: "claude-code"}
+	if err := saveSyncState(state); err != nil {
+		t.Fatalf("save sync state: %v", err)
 	}
 
-	if got.SkillID != "abc-123" || got.Version != "1.0.0" || got.Tool != "claude-code" {
-		t.Errorf("marker = %+v, want abc-123/1.0.0/claude-code", got)
+	loaded := loadSyncState()
+	entry := loaded.Skills["test-skill"]
+	if entry == nil {
+		t.Fatal("test-skill not found in loaded sync state")
+	}
+	if entry.SkillID != "abc-123" || entry.Version != "1.0.0" || entry.Tool != "claude-code" {
+		t.Errorf("entry = %+v, want abc-123/1.0.0/claude-code", entry)
 	}
 }

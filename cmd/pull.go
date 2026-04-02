@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -49,48 +48,64 @@ func runPull(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("fetching skills: %w", err)
 	}
 
+	syncState := loadSyncState()
+
+	// Build reverse map: skill_id → dir name (for matching by ID after renames)
+	skillIdToName := map[string]string{}
+	for name, entry := range syncState.Skills {
+		if entry.SkillID != "" {
+			skillIdToName[entry.SkillID] = name
+		}
+	}
+
 	type pullEntry struct {
 		skill    apiSkill
 		reason   string // "new", "updated", or "diverged"
 		localDir string
-		marker   *airskillsMarker
+		marker   *SyncEntry
 	}
 
 	var toPull []pullEntry
 	for _, remote := range remoteSkills {
-		localDir, exists := localSkills[remote.Name]
-		if !exists {
-			toPull = append(toPull, pullEntry{skill: remote, reason: "new"})
+		// First try to match by skill_id (survives renames)
+		trackedName := ""
+		if name, ok := skillIdToName[remote.ID]; ok {
+			trackedName = name
+		}
+
+		if trackedName != "" {
+			// Tracked skill — check if dir still exists
+			localDir, exists := localSkills[trackedName]
+			if !exists {
+				continue // dir removed locally, don't recreate
+			}
+
+			marker := syncState.Skills[trackedName]
+
+			// Remote unchanged since last sync? Skip.
+			if remote.ContentHash == "" || marker.ContentHash == "" || remote.ContentHash == marker.ContentHash {
+				continue
+			}
+
+			// Remote changed. Check if local also changed.
+			localFiles := readSkillFiles(localDir)
+			localHash := computeMerkleHash(localFiles)
+
+			if localHash == marker.ContentHash {
+				toPull = append(toPull, pullEntry{skill: remote, reason: "updated", localDir: localDir, marker: marker})
+			} else {
+				toPull = append(toPull, pullEntry{skill: remote, reason: "diverged", localDir: localDir, marker: marker})
+			}
 			continue
 		}
 
-		// Read marker to check sync state
-		markerPath := filepath.Join(localDir, ".airskills")
-		markerData, err := os.ReadFile(markerPath)
-		if err != nil {
-			continue // no marker = untracked local skill, don't touch
-		}
-		var marker airskillsMarker
-		if json.Unmarshal(markerData, &marker) != nil {
-			continue
+		// Not tracked — check if dir exists by name
+		if _, exists := localSkills[remote.Name]; exists {
+			continue // untracked local skill, don't touch
 		}
 
-		// Remote unchanged since last sync? Skip.
-		if remote.ContentHash == "" || marker.ContentHash == "" || remote.ContentHash == marker.ContentHash {
-			continue
-		}
-
-		// Remote changed. Check if local also changed.
-		localFiles := readSkillFiles(localDir)
-		localHash := computeMerkleHash(localFiles)
-
-		if localHash == marker.ContentHash {
-			// Local unchanged, remote updated → safe to update
-			toPull = append(toPull, pullEntry{skill: remote, reason: "updated", localDir: localDir, marker: &marker})
-		} else {
-			// Both changed → diverged
-			toPull = append(toPull, pullEntry{skill: remote, reason: "diverged", localDir: localDir, marker: &marker})
-		}
+		// New remote skill — download
+		toPull = append(toPull, pullEntry{skill: remote, reason: "new"})
 	}
 
 	if len(toPull) == 0 {
@@ -158,17 +173,17 @@ func runPull(cmd *cobra.Command, args []string) error {
 			continue
 		}
 
-		// Write/update marker with content hash
-		home, _ := os.UserHomeDir()
-		primaryDir := filepath.Join(home, ".claude", "skills", p.skill.Name)
-		os.MkdirAll(primaryDir, 0755)
-		newMarker := airskillsMarker{
+		// Update sync state
+		dirName := p.skill.Name
+		if p.localDir != "" {
+			dirName = filepath.Base(p.localDir)
+		}
+		syncState.Skills[dirName] = &SyncEntry{
 			SkillID:     p.skill.ID,
 			Version:     p.skill.Version,
 			ContentHash: p.skill.ContentHash,
 			Tool:        "claude-code",
 		}
-		writeMarker(filepath.Join(primaryDir, ".airskills"), &newMarker)
 
 		if p.reason == "updated" {
 			// Collect update info for summary
@@ -231,6 +246,7 @@ func runPull(cmd *cobra.Command, args []string) error {
 		fmt.Println("\nMerge the files, then run 'airskills push --force' to resolve.")
 	}
 
+	saveSyncState(syncState)
 	_ = saveLastSync()
 	return nil
 }

@@ -15,17 +15,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-type airskillsMarker struct {
-	SkillID     string `json:"skill_id"`
-	Version     string `json:"version"`
-	ContentHash string `json:"content_hash,omitempty"`
-	Tool        string `json:"tool"`
-	// Source tracks the original skill for no-auth installs.
-	// When the user later syncs with an account, unchanged sourced skills
-	// get linked (forked_from) rather than duplicated.
-	Source *skillSource `json:"source,omitempty"`
-}
-
 type skillSource struct {
 	Owner       string `json:"owner"`                  // username of the original author
 	Slug        string `json:"slug"`                   // original skill slug
@@ -83,8 +72,10 @@ var pushCmd = &cobra.Command{
 		type skillEntry struct {
 			name   string
 			dir    string
-			marker *airskillsMarker
+			marker *SyncEntry
 		}
+
+		syncState := loadSyncState()
 
 		var skills []skillEntry
 		for _, entry := range entries {
@@ -97,19 +88,34 @@ var pushCmd = &cobra.Command{
 			}
 
 			se := skillEntry{name: entry.Name(), dir: skillDir}
-			markerData, err := os.ReadFile(filepath.Join(skillDir, ".airskills"))
-			if err == nil {
-				var m airskillsMarker
-				if json.Unmarshal(markerData, &m) == nil {
-					se.marker = &m
-				}
+			if m, ok := syncState.Skills[entry.Name()]; ok {
+				se.marker = m
 			}
 			skills = append(skills, se)
+		}
+
+		// Detect renames: entries in sync state whose directory no longer exists
+		localDirSet := map[string]bool{}
+		for _, s := range skills {
+			localDirSet[s.name] = true
+		}
+		orphanHashToName := map[string]string{} // content_hash → old dir name
+		for name, entry := range syncState.Skills {
+			if !localDirSet[name] && entry.ContentHash != "" {
+				orphanHashToName[entry.ContentHash] = name
+			}
 		}
 
 		if len(skills) == 0 {
 			fmt.Println("No skills to push.")
 			return nil
+		}
+
+		// Fetch remote skills to detect already-existing skills (multi-machine sync)
+		remoteSkills, _ := client.listSkills("")
+		remoteByName := map[string]*apiSkill{}
+		for i := range remoteSkills {
+			remoteByName[remoteSkills[i].Name] = &remoteSkills[i]
 		}
 
 		// Print initial progress lines
@@ -121,7 +127,7 @@ var pushCmd = &cobra.Command{
 			fmt.Printf("  %-20s  %s  %s\n", l.name, renderBar(0), "waiting")
 		}
 
-		var pushed, created, conflicts, failed int
+		var pushed, created, linked, renamed, conflicts, failed int
 
 		for i, s := range skills {
 			lines[i].status = "compressing"
@@ -170,30 +176,94 @@ var pushCmd = &cobra.Command{
 
 			isNew := s.marker == nil || s.marker.SkillID == ""
 			if isNew {
-				// New skill — create metadata shell first
-				lines[i].status = "creating"
-				lines[i].pct = 0.4
-				renderProgress(lines)
-
-				var forkedFrom string
-				if s.marker != nil && s.marker.Source != nil {
-					forkedFrom = s.marker.Source.ID
-				}
-
-				skill, err := client.createSkill(s.name, "", []string{"claude-code"}, forkedFrom)
-				if err != nil {
-					lines[i].status = "failed"
+				// Check for rename: content hash matches an orphaned sync entry
+				if oldName, found := orphanHashToName[contentHash]; found {
+					oldEntry := syncState.Skills[oldName]
+					s.marker = &SyncEntry{
+						SkillID:     oldEntry.SkillID,
+						Version:     oldEntry.Version,
+						ContentHash: oldEntry.ContentHash,
+						Tool:        oldEntry.Tool,
+						Source:      oldEntry.Source,
+					}
+					isNew = false
+					delete(syncState.Skills, oldName)
+					delete(orphanHashToName, contentHash)
+					syncState.Skills[s.name] = s.marker
+					fmt.Fprintf(os.Stderr, "\n  %s → %s (renamed)\n", oldName, s.name)
+					// Content unchanged — just update tracking, no upload
+					lines[i].status = "renamed"
+					lines[i].pct = 1
 					renderProgress(lines)
-					failed++
+					renamed++
 					continue
 				}
 
-				s.marker = &airskillsMarker{SkillID: skill.ID, Version: skill.Version, Tool: "claude-code"}
-				// Preserve source from add
-				markerData, _ := os.ReadFile(filepath.Join(s.dir, ".airskills"))
-				var oldMarker airskillsMarker
-				if json.Unmarshal(markerData, &oldMarker) == nil {
-					s.marker.Source = oldMarker.Source
+				// Check if skill already exists on server (pushed from another machine)
+				if remote, found := remoteByName[s.name]; found {
+					s.marker = &SyncEntry{
+						SkillID:     remote.ID,
+						Version:     remote.Version,
+						ContentHash: remote.ContentHash,
+						Tool:        "claude-code",
+					}
+					isNew = false
+
+					// Identical content — just track, no upload needed
+					if remote.ContentHash == contentHash {
+						syncState.Skills[s.name] = s.marker
+						lines[i].status = "linked"
+						lines[i].pct = 1
+						renderProgress(lines)
+						linked++
+						continue
+					}
+
+					// Different content — conflict (unless --force)
+					if !pushForce {
+						lines[i].status = "CONFLICT"
+						renderProgress(lines)
+
+						tmpDir := filepath.Join(os.TempDir(), "airskills-conflicts", s.name)
+						os.MkdirAll(tmpDir, 0755)
+						rawBody, rawErr := client.get(fmt.Sprintf("/api/v1/skills/%s/raw", remote.ID))
+						if rawErr == nil {
+							tmpPath := filepath.Join(tmpDir, "SKILL.md")
+							os.WriteFile(tmpPath, rawBody, 0644)
+							conflictMessages = append(conflictMessages, conflictInfo{
+								name:       s.name,
+								localPath:  filepath.Join(s.dir, "SKILL.md"),
+								remotePath: tmpPath,
+							})
+						}
+						conflicts++
+						continue
+					}
+					// --force: fall through to upload
+				} else {
+					// Truly new skill — create metadata shell first
+					lines[i].status = "creating"
+					lines[i].pct = 0.4
+					renderProgress(lines)
+
+					var forkedFrom string
+					if s.marker != nil && s.marker.Source != nil {
+						forkedFrom = s.marker.Source.ID
+					}
+
+					skill, err := client.createSkill(s.name, "", []string{"claude-code"}, forkedFrom)
+					if err != nil {
+						lines[i].status = "failed"
+						renderProgress(lines)
+						failed++
+						continue
+					}
+
+					s.marker = &SyncEntry{SkillID: skill.ID, Version: skill.Version, Tool: "claude-code"}
+					// Preserve source from sync state
+					if old, ok := syncState.Skills[s.name]; ok && old.Source != nil {
+						s.marker.Source = old.Source
+					}
 				}
 			}
 
@@ -257,7 +327,7 @@ var pushCmd = &cobra.Command{
 					fmt.Fprintf(os.Stderr, "\n  ⚠ %s: %s\n", s.name, updated.Warning)
 				}
 			}
-			writeMarker(filepath.Join(s.dir, ".airskills"), s.marker)
+			syncState.Skills[s.name] = s.marker
 
 			lines[i].status = "done"
 			lines[i].size = formatSize(archiveSize)
@@ -265,8 +335,10 @@ var pushCmd = &cobra.Command{
 			renderProgress(lines)
 		}
 
-		fmt.Printf("\n%d pushed, %d created, %d conflicts, %d failed\n",
-			pushed, created, conflicts, failed)
+		saveSyncState(syncState)
+
+		fmt.Printf("\n%d pushed, %d created, %d linked, %d renamed, %d conflicts, %d failed\n",
+			pushed, created, linked, renamed, conflicts, failed)
 
 		// Show conflict resolution instructions
 		if len(conflictMessages) > 0 {
@@ -366,11 +438,6 @@ func readSkillFiles(dir string) map[string][]byte {
 		return nil
 	})
 	return files
-}
-
-func writeMarker(path string, marker *airskillsMarker) {
-	data, _ := json.MarshalIndent(marker, "", "  ")
-	os.WriteFile(path, data, 0644)
 }
 
 

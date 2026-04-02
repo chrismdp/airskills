@@ -49,6 +49,16 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
+	syncState := loadSyncState()
+
+	// Build reverse map: skill_id → dir name
+	skillIdToName := map[string]string{}
+	for name, entry := range syncState.Skills {
+		if entry.SkillID != "" {
+			skillIdToName[entry.SkillID] = name
+		}
+	}
+
 	var notInstalled []string
 	var updated []string
 	var localOnly []string
@@ -57,26 +67,28 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	remoteByName := map[string]bool{}
 	for _, remote := range remoteSkills {
 		remoteByName[remote.Name] = true
-		localPath, exists := localSkills[remote.Name]
-		if !exists {
-			notInstalled = append(notInstalled, remote.Name)
+
+		// Match by skill_id first (survives renames), then by name
+		trackedName := ""
+		if name, ok := skillIdToName[remote.ID]; ok {
+			trackedName = name
+		}
+
+		if trackedName != "" {
+			if _, exists := localSkills[trackedName]; !exists {
+				continue // dir removed locally
+			}
+			marker := syncState.Skills[trackedName]
+			if marker.ContentHash != "" && remote.ContentHash != "" && marker.ContentHash != remote.ContentHash {
+				updated = append(updated, fmt.Sprintf("%s (content changed)", trackedName))
+			} else if marker.ContentHash == "" && marker.Version != remote.Version {
+				updated = append(updated, fmt.Sprintf("%s (v%s → v%s)", trackedName, marker.Version, remote.Version))
+			}
 			continue
 		}
 
-		// Check version via marker
-		data, err := os.ReadFile(localPath + "/.airskills")
-		if err != nil {
-			continue
-		}
-		var marker airskillsMarker
-		if err := parseJSON(data, &marker); err != nil {
-			continue
-		}
-		if marker.ContentHash != "" && remote.ContentHash != "" && marker.ContentHash != remote.ContentHash {
-			updated = append(updated, fmt.Sprintf("%s (content changed)", remote.Name))
-		} else if marker.ContentHash == "" && marker.Version != remote.Version {
-			// Fallback for old markers without content hash
-			updated = append(updated, fmt.Sprintf("%s (v%s → v%s)", remote.Name, marker.Version, remote.Version))
+		if _, exists := localSkills[remote.Name]; !exists {
+			notInstalled = append(notInstalled, remote.Name)
 		}
 	}
 

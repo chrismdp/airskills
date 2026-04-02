@@ -115,7 +115,7 @@ var addCmd = &cobra.Command{
 		lines[0].size = fmt.Sprintf("%d agents", len(installed))
 		renderProgress(lines)
 
-		// Write marker — always track source, never set skill_id.
+		// Track source in sync state — never set skill_id.
 		// The user's own skill_id is set later when they push (creates their copy
 		// with forked_from linking back to the original).
 		home, _ := os.UserHomeDir()
@@ -123,7 +123,8 @@ var addCmd = &cobra.Command{
 		os.MkdirAll(primaryDir, 0755)
 		// Hash the original content so push can detect modifications
 		originalContent, _ := os.ReadFile(filepath.Join(primaryDir, "SKILL.md"))
-		marker := airskillsMarker{
+		syncState := loadSyncState()
+		syncState.Skills[result.Slug] = &SyncEntry{
 			Version: result.Version,
 			Tool:    "claude-code",
 			Source: &skillSource{
@@ -133,7 +134,7 @@ var addCmd = &cobra.Command{
 				ContentHash: sha256Hex(originalContent),
 			},
 		}
-		writeMarker(filepath.Join(primaryDir, ".airskills"), &marker)
+		saveSyncState(syncState)
 
 		fmt.Println()
 		for _, line := range installed {
