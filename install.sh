@@ -112,31 +112,23 @@ main() {
     echo ""
   fi
 
-  # Offer to add shell startup hook
   SHELL_HOOK='command -v airskills >/dev/null && airskills status -q &'
   SHELL_RC=""
   if [[ -f "$HOME/.zshrc" ]]; then
-    SHELL_RC="$HOME/.zshrc"
+    SHELL_RC=".zshrc"
   elif [[ -f "$HOME/.bashrc" ]]; then
-    SHELL_RC="$HOME/.bashrc"
-  fi
-
-  if [[ -n "$SHELL_RC" ]] && [[ -t 0 ]]; then
-    if ! grep -q "airskills status" "$SHELL_RC" 2>/dev/null; then
-      echo ""
-      echo -n "Add shell hook to check for skill updates on new terminals? [y/N] "
-      read -r REPLY
-      if [[ "$REPLY" =~ ^[Yy]$ ]]; then
-        echo "" >> "$SHELL_RC"
-        echo "# airskills: check for skill updates on new terminal" >> "$SHELL_RC"
-        echo "$SHELL_HOOK" >> "$SHELL_RC"
-        info "Added to $SHELL_RC"
-      fi
-    fi
+    SHELL_RC=".bashrc"
   fi
 
   echo ""
   info "Done! Run 'airskills login' to get started."
+
+  if [[ -n "$SHELL_RC" ]]; then
+    echo ""
+    info "To check for skill updates on every new terminal, add this to your ~/$SHELL_RC:"
+    echo ""
+    echo "  $SHELL_HOOK"
+  fi
   echo ""
 }
 
