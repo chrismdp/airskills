@@ -142,6 +142,16 @@ var pushCmd = &cobra.Command{
 
 			archiveSize := int64(len(archive))
 
+			const maxSkillSize = 1024 * 1024 // 1MB
+			if archiveSize > maxSkillSize {
+				lines[i].status = "too large"
+				renderProgress(lines)
+				fmt.Fprintf(os.Stderr, "\n  %s: %.1fMB exceeds 1MB limit. Contact chris@airskills.ai to upgrade.\n",
+					s.name, float64(archiveSize)/1024/1024)
+				failed++
+				continue
+			}
+
 			// Compute Merkle content hash from local files
 			localFiles := readSkillFiles(s.dir)
 			contentHash := computeMerkleHash(localFiles)
