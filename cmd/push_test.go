@@ -93,6 +93,7 @@ func TestSyncState(t *testing.T) {
 	// Override HOME so sync state goes to temp dir
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
 
 	state := loadSyncState()
 	if len(state.Skills) != 0 {

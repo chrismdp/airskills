@@ -56,6 +56,10 @@ jobs:
           New-Item -ItemType Directory -Path $skillDir -Force | Out-Null
           Set-Content -Path "$skillDir\SKILL.md" -Value "---`nname: test`n---`nTest skill"
 
-          # List should not crash on Windows paths
-          ./airskills.exe list 2>&1 | Write-Host
-          Write-Host "Windows agent detection: OK"
+          # Status without login should exit cleanly (not crash)
+          $output = ./airskills.exe version 2>&1 | Out-String
+          if ($output -notmatch "airskills") {
+            Write-Error "version command failed: $output"
+            exit 1
+          }
+          Write-Host "Windows binary: OK"

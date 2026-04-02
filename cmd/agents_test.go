@@ -6,12 +6,16 @@ import (
 	"testing"
 )
 
+func setTestHome(t *testing.T, dir string) {
+	t.Helper()
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
+}
+
 func TestInstallSkillToAgents(t *testing.T) {
 	// Create fake agent directories in a temp home
 	tmpHome := t.TempDir()
-	origHome := os.Getenv("HOME")
-	os.Setenv("HOME", tmpHome)
-	defer os.Setenv("HOME", origHome)
+	setTestHome(t, tmpHome)
 
 	// Create Claude Code and Cursor skill parent dirs
 	os.MkdirAll(filepath.Join(tmpHome, ".claude", "skills"), 0755)
@@ -58,9 +62,7 @@ func TestInstallSkillToAgents(t *testing.T) {
 
 func TestDetectInstalledAgents(t *testing.T) {
 	tmpHome := t.TempDir()
-	origHome := os.Getenv("HOME")
-	os.Setenv("HOME", tmpHome)
-	defer os.Setenv("HOME", origHome)
+	setTestHome(t, tmpHome)
 
 	// No agent dirs — should return empty
 	detected := detectInstalledAgents()

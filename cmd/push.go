@@ -393,9 +393,9 @@ func createTarGz(dir string) ([]byte, error) {
 			return err
 		}
 
-		// Use relative path inside the archive
+		// Use relative path inside the archive (always forward slashes for tar)
 		rel, _ := filepath.Rel(dir, path)
-		header.Name = filepath.Join(base, rel)
+		header.Name = filepath.ToSlash(filepath.Join(base, rel))
 
 		if err := tw.WriteHeader(header); err != nil {
 			return err
