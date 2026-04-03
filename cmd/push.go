@@ -125,10 +125,12 @@ var pushCmd = &cobra.Command{
 		for i, s := range skills {
 			lines[i] = progressLine{name: s.name, status: "waiting", pct: 0}
 		}
-		if isTTY {
+		if verbose && isTTY {
 			for _, l := range lines {
 				fmt.Printf("  %-20s  %s  %s\n", l.name, renderBar(0), "waiting")
 			}
+		} else if isTTY {
+			fmt.Printf("  %s %d skills\n", dim("·"), len(skills))
 		}
 
 		var pushed, created, linked, renamed, conflicts, failed int64
@@ -423,6 +425,7 @@ var pushCmd = &cobra.Command{
 
 func init() {
 	pushCmd.Flags().BoolVar(&pushForce, "force", false, "Skip conflict check (use after resolving conflicts)")
+	pushCmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "Show per-skill progress")
 	rootCmd.AddCommand(pushCmd)
 }
 

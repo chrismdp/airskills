@@ -11,6 +11,7 @@ import (
 const barWidth = 20
 
 var isTTY = term.IsTerminal(int(os.Stdout.Fd()))
+var verbose bool // set by sync --verbose; push/pull check this
 
 type progressLine struct {
 	name    string
@@ -27,20 +28,36 @@ var finalStatuses = map[string]bool{
 
 func renderProgress(lines []progressLine) {
 	if !isTTY {
+		// Piped: print final states only, once each
 		for i := range lines {
 			if finalStatuses[lines[i].status] && !lines[i].printed {
 				status := lines[i].status
 				if lines[i].size != "" {
 					status = fmt.Sprintf("%s (%s)", lines[i].status, lines[i].size)
 				}
-				fmt.Printf("  %s  %s\n", lines[i].name, status)
+				if verbose {
+					fmt.Printf("  %s  %s\n", lines[i].name, status)
+				}
 				lines[i].printed = true
 			}
 		}
 		return
 	}
 
-	// Move cursor up to overwrite previous render
+	if !verbose {
+		// Compact: single updating counter line
+		var done, total int
+		for _, l := range lines {
+			total++
+			if finalStatuses[l.status] {
+				done++
+			}
+		}
+		fmt.Printf("\033[1A\033[2K  %s %d/%d skills\n", dim("·"), done, total)
+		return
+	}
+
+	// Verbose: full per-skill progress with cursor movement
 	if len(lines) > 0 {
 		fmt.Printf("\033[%dA", len(lines))
 	}

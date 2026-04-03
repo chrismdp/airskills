@@ -7,7 +7,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var syncVerbose bool
+
 func init() {
+	syncCmd.Flags().BoolVarP(&syncVerbose, "verbose", "v", false, "Show per-skill progress")
 	rootCmd.AddCommand(syncCmd)
 }
 
@@ -27,12 +30,14 @@ var syncCmd = &cobra.Command{
 			fmt.Println()
 		}
 
-		fmt.Println("=== Push ===")
+		verbose = syncVerbose
+
+		fmt.Printf("%s %s\n", cyan("▲"), "Push")
 		if err := pushCmd.RunE(cmd, args); err != nil {
 			return err
 		}
 
-		fmt.Println("\n=== Pull ===")
+		fmt.Printf("\n%s %s\n", cyan("▼"), "Pull")
 		if err := runPull(cmd, args); err != nil {
 			return err
 		}

@@ -109,16 +109,20 @@ func runPull(cmd *cobra.Command, args []string) error {
 	}
 
 	if len(toPull) == 0 {
-		fmt.Println("All remote skills already installed and up to date.")
+		fmt.Printf("  %s all up to date\n", green("✓"))
 		return nil
 	}
 
 	lines := make([]progressLine, len(toPull))
 	for i, p := range toPull {
 		lines[i] = progressLine{name: p.skill.Name, status: "waiting", pct: 0}
-		if isTTY {
-			fmt.Printf("  %-20s  %s  %s\n", p.skill.Name, renderBar(0), "waiting")
+	}
+	if verbose && isTTY {
+		for _, l := range lines {
+			fmt.Printf("  %-20s  %s  %s\n", l.name, renderBar(0), "waiting")
 		}
+	} else if isTTY && len(lines) > 0 {
+		fmt.Printf("  %s %d skills\n", dim("·"), len(lines))
 	}
 
 	var pulled, updated, diverged, failed int
