@@ -55,19 +55,11 @@ var pushCmd = &cobra.Command{
 
 		var conflictMessages []conflictInfo
 
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return err
-		}
-
-		skillsDir := filepath.Join(home, ".claude", "skills")
-		entries, err := os.ReadDir(skillsDir)
-		if err != nil {
-			if os.IsNotExist(err) {
-				fmt.Println("No skills directory found at ~/.claude/skills/")
-				return nil
-			}
-			return err
+		// Scan all detected agent directories for skills
+		localSkills, err := scanSkillsFromAgents()
+		if err != nil || len(localSkills) == 0 {
+			fmt.Println("No skills found in any agent directory.")
+			return nil
 		}
 
 		// Collect skills to push
@@ -80,17 +72,9 @@ var pushCmd = &cobra.Command{
 		syncState := loadSyncState()
 
 		var skills []skillEntry
-		for _, entry := range entries {
-			if !entry.IsDir() {
-				continue
-			}
-			skillDir := filepath.Join(skillsDir, entry.Name())
-			if _, err := os.Stat(filepath.Join(skillDir, "SKILL.md")); err != nil {
-				continue
-			}
-
-			se := skillEntry{name: entry.Name(), dir: skillDir}
-			if m, ok := syncState.Skills[entry.Name()]; ok {
+		for name, dir := range localSkills {
+			se := skillEntry{name: name, dir: dir}
+			if m, ok := syncState.Skills[name]; ok {
 				se.marker = m
 			}
 			skills = append(skills, se)
