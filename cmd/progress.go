@@ -2,10 +2,15 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 	"strings"
+
+	"golang.org/x/term"
 )
 
 const barWidth = 20
+
+var isTTY = term.IsTerminal(int(os.Stdout.Fd()))
 
 type progressLine struct {
 	name   string
@@ -15,6 +20,22 @@ type progressLine struct {
 }
 
 func renderProgress(lines []progressLine) {
+	if !isTTY {
+		// Non-interactive: print only final states, one line each, no ANSI
+		for _, l := range lines {
+			if l.status == "done" || l.status == "failed" || l.status == "unchanged" ||
+				l.status == "CONFLICT" || l.status == "linked" || l.status == "renamed" ||
+				l.status == "too large" {
+				status := l.status
+				if l.size != "" {
+					status = fmt.Sprintf("%s (%s)", l.status, l.size)
+				}
+				fmt.Printf("  %s  %s\n", l.name, status)
+			}
+		}
+		return
+	}
+
 	// Move cursor up to overwrite previous render
 	if len(lines) > 0 {
 		fmt.Printf("\033[%dA", len(lines))

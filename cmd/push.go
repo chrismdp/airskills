@@ -168,7 +168,7 @@ var pushCmd = &cobra.Command{
 					return
 				}
 				if archiveSize > softLimit {
-					fmt.Fprintf(os.Stderr, "\n  %s: %.1fMB exceeds 1MB free tier limit. Contact chris@airskills.ai to upgrade.\n",
+					fmt.Fprintf(os.Stderr, "\n  %s: %.1fMB exceeds 1MB free tier limit. See airskills.ai/pricing to upgrade.\n",
 						s.name, float64(archiveSize)/1024/1024)
 				}
 
