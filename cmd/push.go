@@ -123,6 +123,11 @@ var pushCmd = &cobra.Command{
 		var warnings []string
 		sem := make(chan struct{}, 5) // max 5 concurrent uploads
 
+		const skillLimit = 100
+		if len(skills) > skillLimit {
+			warnings = append(warnings, fmt.Sprintf("%d skills exceeds %d free tier limit — will not be supported in future versions. See airskills.ai/pricing", len(skills), skillLimit))
+		}
+
 		for i, s := range skills {
 			i, s := i, s
 			wg.Add(1)
@@ -166,7 +171,7 @@ var pushCmd = &cobra.Command{
 				}
 				var sizeWarning string
 				if uncompressedSize > softLimit {
-					sizeWarning = fmt.Sprintf("%s: %.1fMB exceeds 10MB free tier limit. See airskills.ai/pricing to upgrade.",
+					sizeWarning = fmt.Sprintf("%s: %.1fMB exceeds 10MB free tier limit — will not be supported in future versions. See airskills.ai/pricing",
 						s.name, float64(uncompressedSize)/1024/1024)
 				}
 				contentHash := computeMerkleHash(localFiles)
