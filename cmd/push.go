@@ -157,22 +157,28 @@ var pushCmd = &cobra.Command{
 
 				archiveSize := int64(len(archive))
 
-				const softLimit = 1024 * 1024
-				const hardLimit = 100 * 1024 * 1024
-				if archiveSize > hardLimit {
+				localFiles := readSkillFiles(s.dir)
+
+				// Size limits based on uncompressed content
+				var uncompressedSize int64
+				for _, data := range localFiles {
+					uncompressedSize += int64(len(data))
+				}
+
+				const softLimit int64 = 10 * 1024 * 1024   // 10MB — free tier
+				const hardLimit int64 = 100 * 1024 * 1024   // 100MB — absolute max
+				if uncompressedSize > hardLimit {
 					lines[i].status = "too large"
 					renderProgress(lines)
-					fmt.Fprintf(os.Stderr, "\n  %s: %dMB exceeds the 100MB hard limit.\n",
-						s.name, archiveSize/1024/1024)
+					fmt.Fprintf(os.Stderr, "\n  %s: %dMB exceeds the 100MB limit.\n",
+						s.name, uncompressedSize/1024/1024)
 					atomic.AddInt64(&failed, 1)
 					return
 				}
-				if archiveSize > softLimit {
-					fmt.Fprintf(os.Stderr, "\n  %s: %.1fMB exceeds 1MB free tier limit. See airskills.ai/pricing to upgrade.\n",
-						s.name, float64(archiveSize)/1024/1024)
+				if uncompressedSize > softLimit {
+					fmt.Fprintf(os.Stderr, "\n  %s: %.1fMB exceeds 10MB free tier limit. See airskills.ai/pricing to upgrade.\n",
+						s.name, float64(uncompressedSize)/1024/1024)
 				}
-
-				localFiles := readSkillFiles(s.dir)
 				contentHash := computeMerkleHash(localFiles)
 
 				// Sourced skill with no changes — skip
