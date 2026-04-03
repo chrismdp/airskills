@@ -68,11 +68,41 @@ func newAPIClientAuto() (*apiClient, error) {
 	if token == nil {
 		return nil, fmt.Errorf("not logged in — run 'airskills login' first")
 	}
+
+	// Auto-refresh expired tokens
 	if time.Now().Unix() > token.ExpiresAt {
-		return nil, fmt.Errorf("session expired — run 'airskills login'")
+		if token.RefreshToken == "" {
+			return nil, fmt.Errorf("session expired — run 'airskills login'")
+		}
+		refreshed, err := refreshAccessToken(cfg.APIURL, token.RefreshToken)
+		if err != nil {
+			return nil, fmt.Errorf("session expired and refresh failed — run 'airskills login'")
+		}
+		token = refreshed
+		config.SaveToken(token)
 	}
 
 	return newAPIClient(cfg, token), nil
+}
+
+// refreshAccessToken exchanges a refresh token for a new access token via the platform API.
+func refreshAccessToken(apiURL, refreshToken string) (*config.TokenData, error) {
+	payload, _ := json.Marshal(map[string]string{"refresh_token": refreshToken})
+	resp, err := http.Post(apiURL+"/api/v1/auth/refresh", "application/json", bytes.NewReader(payload))
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("refresh returned %d", resp.StatusCode)
+	}
+
+	var token config.TokenData
+	if err := json.NewDecoder(resp.Body).Decode(&token); err != nil {
+		return nil, err
+	}
+	return &token, nil
 }
 
 func (c *apiClient) get(path string) ([]byte, error) {
