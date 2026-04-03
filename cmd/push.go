@@ -123,9 +123,23 @@ var pushCmd = &cobra.Command{
 		var warnings []string
 		sem := make(chan struct{}, 5) // max 5 concurrent uploads
 
-		const skillLimit = 100
-		if len(skills) > skillLimit {
-			warnings = append(warnings, fmt.Sprintf("%d skills exceeds %d free tier limit — will not be supported in future versions. See airskills.ai/pricing", len(skills), skillLimit))
+		// Free tier limits (checked client-side as guidance, server enforces)
+		const freeSkillLimit = 100
+		const freeStorageLimit int64 = 100 * 1024 * 1024 // 100MB total
+		if len(skills) > freeSkillLimit {
+			warnings = append(warnings, fmt.Sprintf("%d skills exceeds %d free tier limit — will not be supported in future versions. See airskills.ai/pricing", len(skills), freeSkillLimit))
+		}
+		// Calculate total local storage
+		var totalStorage int64
+		for _, s := range skills {
+			localFiles := readSkillFiles(s.dir)
+			for _, data := range localFiles {
+				totalStorage += int64(len(data))
+			}
+		}
+		if totalStorage > freeStorageLimit {
+			warnings = append(warnings, fmt.Sprintf("%.1fMB total storage exceeds 100MB free tier limit — will not be supported in future versions. See airskills.ai/pricing",
+				float64(totalStorage)/1024/1024))
 		}
 
 		for i, s := range skills {
@@ -153,27 +167,7 @@ var pushCmd = &cobra.Command{
 
 				localFiles := readSkillFiles(s.dir)
 
-				// Size limits based on uncompressed content
-				var uncompressedSize int64
-				for _, data := range localFiles {
-					uncompressedSize += int64(len(data))
-				}
-
-				const softLimit int64 = 10 * 1024 * 1024   // 10MB — free tier
-				const hardLimit int64 = 100 * 1024 * 1024   // 100MB — absolute max
-				if uncompressedSize > hardLimit {
-					lines[i].status = "too large"
-					renderProgress(lines)
-					fmt.Fprintf(os.Stderr, "\n  %s: %dMB exceeds the 100MB limit.\n",
-						s.name, uncompressedSize/1024/1024)
-					atomic.AddInt64(&failed, 1)
-					return
-				}
 				var sizeWarning string
-				if uncompressedSize > softLimit {
-					sizeWarning = fmt.Sprintf("%s: %.1fMB exceeds 10MB free tier limit — will not be supported in future versions. See airskills.ai/pricing",
-						s.name, float64(uncompressedSize)/1024/1024)
-				}
 				contentHash := computeMerkleHash(localFiles)
 
 				// Sourced skill with no changes — skip
