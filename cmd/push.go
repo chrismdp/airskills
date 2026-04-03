@@ -11,6 +11,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 
 	"github.com/spf13/cobra"
 )
@@ -127,214 +129,237 @@ var pushCmd = &cobra.Command{
 			fmt.Printf("  %-20s  %s  %s\n", l.name, renderBar(0), "waiting")
 		}
 
-		var pushed, created, linked, renamed, conflicts, failed int
+		var pushed, created, linked, renamed, conflicts, failed int64
+		var mu sync.Mutex
+		var wg sync.WaitGroup
+		sem := make(chan struct{}, 5) // max 5 concurrent uploads
 
 		for i, s := range skills {
-			lines[i].status = "compressing"
-			lines[i].pct = 0.2
-			renderProgress(lines)
+			i, s := i, s
+			wg.Add(1)
+			sem <- struct{}{}
+			go func() {
+				defer wg.Done()
+				defer func() { <-sem }()
 
-			archive, err := createTarGz(s.dir)
-			if err != nil {
-				lines[i].status = "failed"
-				lines[i].pct = 0
+				lines[i].status = "compressing"
+				lines[i].pct = 0.2
 				renderProgress(lines)
-				failed++
-				continue
-			}
 
-			archiveSize := int64(len(archive))
+				archive, err := createTarGz(s.dir)
+				if err != nil {
+					lines[i].status = "failed"
+					lines[i].pct = 0
+					renderProgress(lines)
+					atomic.AddInt64(&failed, 1)
+					return
+				}
 
-			const softLimit = 1024 * 1024        // 1MB — free tier
-			const hardLimit = 100 * 1024 * 1024  // 100MB — absolute max
-			if archiveSize > hardLimit {
-				lines[i].status = "too large"
-				renderProgress(lines)
-				fmt.Fprintf(os.Stderr, "\n  %s: %dMB exceeds the 100MB hard limit.\n",
-					s.name, archiveSize/1024/1024)
-				failed++
-				continue
-			}
-			if archiveSize > softLimit {
-				fmt.Fprintf(os.Stderr, "\n  %s: %.1fMB exceeds 1MB free tier limit. Contact chris@airskills.ai to upgrade.\n",
-					s.name, float64(archiveSize)/1024/1024)
-			}
+				archiveSize := int64(len(archive))
 
-			// Compute Merkle content hash from local files
-			localFiles := readSkillFiles(s.dir)
-			contentHash := computeMerkleHash(localFiles)
+				const softLimit = 1024 * 1024
+				const hardLimit = 100 * 1024 * 1024
+				if archiveSize > hardLimit {
+					lines[i].status = "too large"
+					renderProgress(lines)
+					fmt.Fprintf(os.Stderr, "\n  %s: %dMB exceeds the 100MB hard limit.\n",
+						s.name, archiveSize/1024/1024)
+					atomic.AddInt64(&failed, 1)
+					return
+				}
+				if archiveSize > softLimit {
+					fmt.Fprintf(os.Stderr, "\n  %s: %.1fMB exceeds 1MB free tier limit. Contact chris@airskills.ai to upgrade.\n",
+						s.name, float64(archiveSize)/1024/1024)
+				}
 
-			// Sourced skill with no changes — skip
-			if s.marker != nil && s.marker.Source != nil && s.marker.Source.ContentHash != "" {
-				if contentHash == s.marker.Source.ContentHash {
+				localFiles := readSkillFiles(s.dir)
+				contentHash := computeMerkleHash(localFiles)
+
+				// Sourced skill with no changes — skip
+				if s.marker != nil && s.marker.Source != nil && s.marker.Source.ContentHash != "" {
+					if contentHash == s.marker.Source.ContentHash {
+						lines[i].status = "unchanged"
+						lines[i].pct = 1
+						renderProgress(lines)
+						return
+					}
+				}
+
+				// Skip unchanged skills (content hash matches what we last pushed)
+				if s.marker != nil && s.marker.ContentHash != "" && s.marker.ContentHash == contentHash {
 					lines[i].status = "unchanged"
 					lines[i].pct = 1
 					renderProgress(lines)
-					continue
-				}
-			}
-
-			isNew := s.marker == nil || s.marker.SkillID == ""
-			if isNew {
-				// Check for rename: content hash matches an orphaned sync entry
-				if oldName, found := orphanHashToName[contentHash]; found {
-					oldEntry := syncState.Skills[oldName]
-					s.marker = &SyncEntry{
-						SkillID:     oldEntry.SkillID,
-						Version:     oldEntry.Version,
-						ContentHash: oldEntry.ContentHash,
-						Tool:        oldEntry.Tool,
-						Source:      oldEntry.Source,
-					}
-					isNew = false
-					delete(syncState.Skills, oldName)
-					delete(orphanHashToName, contentHash)
-					syncState.Skills[s.name] = s.marker
-					fmt.Fprintf(os.Stderr, "\n  %s → %s (renamed)\n", oldName, s.name)
-					// Content unchanged — just update tracking, no upload
-					lines[i].status = "renamed"
-					lines[i].pct = 1
-					renderProgress(lines)
-					renamed++
-					continue
+					return
 				}
 
-				// Check if skill already exists on server (pushed from another machine)
-				if remote, found := remoteByName[s.name]; found {
-					s.marker = &SyncEntry{
-						SkillID:     remote.ID,
-						Version:     remote.Version,
-						ContentHash: remote.ContentHash,
-						Tool:        "claude-code",
-					}
-					isNew = false
-
-					// Identical content — just track, no upload needed
-					if remote.ContentHash == contentHash {
+				isNew := s.marker == nil || s.marker.SkillID == ""
+				if isNew {
+					// Check for rename
+					mu.Lock()
+					oldName, found := orphanHashToName[contentHash]
+					if found {
+						oldEntry := syncState.Skills[oldName]
+						s.marker = &SyncEntry{
+							SkillID:     oldEntry.SkillID,
+							Version:     oldEntry.Version,
+							ContentHash: oldEntry.ContentHash,
+							Tool:        oldEntry.Tool,
+							Source:      oldEntry.Source,
+						}
+						isNew = false
+						delete(syncState.Skills, oldName)
+						delete(orphanHashToName, contentHash)
 						syncState.Skills[s.name] = s.marker
-						lines[i].status = "linked"
+						mu.Unlock()
+						fmt.Fprintf(os.Stderr, "\n  %s → %s (renamed)\n", oldName, s.name)
+						lines[i].status = "renamed"
 						lines[i].pct = 1
 						renderProgress(lines)
-						linked++
-						continue
+						atomic.AddInt64(&renamed, 1)
+						return
 					}
+					mu.Unlock()
 
-					// Different content — conflict (unless --force)
-					if !pushForce {
+					// Check if skill already exists on server
+					if remote, found := remoteByName[s.name]; found {
+						s.marker = &SyncEntry{
+							SkillID:     remote.ID,
+							Version:     remote.Version,
+							ContentHash: remote.ContentHash,
+							Tool:        "claude-code",
+						}
+						isNew = false
+
+						if remote.ContentHash == contentHash {
+							mu.Lock()
+							syncState.Skills[s.name] = s.marker
+							mu.Unlock()
+							lines[i].status = "linked"
+							lines[i].pct = 1
+							renderProgress(lines)
+							atomic.AddInt64(&linked, 1)
+							return
+						}
+
+						if !pushForce {
+							lines[i].status = "CONFLICT"
+							renderProgress(lines)
+
+							tmpDir := filepath.Join(os.TempDir(), "airskills-conflicts", s.name)
+							os.MkdirAll(tmpDir, 0755)
+							rawBody, rawErr := client.get(fmt.Sprintf("/api/v1/skills/%s/raw", remote.ID))
+							if rawErr == nil {
+								tmpPath := filepath.Join(tmpDir, "SKILL.md")
+								os.WriteFile(tmpPath, rawBody, 0644)
+								mu.Lock()
+								conflictMessages = append(conflictMessages, conflictInfo{
+									name:       s.name,
+									localPath:  filepath.Join(s.dir, "SKILL.md"),
+									remotePath: tmpPath,
+								})
+								mu.Unlock()
+							}
+							atomic.AddInt64(&conflicts, 1)
+							return
+						}
+					} else {
+						lines[i].status = "creating"
+						lines[i].pct = 0.4
+						renderProgress(lines)
+
+						var forkedFrom string
+						if s.marker != nil && s.marker.Source != nil {
+							forkedFrom = s.marker.Source.ID
+						}
+
+						skill, err := client.createSkill(s.name, "", []string{"claude-code"}, forkedFrom)
+						if err != nil {
+							lines[i].status = "failed"
+							renderProgress(lines)
+							atomic.AddInt64(&failed, 1)
+							return
+						}
+
+						s.marker = &SyncEntry{SkillID: skill.ID, Version: skill.Version, Tool: "claude-code"}
+						mu.Lock()
+						if old, ok := syncState.Skills[s.name]; ok && old.Source != nil {
+							s.marker.Source = old.Source
+						}
+						mu.Unlock()
+					}
+				}
+
+				lines[i].status = "uploading"
+				lines[i].pct = 0.6
+				renderProgress(lines)
+
+				expectedHash := ""
+				if !pushForce && s.marker.ContentHash != "" {
+					expectedHash = s.marker.ContentHash
+				}
+
+				updated, statusCode, err := client.putArchive(
+					s.marker.SkillID, archive, expectedHash, contentHash,
+				)
+				if err != nil {
+					if statusCode == 409 {
 						lines[i].status = "CONFLICT"
 						renderProgress(lines)
 
+						var conflict struct {
+							RemoteContentHash string `json:"remote_content_hash"`
+						}
+						json.Unmarshal([]byte(err.Error()), &conflict)
+
 						tmpDir := filepath.Join(os.TempDir(), "airskills-conflicts", s.name)
 						os.MkdirAll(tmpDir, 0755)
-						rawBody, rawErr := client.get(fmt.Sprintf("/api/v1/skills/%s/raw", remote.ID))
+						rawBody, rawErr := client.get(fmt.Sprintf("/api/v1/skills/%s/raw", s.marker.SkillID))
 						if rawErr == nil {
 							tmpPath := filepath.Join(tmpDir, "SKILL.md")
 							os.WriteFile(tmpPath, rawBody, 0644)
+							mu.Lock()
 							conflictMessages = append(conflictMessages, conflictInfo{
 								name:       s.name,
 								localPath:  filepath.Join(s.dir, "SKILL.md"),
 								remotePath: tmpPath,
 							})
+							mu.Unlock()
 						}
-						conflicts++
-						continue
+						atomic.AddInt64(&conflicts, 1)
+						return
 					}
-					// --force: fall through to upload
+
+					lines[i].status = "failed"
+					renderProgress(lines)
+					atomic.AddInt64(&failed, 1)
+					return
+				}
+
+				if isNew {
+					atomic.AddInt64(&created, 1)
 				} else {
-					// Truly new skill — create metadata shell first
-					lines[i].status = "creating"
-					lines[i].pct = 0.4
-					renderProgress(lines)
-
-					var forkedFrom string
-					if s.marker != nil && s.marker.Source != nil {
-						forkedFrom = s.marker.Source.ID
-					}
-
-					skill, err := client.createSkill(s.name, "", []string{"claude-code"}, forkedFrom)
-					if err != nil {
-						lines[i].status = "failed"
-						renderProgress(lines)
-						failed++
-						continue
-					}
-
-					s.marker = &SyncEntry{SkillID: skill.ID, Version: skill.Version, Tool: "claude-code"}
-					// Preserve source from sync state
-					if old, ok := syncState.Skills[s.name]; ok && old.Source != nil {
-						s.marker.Source = old.Source
+					atomic.AddInt64(&pushed, 1)
+				}
+				if updated != nil {
+					s.marker.Version = updated.Version
+					s.marker.ContentHash = updated.ContentHash
+					if updated.Warning != "" {
+						fmt.Fprintf(os.Stderr, "\n  ⚠ %s: %s\n", s.name, updated.Warning)
 					}
 				}
-			}
+				mu.Lock()
+				syncState.Skills[s.name] = s.marker
+				mu.Unlock()
 
-			// Upload archive — single write path
-			lines[i].status = "uploading"
-			lines[i].pct = 0.6
-			renderProgress(lines)
-
-			expectedHash := ""
-			if !pushForce && s.marker.ContentHash != "" {
-				expectedHash = s.marker.ContentHash
-			}
-
-			updated, statusCode, err := client.putArchive(
-				s.marker.SkillID, archive, expectedHash, contentHash,
-			)
-			if err != nil {
-				if statusCode == 409 {
-					lines[i].status = "CONFLICT"
-					renderProgress(lines)
-
-					// Parse remote hash from 409 body
-					var conflict struct {
-						RemoteContentHash string `json:"remote_content_hash"`
-					}
-					json.Unmarshal([]byte(err.Error()), &conflict)
-
-					// Download remote SKILL.md for merge
-					tmpDir := filepath.Join(os.TempDir(), "airskills-conflicts", s.name)
-					os.MkdirAll(tmpDir, 0755)
-					rawBody, rawErr := client.get(fmt.Sprintf("/api/v1/skills/%s/raw", s.marker.SkillID))
-					if rawErr == nil {
-						tmpPath := filepath.Join(tmpDir, "SKILL.md")
-						os.WriteFile(tmpPath, rawBody, 0644)
-						conflictMessages = append(conflictMessages, conflictInfo{
-							name:       s.name,
-							localPath:  filepath.Join(s.dir, "SKILL.md"),
-							remotePath: tmpPath,
-						})
-					}
-					conflicts++
-					continue
-				}
-
-				lines[i].status = "failed"
+				lines[i].status = "done"
+				lines[i].size = formatSize(archiveSize)
+				lines[i].pct = 1
 				renderProgress(lines)
-				failed++
-				continue
-			}
-
-			// Update marker
-			if isNew {
-				created++
-			} else {
-				pushed++
-			}
-			if updated != nil {
-				s.marker.Version = updated.Version
-				s.marker.ContentHash = updated.ContentHash
-				if updated.Warning != "" {
-					fmt.Fprintf(os.Stderr, "\n  ⚠ %s: %s\n", s.name, updated.Warning)
-				}
-			}
-			syncState.Skills[s.name] = s.marker
-
-			lines[i].status = "done"
-			lines[i].size = formatSize(archiveSize)
-			lines[i].pct = 1
-			renderProgress(lines)
+			}()
 		}
 
+		wg.Wait()
 		saveSyncState(syncState)
 
 		fmt.Printf("\n%d pushed, %d created, %d linked, %d renamed, %d conflicts, %d failed\n",
