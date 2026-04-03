@@ -46,4 +46,6 @@ GoReleaser builds cross-platform binaries on `v*` tag push. GitHub Actions workf
 
 ## Testing
 
-No unit tests in this repo yet. E2e tests live in the platform repo. Run them with `CLI_REPO` pointing here to avoid re-cloning.
+E2e tests live in the platform repo. Run them with `CLI_REPO` pointing here to avoid re-cloning. Unit tests: `go test ./...`.
+
+**Write a failing test first, then fix the bug.** All behaviour changes and bug fixes must start with a test that demonstrates the problem, then make it pass.

@@ -77,7 +77,9 @@ func runPull(cmd *cobra.Command, args []string) error {
 			// Tracked skill — check if dir still exists
 			localDir, exists := localSkills[trackedName]
 			if !exists {
-				continue // dir removed locally, don't recreate
+				// Dir deleted locally — re-download from remote
+				toPull = append(toPull, pullEntry{skill: remote, reason: "new"})
+				continue
 			}
 
 			marker := syncState.Skills[trackedName]
