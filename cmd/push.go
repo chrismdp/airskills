@@ -120,6 +120,7 @@ var pushCmd = &cobra.Command{
 		var pushed, created, linked, renamed, conflicts, failed int64
 		var mu sync.Mutex
 		var wg sync.WaitGroup
+		var warnings []string
 		sem := make(chan struct{}, 5) // max 5 concurrent uploads
 
 		for i, s := range skills {
@@ -163,8 +164,9 @@ var pushCmd = &cobra.Command{
 					atomic.AddInt64(&failed, 1)
 					return
 				}
+				var sizeWarning string
 				if uncompressedSize > softLimit {
-					fmt.Fprintf(os.Stderr, "\n  %s: %.1fMB exceeds 10MB free tier limit. See airskills.ai/pricing to upgrade.\n",
+					sizeWarning = fmt.Sprintf("%s: %.1fMB exceeds 10MB free tier limit. See airskills.ai/pricing to upgrade.",
 						s.name, float64(uncompressedSize)/1024/1024)
 				}
 				contentHash := computeMerkleHash(localFiles)
@@ -181,6 +183,11 @@ var pushCmd = &cobra.Command{
 
 				// Skip unchanged skills (content hash matches what we last pushed)
 				if s.marker != nil && s.marker.ContentHash != "" && s.marker.ContentHash == contentHash {
+					if sizeWarning != "" {
+						mu.Lock()
+						warnings = append(warnings, sizeWarning)
+						mu.Unlock()
+					}
 					lines[i].status = "unchanged"
 					lines[i].pct = 1
 					renderProgress(lines)
@@ -339,8 +346,15 @@ var pushCmd = &cobra.Command{
 					s.marker.Version = updated.Version
 					s.marker.ContentHash = updated.ContentHash
 					if updated.Warning != "" {
-						fmt.Fprintf(os.Stderr, "\n  ⚠ %s: %s\n", s.name, updated.Warning)
+						mu.Lock()
+						warnings = append(warnings, fmt.Sprintf("%s: %s", s.name, updated.Warning))
+						mu.Unlock()
 					}
+				}
+				if sizeWarning != "" {
+					mu.Lock()
+					warnings = append(warnings, sizeWarning)
+					mu.Unlock()
 				}
 				mu.Lock()
 				syncState.Skills[s.name] = s.marker
@@ -379,6 +393,12 @@ var pushCmd = &cobra.Command{
 			parts = append(parts, dim("all unchanged"))
 		}
 		fmt.Printf("\n%s\n", strings.Join(parts, ", "))
+
+		if len(warnings) > 0 {
+			for _, w := range warnings {
+				fmt.Printf("  %s %s\n", yellow("!"), w)
+			}
+		}
 
 		// Show conflict resolution instructions
 		if len(conflictMessages) > 0 {
