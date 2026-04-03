@@ -370,8 +370,29 @@ var pushCmd = &cobra.Command{
 		wg.Wait()
 		saveSyncState(syncState)
 
-		fmt.Printf("\n%d pushed, %d created, %d linked, %d renamed, %d conflicts, %d failed\n",
-			pushed, created, linked, renamed, conflicts, failed)
+		parts := []string{}
+		if pushed > 0 {
+			parts = append(parts, green(fmt.Sprintf("%d pushed", pushed)))
+		}
+		if created > 0 {
+			parts = append(parts, green(fmt.Sprintf("%d created", created)))
+		}
+		if linked > 0 {
+			parts = append(parts, fmt.Sprintf("%d linked", linked))
+		}
+		if renamed > 0 {
+			parts = append(parts, fmt.Sprintf("%d renamed", renamed))
+		}
+		if conflicts > 0 {
+			parts = append(parts, red(fmt.Sprintf("%d conflicts", conflicts)))
+		}
+		if failed > 0 {
+			parts = append(parts, red(fmt.Sprintf("%d failed", failed)))
+		}
+		if len(parts) == 0 {
+			parts = append(parts, dim("all unchanged"))
+		}
+		fmt.Printf("\n%s\n", strings.Join(parts, ", "))
 
 		// Show conflict resolution instructions
 		if len(conflictMessages) > 0 {

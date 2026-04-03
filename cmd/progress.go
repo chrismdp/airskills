@@ -59,8 +59,21 @@ func renderProgress(lines []progressLine) {
 			status = fmt.Sprintf("%s (%s)", l.status, l.size)
 		}
 
+		// Colour the status
+		coloredStatus := status
+		switch l.status {
+		case "done", "linked", "renamed":
+			coloredStatus = green(status)
+		case "unchanged":
+			coloredStatus = dim(status)
+		case "failed", "CONFLICT", "too large":
+			coloredStatus = red(status)
+		case "uploading", "downloading", "compressing", "creating":
+			coloredStatus = cyan(status)
+		}
+
 		// Clear line + write
-		fmt.Printf("\033[2K  %-*s  %s  %s\n", maxName, l.name, bar, status)
+		fmt.Printf("\033[2K  %-*s  %s  %s\n", maxName, l.name, bar, coloredStatus)
 	}
 }
 

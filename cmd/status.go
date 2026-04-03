@@ -99,8 +99,16 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Show platform and CLI version info
+	// Show logo + version info
 	if !quiet {
+		fmt.Println(cyan(`   _          _    _ _ _
+  (_)        | |  (_) | |
+__ _ _ _ __ ___| | ___| | |___
+/ _` + "`" + ` | | '__/ __| |/ / | | / __|
+| (_| | | |  \__ \   <| | | \__ \
+\__,_|_|_|  |___/_|\_\_|_|_|___/`))
+		fmt.Println()
+
 		if healthBody, err := client.get("/api/v1/health"); err == nil {
 			var health struct {
 				Version   string `json:"version"`
@@ -112,9 +120,12 @@ func runStatus(cmd *cobra.Command, args []string) error {
 				if len(commitStr) > 7 {
 					commitStr = commitStr[:7]
 				}
-				fmt.Printf("[airskills] platform %s (%s) | cli %s\n", health.Version, commitStr, version)
+				fmt.Printf("%s platform %s %s | cli %s\n",
+					cyan("[airskills]"), health.Version, dim("("+commitStr+")"), version)
 				if health.LatestCLI != "" && isNewer(health.LatestCLI, version) && version != "dev" {
-					fmt.Printf("[airskills] Update available: %s → %s. Run 'airskills self-update'.\n", version, health.LatestCLI)
+					fmt.Printf("%s %s\n",
+						yellow("Update available:"),
+						fmt.Sprintf("%s → %s. Run 'airskills self-update'.", version, health.LatestCLI))
 				}
 			}
 		}
@@ -122,32 +133,32 @@ func runStatus(cmd *cobra.Command, args []string) error {
 
 	if len(notInstalled) == 0 && len(updated) == 0 && len(localOnly) == 0 {
 		if !quiet {
-			fmt.Printf("[airskills] All %d skills in sync.\n", len(remoteSkills))
+			fmt.Printf("%s All %d skills in sync.\n", green("✓"), len(remoteSkills))
 		}
 		return nil
 	}
 
 	if len(localOnly) > 0 {
-		fmt.Printf("[airskills] %d skill(s) only on this machine (need push):\n", len(localOnly))
+		fmt.Printf("\n%s %d skill(s) only on this machine %s:\n", yellow("↑"), len(localOnly), dim("(need push)"))
 		for _, name := range localOnly {
-			fmt.Printf("  ↑ %s\n", name)
+			fmt.Printf("  %s %s\n", yellow("↑"), name)
 		}
 	}
 
 	if len(notInstalled) > 0 {
-		fmt.Printf("[airskills] %d skill(s) not on this machine (need pull):\n", len(notInstalled))
+		fmt.Printf("\n%s %d skill(s) not on this machine %s:\n", cyan("↓"), len(notInstalled), dim("(need pull)"))
 		for _, name := range notInstalled {
-			fmt.Printf("  ↓ %s\n", name)
+			fmt.Printf("  %s %s\n", cyan("↓"), name)
 		}
 	}
 
 	if len(updated) > 0 {
-		fmt.Printf("[airskills] %d skill(s) with version differences:\n", len(updated))
+		fmt.Printf("\n%s %d skill(s) with version differences:\n", yellow("~"), len(updated))
 		for _, desc := range updated {
-			fmt.Printf("  ~ %s\n", desc)
+			fmt.Printf("  %s %s\n", yellow("~"), desc)
 		}
 	}
 
-	fmt.Println("\nRun 'airskills sync' to push and pull.")
+	fmt.Printf("\nRun '%s' to push and pull.\n", cyan("airskills sync"))
 	return nil
 }
