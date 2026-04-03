@@ -116,7 +116,9 @@ func runPull(cmd *cobra.Command, args []string) error {
 	lines := make([]progressLine, len(toPull))
 	for i, p := range toPull {
 		lines[i] = progressLine{name: p.skill.Name, status: "waiting", pct: 0}
-		fmt.Printf("  %-20s  %s  %s\n", p.skill.Name, renderBar(0), "waiting")
+		if isTTY {
+			fmt.Printf("  %-20s  %s  %s\n", p.skill.Name, renderBar(0), "waiting")
+		}
 	}
 
 	var pulled, updated, diverged, failed int

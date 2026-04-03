@@ -49,8 +49,10 @@ with @ in your AI agent for the current session.`,
 
 		// Resolve the skill
 		lines := []progressLine{{name: slug, status: "resolving", pct: 0.2}}
-		for _, l := range lines {
-			fmt.Printf("  %-20s  %s  %s\n", l.name, renderBar(l.pct), l.status)
+		if isTTY {
+			for _, l := range lines {
+				fmt.Printf("  %-20s  %s  %s\n", l.name, renderBar(l.pct), l.status)
+			}
 		}
 
 		resolveURL := fmt.Sprintf("%s/api/v1/resolve/%s/%s", cfg.APIURL, username, slug)

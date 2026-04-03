@@ -13,24 +13,28 @@ const barWidth = 20
 var isTTY = term.IsTerminal(int(os.Stdout.Fd()))
 
 type progressLine struct {
-	name   string
-	status string // "uploading", "downloading", "done", "failed"
-	pct    float64
-	size   string
+	name    string
+	status  string // "uploading", "downloading", "done", "failed"
+	pct     float64
+	size    string
+	printed bool // piped mode: already printed final state
+}
+
+var finalStatuses = map[string]bool{
+	"done": true, "failed": true, "unchanged": true,
+	"CONFLICT": true, "linked": true, "renamed": true, "too large": true,
 }
 
 func renderProgress(lines []progressLine) {
 	if !isTTY {
-		// Non-interactive: print only final states, one line each, no ANSI
-		for _, l := range lines {
-			if l.status == "done" || l.status == "failed" || l.status == "unchanged" ||
-				l.status == "CONFLICT" || l.status == "linked" || l.status == "renamed" ||
-				l.status == "too large" {
-				status := l.status
-				if l.size != "" {
-					status = fmt.Sprintf("%s (%s)", l.status, l.size)
+		for i := range lines {
+			if finalStatuses[lines[i].status] && !lines[i].printed {
+				status := lines[i].status
+				if lines[i].size != "" {
+					status = fmt.Sprintf("%s (%s)", lines[i].status, lines[i].size)
 				}
-				fmt.Printf("  %s  %s\n", l.name, status)
+				fmt.Printf("  %s  %s\n", lines[i].name, status)
+				lines[i].printed = true
 			}
 		}
 		return

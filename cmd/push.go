@@ -125,8 +125,10 @@ var pushCmd = &cobra.Command{
 		for i, s := range skills {
 			lines[i] = progressLine{name: s.name, status: "waiting", pct: 0}
 		}
-		for _, l := range lines {
-			fmt.Printf("  %-20s  %s  %s\n", l.name, renderBar(0), "waiting")
+		if isTTY {
+			for _, l := range lines {
+				fmt.Printf("  %-20s  %s  %s\n", l.name, renderBar(0), "waiting")
+			}
 		}
 
 		var pushed, created, linked, renamed, conflicts, failed int64
