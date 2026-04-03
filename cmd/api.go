@@ -156,6 +156,26 @@ func (c *apiClient) put(path string, payload interface{}) ([]byte, int, error) {
 	return body, resp.StatusCode, nil
 }
 
+func (c *apiClient) del(path string) error {
+	req, err := http.NewRequest("DELETE", c.baseURL+path, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("API error (%d): %s", resp.StatusCode, string(body))
+	}
+	return nil
+}
+
 // listSkills fetches all skills, optionally filtered by scope.
 func (c *apiClient) listSkills(scope string) ([]apiSkill, error) {
 	path := "/api/v1/skills"

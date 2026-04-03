@@ -16,6 +16,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var addPreview bool
+
 var addCmd = &cobra.Command{
 	Use:   "add <username/skill>",
 	Short: "Install a shared skill",
@@ -89,8 +91,8 @@ var addCmd = &cobra.Command{
 			return fmt.Errorf("failed to parse response: %w", err)
 		}
 
-		if result.Type == "skillset" {
-			fmt.Printf("Skillsets are not yet supported for direct install. Visit https://airskills.ai/%s/%s\n", username, slug)
+		if result.Type == "bundle" {
+			fmt.Printf("Bundles are not yet supported for direct install. Visit https://airskills.ai/%s/%s\n", username, slug)
 			return nil
 		}
 
@@ -98,6 +100,16 @@ var addCmd = &cobra.Command{
 		files, err := fetchSkillFiles(cfg, result.ID, result.Content, authHeader, lines)
 		if err != nil {
 			return err
+		}
+
+		// Preview mode: show files and exit
+		if addPreview {
+			fmt.Printf("\n--- %s/%s ---\n", username, slug)
+			for path, data := range files {
+				fmt.Printf("\n=== %s ===\n%s\n", path, string(data))
+			}
+			fmt.Printf("\nPreview only — run without --preview to install.\n")
+			return nil
 		}
 
 		// Install to all detected agents
@@ -236,5 +248,6 @@ func countFiles(dir string) int {
 }
 
 func init() {
+	addCmd.Flags().BoolVar(&addPreview, "preview", false, "Show skill content without installing")
 	rootCmd.AddCommand(addCmd)
 }

@@ -110,8 +110,21 @@ var loginCmd = &cobra.Command{
 		// Wait for callback or timeout
 		select {
 		case token := <-tokenCh:
+			// Validate token expiry before saving
+			if token.ExpiresAt > 0 && time.Now().Unix() > token.ExpiresAt {
+				return fmt.Errorf("received token is already expired (expires_at=%d) — this is a server bug, please report it", token.ExpiresAt)
+			}
 			if err := config.SaveToken(token); err != nil {
 				return fmt.Errorf("failed to save token: %w", err)
+			}
+			// Verify token actually works
+			client, err := newAPIClientAuto()
+			if err != nil {
+				logInfo("Logged in, but could not verify session: %s", err)
+				return nil
+			}
+			if _, err := client.get("/api/v1/me"); err != nil {
+				return fmt.Errorf("token saved but verification failed: %w", err)
 			}
 			logInfo("Logged in successfully!")
 			return nil

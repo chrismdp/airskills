@@ -46,8 +46,8 @@ var shareCmd = &cobra.Command{
 
 		// Share it
 		endpoint := fmt.Sprintf("/api/v1/skills/%s/share", resolved.ID)
-		if resolved.Type == "skillset" {
-			endpoint = fmt.Sprintf("/api/v1/skillsets/%s/share", resolved.ID)
+		if resolved.Type == "bundle" {
+			endpoint = fmt.Sprintf("/api/v1/bundles/%s/share", resolved.ID)
 		}
 
 		_, err = client.post(endpoint, map[string]string{

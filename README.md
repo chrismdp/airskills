@@ -1,12 +1,10 @@
 ```
-            ███                    █████       ███  ████  ████
-           ░░░                    ░░███       ░░░  ░░███ ░░███
-  ██████   ████  ████████   █████  ░███ █████ ████  ░███  ░███   █████
- ░░░░░███ ░░███ ░░███░░███ ███░░   ░███░░███ ░░███  ░███  ░███  ███░░
-  ███████  ░███  ░███ ░░░ ░░█████  ░██████░   ░███  ░███  ░███ ░░█████
- ███░░███  ░███  ░███      ░░░░███ ░███░░███  ░███  ░███  ░███  ░░░░███
-░░████████ █████ █████     ██████  ████ █████ █████ █████ █████ ██████
- ░░░░░░░░ ░░░░░ ░░░░░     ░░░░░░  ░░░░ ░░░░░ ░░░░░ ░░░░░ ░░░░░ ░░░░░░
+       _          _    _ _ _     
+      (_)        | |  (_) | |    
+  __ _ _ _ __ ___| | ___| | |___ 
+ / _` | | '__/ __| |/ / | | / __|
+| (_| | | |  \__ \   <| | | \__ \
+ \__,_|_|_|  |___/_|\_\_|_|_|___/
 ```
 
 Your AI skills are scattered across machines, tools, and teammates. airskills fixes that.
@@ -75,6 +73,7 @@ Full list: Cursor, GitHub Copilot, Claude Code, Cowork, Windsurf, Codex, Cline, 
 |---------|-------------|
 | `airskills sync` | Log in if needed, push local changes, pull remote skills |
 | `airskills add <user/skill>` | Install a public or shared skill |
+| `airskills add <user/skill> --preview` | Show skill content without installing |
 | `airskills push` | Upload local skill changes |
 | `airskills pull` | Download remote skills not on this machine |
 | `airskills list` | Show skills with install status |
@@ -93,7 +92,14 @@ Full list: Cursor, GitHub Copilot, Claude Code, Cowork, Windsurf, Codex, Cline, 
 
 **Pull** downloads remote skills to this machine. Pull never deletes local skills.
 
-**Conflicts** are detected when the same skill was edited on another machine. airskills downloads both versions side by side and lets you merge with your AI agent, then `airskills push --force`.
+**Conflicts** are detected when the same skill was edited on another machine (content hash mismatch). When this happens:
+
+1. The CLI downloads the remote version to `/tmp/airskills-conflicts/<skill-name>/`
+2. It shows you both file paths — your local version and the remote version
+3. You merge using your AI agent (e.g. "compare these two files and merge them")
+4. Once resolved, run `airskills push --force` to push your merged version
+
+No silent overwrites, no picking a winner automatically. You always see exactly what changed.
 
 ## What data does the CLI send?
 

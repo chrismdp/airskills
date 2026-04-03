@@ -99,6 +99,27 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// Show platform and CLI version info
+	if !quiet {
+		if healthBody, err := client.get("/api/v1/health"); err == nil {
+			var health struct {
+				Version   string `json:"version"`
+				Commit    string `json:"commit"`
+				LatestCLI string `json:"latest_cli"`
+			}
+			if parseJSON(healthBody, &health) == nil {
+				commitStr := health.Commit
+				if len(commitStr) > 7 {
+					commitStr = commitStr[:7]
+				}
+				fmt.Printf("[airskills] platform %s (%s) | cli %s\n", health.Version, commitStr, version)
+				if health.LatestCLI != "" && isNewer(health.LatestCLI, version) && version != "dev" {
+					fmt.Printf("[airskills] Update available: %s → %s. Run 'airskills self-update'.\n", version, health.LatestCLI)
+				}
+			}
+		}
+	}
+
 	if len(notInstalled) == 0 && len(updated) == 0 && len(localOnly) == 0 {
 		if !quiet {
 			fmt.Printf("[airskills] All %d skills in sync.\n", len(remoteSkills))
