@@ -68,6 +68,15 @@ func runPull(cmd *cobra.Command, args []string) error {
 
 	var toPull []pullEntry
 	for _, remote := range remoteSkills {
+		// Check for upstream updates on forked skills
+		if remote.HasUpstreamUpdate() {
+			updated, err := client.pullUpstream(remote.ID)
+			if err == nil {
+				remote.ContentHash = updated.ContentHash
+				remote.Version = updated.Version
+			}
+		}
+
 		// First try to match by skill_id (survives renames)
 		trackedName := ""
 		if name, ok := skillIdToName[remote.ID]; ok {

@@ -13,15 +13,42 @@ import (
 
 // apiSkill represents a skill from the API.
 type apiSkill struct {
-	ID          string   `json:"id"`
-	OwnerID     string   `json:"owner_id"`
-	Name        string   `json:"name"`
-	Description string   `json:"description"`
-	Version     string   `json:"version"`
-	ContentHash string   `json:"content_hash"`
-	OrgID       *string  `json:"org_id"`
-	ToolFormats []string `json:"tool_formats"`
-	Warning     string   `json:"warning,omitempty"`
+	ID                  string   `json:"id"`
+	OwnerID             string   `json:"owner_id"`
+	Name                string   `json:"name"`
+	Description         string   `json:"description"`
+	Version             string   `json:"version"`
+	ContentHash         string   `json:"content_hash"`
+	OrgID               *string  `json:"org_id"`
+	ForkedFrom          *string  `json:"forked_from"`
+	ToolFormats         []string `json:"tool_formats"`
+	Warning             string   `json:"warning,omitempty"`
+	UpstreamContentHash *string  `json:"upstream_content_hash"`
+}
+
+// HasUpstreamUpdate returns true if this is a forked skill whose parent has changed.
+func (s *apiSkill) HasUpstreamUpdate() bool {
+	return s.ForkedFrom != nil && s.UpstreamContentHash != nil &&
+		s.ContentHash != "" && *s.UpstreamContentHash != "" &&
+		s.ContentHash != *s.UpstreamContentHash
+}
+
+// pullUpstream tells the server to advance this skill's pin to the parent's latest.
+func (c *apiClient) pullUpstream(skillID string) (*apiSkill, error) {
+	body, statusCode, err := c.put(fmt.Sprintf("/api/v1/skills/%s", skillID), map[string]interface{}{
+		"pull_upstream": true,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if statusCode >= 400 {
+		return nil, fmt.Errorf("API error (%d): %s", statusCode, string(body))
+	}
+	var skill apiSkill
+	if err := json.Unmarshal(body, &skill); err != nil {
+		return nil, err
+	}
+	return &skill, nil
 }
 
 // apiProfile represents the current user's profile from /api/v1/me.
