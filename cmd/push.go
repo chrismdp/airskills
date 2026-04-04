@@ -97,12 +97,35 @@ var pushCmd = &cobra.Command{
 			return nil
 		}
 
-		// Fetch remote skills to detect already-existing skills (multi-machine sync)
-		remoteSkills, _ := client.listSkills("")
+		// Fetch owned skills only (scope=personal filters server-side)
+		remoteSkills, _ := client.listSkills("personal")
 		remoteByName := map[string]*apiSkill{}
+		ownedSkillIDs := map[string]bool{}
 		for i := range remoteSkills {
 			remoteByName[remoteSkills[i].Name] = &remoteSkills[i]
+			ownedSkillIDs[remoteSkills[i].ID] = true
 		}
+
+		// Filter out skills whose sync state SkillID belongs to another user.
+		// This happens when skills are installed via "add" from another user and
+		// the sync state somehow ends up with the original owner's skill ID.
+		var filtered []skillEntry
+		var skipped int
+		for _, s := range skills {
+			if s.marker != nil && s.marker.SkillID != "" && !ownedSkillIDs[s.marker.SkillID] {
+				// SkillID doesn't belong to us. If it has a Source (was added from
+				// another user), clear the SkillID so it gets created as a fork.
+				if s.marker.Source != nil {
+					s.marker.SkillID = ""
+				} else {
+					// Unknown ownership — skip to avoid "not your skill" errors
+					skipped++
+					continue
+				}
+			}
+			filtered = append(filtered, s)
+		}
+		skills = filtered
 
 		// Print initial progress lines
 		lines := make([]progressLine, len(skills))
@@ -380,6 +403,9 @@ var pushCmd = &cobra.Command{
 		}
 		if failed > 0 {
 			parts = append(parts, red(fmt.Sprintf("%d failed", failed)))
+		}
+		if skipped > 0 {
+			parts = append(parts, dim(fmt.Sprintf("%d skipped (not yours)", skipped)))
 		}
 		if len(parts) == 0 {
 			parts = append(parts, dim("all unchanged"))

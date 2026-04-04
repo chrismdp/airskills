@@ -129,16 +129,16 @@ var addCmd = &cobra.Command{
 		lines[0].size = fmt.Sprintf("%d agents", len(installed))
 		renderProgress(lines)
 
-		// Track source in sync state — never set skill_id.
-		// The user's own skill_id is set later when they push (creates their copy
-		// with forked_from linking back to the original).
+		// Register the skill on the server (COW: references parent's archive,
+		// no physical copy until the user modifies and pushes).
+		// If logged in, create immediately; otherwise track source for next sync.
 		home, _ := os.UserHomeDir()
 		primaryDir := filepath.Join(home, ".claude", "skills", result.Slug)
 		os.MkdirAll(primaryDir, 0755)
-		// Hash the original content so push can detect modifications
 		originalContent, _ := os.ReadFile(filepath.Join(primaryDir, "SKILL.md"))
+
 		syncState := loadSyncState()
-		syncState.Skills[result.Slug] = &SyncEntry{
+		entry := &SyncEntry{
 			Version: result.Version,
 			Tool:    "claude-code",
 			Source: &skillSource{
@@ -148,6 +148,19 @@ var addCmd = &cobra.Command{
 				ContentHash: sha256Hex(originalContent),
 			},
 		}
+
+		// If logged in, register the skill on the server now
+		if token != nil && time.Now().Unix() < token.ExpiresAt {
+			client := newAPIClient(cfg, token)
+			skill, createErr := client.createSkill(result.Slug, "", []string{"claude-code"}, result.ID)
+			if createErr == nil {
+				entry.SkillID = skill.ID
+				entry.ContentHash = skill.ContentHash
+			}
+			// If creation fails (e.g. network), fall through — sync will handle it
+		}
+
+		syncState.Skills[result.Slug] = entry
 		saveSyncState(syncState)
 
 		fmt.Println()

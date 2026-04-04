@@ -43,7 +43,8 @@ func runPull(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	remoteSkills, err := client.listSkills("")
+	// Fetch owned skills only (scope=personal filters server-side)
+	remoteSkills, err := client.listSkills("personal")
 	if err != nil {
 		return fmt.Errorf("fetching skills: %w", err)
 	}

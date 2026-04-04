@@ -14,6 +14,7 @@ import (
 // apiSkill represents a skill from the API.
 type apiSkill struct {
 	ID          string   `json:"id"`
+	OwnerID     string   `json:"owner_id"`
 	Name        string   `json:"name"`
 	Description string   `json:"description"`
 	Version     string   `json:"version"`
@@ -21,6 +22,25 @@ type apiSkill struct {
 	OrgID       *string  `json:"org_id"`
 	ToolFormats []string `json:"tool_formats"`
 	Warning     string   `json:"warning,omitempty"`
+}
+
+// apiProfile represents the current user's profile from /api/v1/me.
+type apiProfile struct {
+	ID       string `json:"id"`
+	Username string `json:"username"`
+}
+
+// getMe fetches the current user's profile.
+func (c *apiClient) getMe() (*apiProfile, error) {
+	body, err := c.get("/api/v1/me")
+	if err != nil {
+		return nil, err
+	}
+	var profile apiProfile
+	if err := json.Unmarshal(body, &profile); err != nil {
+		return nil, err
+	}
+	return &profile, nil
 }
 
 // syncResult represents the response from the sync check endpoint.

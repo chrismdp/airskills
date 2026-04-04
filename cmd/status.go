@@ -41,7 +41,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(os.Stderr, "[airskills] Could not scan local skills: %v\n", err)
 	}
 
-	remoteSkills, err := client.listSkills("")
+	remoteSkills, err := client.listSkills("personal")
 	if err != nil {
 		if !quiet {
 			fmt.Fprintf(os.Stderr, "[airskills] Could not fetch remote skills: %v\n", err)

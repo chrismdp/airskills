@@ -26,6 +26,9 @@ Use --scope to filter by personal or org skills only.`,
 			return err
 		}
 
+		if scope == "" {
+			scope = "personal"
+		}
 		skills, err := client.listSkills(scope)
 		if err != nil {
 			return fmt.Errorf("fetching skills: %w", err)
