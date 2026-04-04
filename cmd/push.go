@@ -170,16 +170,6 @@ var pushCmd = &cobra.Command{
 				var sizeWarning string
 				contentHash := computeMerkleHash(localFiles)
 
-				// Sourced skill with no changes — skip
-				if s.marker != nil && s.marker.Source != nil && s.marker.Source.ContentHash != "" {
-					if contentHash == s.marker.Source.ContentHash {
-						lines[i].status = "unchanged"
-						lines[i].pct = 1
-						renderProgress(lines)
-						return
-					}
-				}
-
 				// Skip unchanged skills (content hash matches what we last pushed)
 				if s.marker != nil && s.marker.ContentHash != "" && s.marker.ContentHash == contentHash {
 					if sizeWarning != "" {
@@ -332,6 +322,9 @@ var pushCmd = &cobra.Command{
 
 					lines[i].status = "failed"
 					renderProgress(lines)
+					mu.Lock()
+					warnings = append(warnings, fmt.Sprintf("%s: %v", s.name, err))
+					mu.Unlock()
 					atomic.AddInt64(&failed, 1)
 					return
 				}
