@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 )
@@ -14,14 +15,9 @@ func init() {
 
 var statusCmd = &cobra.Command{
 	Use:   "status",
-	Short: "Check for skill updates and new remote skills",
-	Long: `Compares your local skills with your airskills.ai account.
-Shows new skills available for download, and skills with remote updates.
-
-Designed for shell startup hook:
-  [airskills] 2 updated, 3 new. Run 'airskills sync' to sync.
-
-Use --quiet to suppress output when everything is up to date.`,
+	Short: "Check for skill updates",
+	Long: `One-line sync status, designed for shell startup:
+  eval "$(airskills status)"`,
 	RunE: runStatus,
 }
 
@@ -30,28 +26,48 @@ func runStatus(cmd *cobra.Command, args []string) error {
 
 	client, err := newAPIClientAuto()
 	if err != nil {
-		if !quiet {
-			fmt.Fprintf(os.Stderr, "[airskills] %v\n", err)
-		}
 		return nil
 	}
 
-	localSkills, err := scanSkillsFromAgents()
-	if err != nil && !quiet {
-		fmt.Fprintf(os.Stderr, "[airskills] Could not scan local skills: %v\n", err)
+	// Parallel: fetch skills and health check at the same time
+	type skillsResult struct {
+		skills []apiSkill
+		err    error
+	}
+	type healthResult struct {
+		latestCLI string
 	}
 
-	remoteSkills, err := client.listSkills("personal")
-	if err != nil {
-		if !quiet {
-			fmt.Fprintf(os.Stderr, "[airskills] Could not fetch remote skills: %v\n", err)
+	skillsCh := make(chan skillsResult, 1)
+	healthCh := make(chan healthResult, 1)
+
+	go func() {
+		skills, err := client.listSkills("personal")
+		skillsCh <- skillsResult{skills, err}
+	}()
+
+	go func() {
+		var latest string
+		if body, err := client.get("/api/v1/health"); err == nil {
+			var h struct {
+				LatestCLI string `json:"latest_cli"`
+			}
+			if parseJSON(body, &h) == nil && h.LatestCLI != "" && isNewer(h.LatestCLI, version) && version != "dev" {
+				latest = h.LatestCLI
+			}
 		}
-		return nil
-	}
+		healthCh <- healthResult{latest}
+	}()
 
+	localSkills, _ := scanSkillsFromAgents()
 	syncState := loadSyncState()
 
-	// Build reverse map: skill_id → dir name
+	sr := <-skillsCh
+	if sr.err != nil {
+		return nil
+	}
+	hr := <-healthCh
+
 	skillIdToName := map[string]string{}
 	for name, entry := range syncState.Skills {
 		if entry.SkillID != "" {
@@ -59,16 +75,16 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	var notInstalled []string
-	var updated []string
-	var localOnly []string
+	var needPush, needPull, needUpdate, upstreamUpdates int
 
-	// Check remote skills vs local
 	remoteByName := map[string]bool{}
-	for _, remote := range remoteSkills {
+	for _, remote := range sr.skills {
 		remoteByName[remote.Name] = true
 
-		// Match by skill_id first (survives renames), then by name
+		if remote.HasUpstreamUpdate() {
+			upstreamUpdates++
+		}
+
 		trackedName := ""
 		if name, ok := skillIdToName[remote.ID]; ok {
 			trackedName = name
@@ -76,89 +92,52 @@ func runStatus(cmd *cobra.Command, args []string) error {
 
 		if trackedName != "" {
 			if _, exists := localSkills[trackedName]; !exists {
-				continue // dir removed locally
+				continue
 			}
 			marker := syncState.Skills[trackedName]
 			if marker.ContentHash != "" && remote.ContentHash != "" && marker.ContentHash != remote.ContentHash {
-				updated = append(updated, fmt.Sprintf("%s (content changed)", trackedName))
-			} else if marker.ContentHash == "" && marker.Version != remote.Version {
-				updated = append(updated, fmt.Sprintf("%s (v%s → v%s)", trackedName, marker.Version, remote.Version))
+				needUpdate++
 			}
 			continue
 		}
 
 		if _, exists := localSkills[remote.Name]; !exists {
-			notInstalled = append(notInstalled, remote.Name)
+			needPull++
 		}
 	}
 
-	// Check local skills not in remote (need pushing)
 	for name := range localSkills {
 		if !remoteByName[name] {
-			localOnly = append(localOnly, name)
+			needPush++
 		}
 	}
 
-	// Show logo + version info
-	if !quiet {
-		fmt.Println(cyan(`   _          _    _ _ _
-  (_)        | |  (_) | |
-__ _ _ _ __ ___| | ___| | |___
-/ _` + "`" + ` | | '__/ __| |/ / | | / __|
-| (_| | | |  \__ \   <| | | \__ \
-\__,_|_|_|  |___/_|\_\_|_|_|___/`))
-		fmt.Println()
-
-		if healthBody, err := client.get("/api/v1/health"); err == nil {
-			var health struct {
-				Version   string `json:"version"`
-				Commit    string `json:"commit"`
-				LatestCLI string `json:"latest_cli"`
-			}
-			if parseJSON(healthBody, &health) == nil {
-				commitStr := health.Commit
-				if len(commitStr) > 7 {
-					commitStr = commitStr[:7]
-				}
-				fmt.Printf("%s platform %s %s | cli %s\n",
-					cyan("[airskills]"), health.Version, dim("("+commitStr+")"), version)
-				if health.LatestCLI != "" && isNewer(health.LatestCLI, version) && version != "dev" {
-					fmt.Printf("%s %s\n",
-						yellow("Update available:"),
-						fmt.Sprintf("%s → %s. Run 'airskills self-update'.", version, health.LatestCLI))
-				}
-			}
-		}
-	}
-
-	if len(notInstalled) == 0 && len(updated) == 0 && len(localOnly) == 0 {
+	if needPush == 0 && needPull == 0 && needUpdate == 0 && upstreamUpdates == 0 && hr.latestCLI == "" {
 		if !quiet {
-			fmt.Printf("%s All %d skills in sync.\n", green("✓"), len(remoteSkills))
+			fmt.Fprintf(os.Stderr, "[airskills] %s\n", green("✓ in sync"))
 		}
 		return nil
 	}
 
-	if len(localOnly) > 0 {
-		fmt.Printf("\n%s %d skill(s) only on this machine %s:\n", yellow("↑"), len(localOnly), dim("(need push)"))
-		for _, name := range localOnly {
-			fmt.Printf("  %s %s\n", yellow("↑"), name)
-		}
+	var parts []string
+	if needPush > 0 {
+		parts = append(parts, yellow(fmt.Sprintf("↑ %d to push", needPush)))
+	}
+	if needPull > 0 {
+		parts = append(parts, cyan(fmt.Sprintf("↓ %d to pull", needPull)))
+	}
+	if needUpdate > 0 {
+		parts = append(parts, yellow(fmt.Sprintf("~ %d changed", needUpdate)))
+	}
+	if upstreamUpdates > 0 {
+		parts = append(parts, cyan(fmt.Sprintf("⬆ %d upstream", upstreamUpdates)))
+	}
+	fmt.Fprintf(os.Stderr, "[airskills] %s — run 'airskills sync'\n", strings.Join(parts, ", "))
+
+	if hr.latestCLI != "" {
+		fmt.Fprintf(os.Stderr, "[airskills] %s → %s: run 'airskills self-update'\n",
+			yellow("update"), hr.latestCLI)
 	}
 
-	if len(notInstalled) > 0 {
-		fmt.Printf("\n%s %d skill(s) not on this machine %s:\n", cyan("↓"), len(notInstalled), dim("(need pull)"))
-		for _, name := range notInstalled {
-			fmt.Printf("  %s %s\n", cyan("↓"), name)
-		}
-	}
-
-	if len(updated) > 0 {
-		fmt.Printf("\n%s %d skill(s) with version differences:\n", yellow("~"), len(updated))
-		for _, desc := range updated {
-			fmt.Printf("  %s %s\n", yellow("~"), desc)
-		}
-	}
-
-	fmt.Printf("\nRun '%s' to push and pull.\n", cyan("airskills sync"))
 	return nil
 }
