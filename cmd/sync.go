@@ -3,7 +3,6 @@ package cmd
 import (
 	"fmt"
 
-	"github.com/chrismdp/airskills/config"
 	"github.com/spf13/cobra"
 )
 
@@ -21,10 +20,11 @@ var syncCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		verbose = syncVerbose
 
-		token, _ := config.LoadToken()
-		loggedIn := token != nil
+		// Check if we can authenticate (handles no token, expired token, failed refresh)
+		_, authErr := newAPIClientAuto()
+		canPush := authErr == nil
 
-		if loggedIn {
+		if canPush {
 			fmt.Printf("%s %s\n", cyan("▲"), "Push")
 			if err := pushCmd.RunE(cmd, args); err != nil {
 				return err
