@@ -1,10 +1,13 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 
+	"github.com/chrismdp/airskills/config"
 	"github.com/spf13/cobra"
 )
 
@@ -34,13 +37,18 @@ type updateDetail struct {
 
 func runPull(cmd *cobra.Command, args []string) error {
 	client, err := newAPIClientAuto()
-	if err != nil {
-		return err
-	}
+	loggedIn := err == nil
 
 	localSkills, err := scanSkillsFromAgents()
 	if err != nil {
 		return err
+	}
+
+	syncState := loadSyncState()
+
+	// If not logged in, pull sourced skills (from add) by re-downloading from source
+	if !loggedIn {
+		return runPullAnon(localSkills, syncState)
 	}
 
 	// Fetch owned skills only (scope=personal filters server-side)
@@ -48,8 +56,6 @@ func runPull(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("fetching skills: %w", err)
 	}
-
-	syncState := loadSyncState()
 
 	// Build reverse map: skill_id → dir name (for matching by ID after renames)
 	skillIdToName := map[string]string{}
@@ -266,5 +272,89 @@ func runPull(cmd *cobra.Command, args []string) error {
 
 	saveSyncState(syncState)
 	_ = saveLastSync()
+	return nil
+}
+
+// runPullAnon pulls sourced skills without authentication by re-downloading from the original source.
+func runPullAnon(localSkills map[string]string, syncState *SyncState) error {
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+
+	var pulled int
+	var pulledNames []string
+
+	for name, entry := range syncState.Skills {
+		if entry.Source == nil {
+			continue // only pull sourced (added) skills when not logged in
+		}
+
+		// Check if content has changed from what we have
+		if _, exists := localSkills[name]; exists {
+			localFiles := readSkillFiles(localSkills[name])
+			localHash := computeMerkleHash(localFiles)
+			if entry.ContentHash != "" && localHash == entry.ContentHash {
+				continue // unchanged
+			}
+		}
+
+		// Re-download from source
+		resolveURL := fmt.Sprintf("%s/api/v1/resolve/%s/%s", cfg.APIURL, entry.Source.Owner, entry.Source.Slug)
+		resp, err := http.Get(resolveURL)
+		if err != nil || resp.StatusCode != 200 {
+			if resp != nil {
+				resp.Body.Close()
+			}
+			continue
+		}
+
+		var result struct {
+			ID      string `json:"id"`
+			Content string `json:"content"`
+			Version string `json:"version"`
+		}
+		json.NewDecoder(resp.Body).Decode(&result)
+		resp.Body.Close()
+
+		// Try archive download, fall back to SKILL.md content
+		archiveURL := fmt.Sprintf("%s/api/v1/skills/%s/archive", cfg.APIURL, result.ID)
+		archiveResp, archiveErr := http.Get(archiveURL)
+		var files map[string][]byte
+		if archiveErr == nil && archiveResp.StatusCode == 200 {
+			files, _ = extractTarGzToMap(archiveResp.Body)
+			archiveResp.Body.Close()
+		} else {
+			if archiveResp != nil {
+				archiveResp.Body.Close()
+			}
+		}
+		if len(files) == 0 && result.Content != "" {
+			files = map[string][]byte{"SKILL.md": []byte(result.Content)}
+		}
+		if len(files) == 0 {
+			continue
+		}
+
+		destinations, err := installSkillToAgents(name, files)
+		if err != nil || len(destinations) == 0 {
+			continue
+		}
+
+		entry.Version = result.Version
+		pulled++
+		pulledNames = append(pulledNames, name)
+	}
+
+	if pulled > 0 {
+		for _, n := range pulledNames {
+			fmt.Printf("  %s %s\n", green("+"), n)
+		}
+		fmt.Printf("\n%d pulled\n", pulled)
+	} else {
+		fmt.Printf("  %s all up to date\n", green("✓"))
+	}
+
+	saveSyncState(syncState)
 	return nil
 }
