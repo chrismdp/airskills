@@ -287,61 +287,47 @@ func runPullAnon(localSkills map[string]string, syncState *SyncState) error {
 
 	for name, entry := range syncState.Skills {
 		if entry.Source == nil {
-			continue // only pull sourced (added) skills when not logged in
-		}
-
-		// Check if content has changed from what we have
-		if _, exists := localSkills[name]; exists {
-			localFiles := readSkillFiles(localSkills[name])
-			localHash := computeMerkleHash(localFiles)
-			if entry.ContentHash != "" && localHash == entry.ContentHash {
-				continue // unchanged
-			}
-		}
-
-		// Re-download from source
-		resolveURL := fmt.Sprintf("%s/api/v1/resolve/%s/%s", cfg.APIURL, entry.Source.Owner, entry.Source.Slug)
-		resp, err := http.Get(resolveURL)
-		if err != nil || resp.StatusCode != 200 {
-			if resp != nil {
-				resp.Body.Close()
-			}
 			continue
 		}
 
+		// Skip if local content matches what we last synced
+		if dir, exists := localSkills[name]; exists && entry.ContentHash != "" {
+			localHash := computeMerkleHash(readSkillFiles(dir))
+			if localHash == entry.ContentHash {
+				continue
+			}
+		}
+
+		// Resolve the skill from its source
+		resolveURL := fmt.Sprintf("%s/api/v1/resolve/%s/%s", cfg.APIURL, entry.Source.Owner, entry.Source.Slug)
+		resp, err := http.Get(resolveURL)
+		if err != nil {
+			continue
+		}
 		var result struct {
 			ID      string `json:"id"`
 			Content string `json:"content"`
 			Version string `json:"version"`
 		}
-		json.NewDecoder(resp.Body).Decode(&result)
+		decodeErr := json.NewDecoder(resp.Body).Decode(&result)
 		resp.Body.Close()
-
-		// Try archive download, fall back to SKILL.md content
-		archiveURL := fmt.Sprintf("%s/api/v1/skills/%s/archive", cfg.APIURL, result.ID)
-		archiveResp, archiveErr := http.Get(archiveURL)
-		var files map[string][]byte
-		if archiveErr == nil && archiveResp.StatusCode == 200 {
-			files, _ = extractTarGzToMap(archiveResp.Body)
-			archiveResp.Body.Close()
-		} else {
-			if archiveResp != nil {
-				archiveResp.Body.Close()
-			}
-		}
-		if len(files) == 0 && result.Content != "" {
-			files = map[string][]byte{"SKILL.md": []byte(result.Content)}
-		}
-		if len(files) == 0 {
+		if decodeErr != nil || result.ID == "" {
 			continue
 		}
 
-		destinations, err := installSkillToAgents(name, files)
-		if err != nil || len(destinations) == 0 {
+		// Download files using shared helper
+		files, err := downloadSkillByID(cfg.APIURL, result.ID, result.Content, "")
+		if err != nil || len(files) == 0 {
 			continue
 		}
 
+		if _, err := installSkillToAgents(name, files); err != nil {
+			continue
+		}
+
+		// Update sync state so next pull can skip unchanged
 		entry.Version = result.Version
+		entry.ContentHash = computeMerkleHash(files)
 		pulled++
 		pulledNames = append(pulledNames, name)
 	}

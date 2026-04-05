@@ -172,14 +172,24 @@ var addCmd = &cobra.Command{
 	},
 }
 
-// fetchSkillFiles tries the archive first, falls back to SKILL.md content
+// fetchSkillFiles tries the archive first, falls back to SKILL.md content (with progress UI).
 func fetchSkillFiles(cfg *config.Config, skillID, content, authHeader string, lines []progressLine) (map[string][]byte, error) {
 	lines[0].status = "downloading"
 	lines[0].pct = 0.5
 	renderProgress(lines)
 
-	// Try archive
-	archiveURL := fmt.Sprintf("%s/api/v1/skills/%s/archive", cfg.APIURL, skillID)
+	files, err := downloadSkillByID(cfg.APIURL, skillID, content, authHeader)
+	if err == nil {
+		lines[0].status = "extracting"
+		lines[0].pct = 0.7
+		renderProgress(lines)
+	}
+	return files, err
+}
+
+// downloadSkillByID fetches a skill's files by ID. Tries archive, falls back to SKILL.md content.
+func downloadSkillByID(apiURL, skillID, fallbackContent, authHeader string) (map[string][]byte, error) {
+	archiveURL := fmt.Sprintf("%s/api/v1/skills/%s/archive", apiURL, skillID)
 	archiveReq, _ := http.NewRequest("GET", archiveURL, nil)
 	if authHeader != "" {
 		archiveReq.Header.Set("Authorization", authHeader)
@@ -188,11 +198,6 @@ func fetchSkillFiles(cfg *config.Config, skillID, content, authHeader string, li
 	archiveResp, err := http.DefaultClient.Do(archiveReq)
 	if err == nil && archiveResp.StatusCode == 200 {
 		defer archiveResp.Body.Close()
-
-		lines[0].status = "extracting"
-		lines[0].pct = 0.7
-		renderProgress(lines)
-
 		files, err := extractTarGzToMap(archiveResp.Body)
 		if err == nil && len(files) > 0 {
 			return files, nil
@@ -202,10 +207,10 @@ func fetchSkillFiles(cfg *config.Config, skillID, content, authHeader string, li
 		archiveResp.Body.Close()
 	}
 
-	// Fallback: just SKILL.md
-	return map[string][]byte{
-		"SKILL.md": []byte(content),
-	}, nil
+	if fallbackContent != "" {
+		return map[string][]byte{"SKILL.md": []byte(fallbackContent)}, nil
+	}
+	return nil, fmt.Errorf("no files available for skill %s", skillID)
 }
 
 // extractTarGzToMap reads a tar.gz into a map of relative-path -> content
