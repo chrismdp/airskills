@@ -138,6 +138,7 @@ func runPull(cmd *cobra.Command, args []string) error {
 	}
 
 	var pulled, updated, diverged, failed int
+	var pulledNames []string
 	var divergedDetails []conflictDetail
 	var updateDetails []updateDetail
 
@@ -233,24 +234,23 @@ func runPull(cmd *cobra.Command, args []string) error {
 			lines[i].status = "done"
 			lines[i].size = fmt.Sprintf("%d agents", len(destinations))
 			pulled++
+			pulledNames = append(pulledNames, p.skill.Name)
 		}
 		lines[i].pct = 1
 		renderProgress(lines)
 	}
 
-	fmt.Printf("\n%d pulled, %d updated, %d diverged, %d failed\n", pulled, updated, diverged, failed)
-
-	if len(updateDetails) > 0 {
-		fmt.Println("\n--- Updated skills ---")
-		for _, u := range updateDetails {
-			fmt.Printf("\n  %s  %s → %s\n", u.name, u.oldVersion, u.newVersion)
-			if len(u.messages) > 0 {
-				for _, msg := range u.messages {
-					fmt.Printf("    • %s\n", msg)
-				}
-			}
+	if pulled > 0 {
+		for _, n := range pulledNames {
+			fmt.Printf("  %s %s\n", green("+"), n)
 		}
 	}
+	if updated > 0 {
+		for _, u := range updateDetails {
+			fmt.Printf("  %s %s %s → %s\n", cyan("↓"), u.name, u.oldVersion, u.newVersion)
+		}
+	}
+	fmt.Printf("\n%d pulled, %d updated, %d diverged, %d failed\n", pulled, updated, diverged, failed)
 
 	if len(divergedDetails) > 0 {
 		fmt.Println("\n--- Diverged skills ---")

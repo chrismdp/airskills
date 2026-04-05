@@ -141,6 +141,7 @@ var pushCmd = &cobra.Command{
 		}
 
 		var pushed, created, linked, renamed, conflicts, failed int64
+		var pushedNames, createdNames []string
 		var mu sync.Mutex
 		var wg sync.WaitGroup
 		var warnings []string
@@ -354,8 +355,14 @@ var pushCmd = &cobra.Command{
 
 				if isNew {
 					atomic.AddInt64(&created, 1)
+					mu.Lock()
+					createdNames = append(createdNames, s.name)
+					mu.Unlock()
 				} else {
 					atomic.AddInt64(&pushed, 1)
+					mu.Lock()
+					pushedNames = append(pushedNames, s.name)
+					mu.Unlock()
 				}
 				if updated != nil {
 					s.marker.Version = updated.Version
@@ -388,9 +395,15 @@ var pushCmd = &cobra.Command{
 		parts := []string{}
 		if pushed > 0 {
 			parts = append(parts, green(fmt.Sprintf("%d pushed", pushed)))
+			for _, n := range pushedNames {
+				fmt.Printf("  %s %s\n", green("↑"), n)
+			}
 		}
 		if created > 0 {
 			parts = append(parts, green(fmt.Sprintf("%d created", created)))
+			for _, n := range createdNames {
+				fmt.Printf("  %s %s\n", green("+"), n)
+			}
 		}
 		if linked > 0 {
 			parts = append(parts, fmt.Sprintf("%d linked", linked))
