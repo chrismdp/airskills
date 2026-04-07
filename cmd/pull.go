@@ -35,6 +35,13 @@ type updateDetail struct {
 	messages   []string
 }
 
+type pullEntry struct {
+	skill    apiSkill
+	reason   string // "new", "updated", or "diverged"
+	localDir string
+	marker   *SyncEntry
+}
+
 func runPull(cmd *cobra.Command, args []string) error {
 	client, err := newAPIClientAuto()
 	loggedIn := err == nil
@@ -57,76 +64,19 @@ func runPull(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("fetching skills: %w", err)
 	}
 
-	// Build reverse map: skill_id → dir name (for matching by ID after renames)
-	skillIdToName := map[string]string{}
-	for name, entry := range syncState.Skills {
-		if entry.SkillID != "" {
-			skillIdToName[entry.SkillID] = name
+	// Resolve upstream updates on forked skills before deciding actions.
+	for i := range remoteSkills {
+		if remoteSkills[i].HasUpstreamUpdate() {
+			if updated, err := client.pullUpstream(remoteSkills[i].ID); err == nil {
+				remoteSkills[i].ContentHash = updated.ContentHash
+				remoteSkills[i].Version = updated.Version
+			}
 		}
 	}
 
-	type pullEntry struct {
-		skill    apiSkill
-		reason   string // "new", "updated", or "diverged"
-		localDir string
-		marker   *SyncEntry
-	}
+	toPull, missingWarnings := decidePullActions(remoteSkills, localSkills, syncState)
 
-	var toPull []pullEntry
-	for _, remote := range remoteSkills {
-		// Check for upstream updates on forked skills
-		if remote.HasUpstreamUpdate() {
-			updated, err := client.pullUpstream(remote.ID)
-			if err == nil {
-				remote.ContentHash = updated.ContentHash
-				remote.Version = updated.Version
-			}
-		}
-
-		// First try to match by skill_id (survives renames)
-		trackedName := ""
-		if name, ok := skillIdToName[remote.ID]; ok {
-			trackedName = name
-		}
-
-		if trackedName != "" {
-			// Tracked skill — check if dir still exists
-			localDir, exists := localSkills[trackedName]
-			if !exists {
-				// Dir deleted locally — re-download from remote
-				toPull = append(toPull, pullEntry{skill: remote, reason: "new"})
-				continue
-			}
-
-			marker := syncState.Skills[trackedName]
-
-			// Remote unchanged since last sync? Skip.
-			if remote.ContentHash == "" || marker.ContentHash == "" || remote.ContentHash == marker.ContentHash {
-				continue
-			}
-
-			// Remote changed. Check if local also changed.
-			localFiles := readSkillFiles(localDir)
-			localHash := computeMerkleHash(localFiles)
-
-			if localHash == marker.ContentHash {
-				toPull = append(toPull, pullEntry{skill: remote, reason: "updated", localDir: localDir, marker: marker})
-			} else {
-				toPull = append(toPull, pullEntry{skill: remote, reason: "diverged", localDir: localDir, marker: marker})
-			}
-			continue
-		}
-
-		// Not tracked — check if dir exists by name
-		if _, exists := localSkills[remote.Name]; exists {
-			continue // untracked local skill, don't touch
-		}
-
-		// New remote skill — download
-		toPull = append(toPull, pullEntry{skill: remote, reason: "new"})
-	}
-
-	if len(toPull) == 0 {
+	if len(toPull) == 0 && len(missingWarnings) == 0 {
 		fmt.Printf("  %s all up to date\n", green("✓"))
 		return nil
 	}
@@ -256,7 +206,18 @@ func runPull(cmd *cobra.Command, args []string) error {
 			fmt.Printf("  %s %s %s → %s\n", cyan("↓"), u.name, u.oldVersion, u.newVersion)
 		}
 	}
-	fmt.Printf("\n%d pulled, %d updated, %d diverged, %d failed\n", pulled, updated, diverged, failed)
+	fmt.Printf("\n%d pulled, %d updated, %d diverged, %d failed", pulled, updated, diverged, failed)
+	if len(missingWarnings) > 0 {
+		fmt.Printf(", %d missing locally", len(missingWarnings))
+	}
+	fmt.Println()
+
+	if len(missingWarnings) > 0 {
+		fmt.Println("\n--- Missing locally ---")
+		for _, w := range missingWarnings {
+			fmt.Printf("  %s %s\n", yellow("!"), w)
+		}
+	}
 
 	if len(divergedDetails) > 0 {
 		fmt.Println("\n--- Diverged skills ---")
@@ -343,4 +304,70 @@ func runPullAnon(localSkills map[string]string, syncState *SyncState) error {
 
 	saveSyncState(syncState)
 	return nil
+}
+
+// decidePullActions inspects remote, local, and sync state to decide which
+// remote skills to download. It is the pure decision core of runPull, with
+// no network calls. The hashLocal helper reads disk for divergence checks.
+//
+// Behaviour:
+//   - tracked + local present + remote unchanged: skip
+//   - tracked + local present + only remote changed: "updated"
+//   - tracked + local present + both changed: "diverged"
+//   - tracked + local missing: warn and skip (treat as intentional removal —
+//     user should run 'airskills rm <name>' to delete server-side, or
+//     'airskills pull <name>' to restore)
+//   - untracked + local with same name: skip (don't clobber unrelated dirs)
+//   - untracked + no local: "new"
+func decidePullActions(remoteSkills []apiSkill, localSkills map[string]string, syncState *SyncState) ([]pullEntry, []string) {
+	skillIdToName := map[string]string{}
+	for name, entry := range syncState.Skills {
+		if entry.SkillID != "" {
+			skillIdToName[entry.SkillID] = name
+		}
+	}
+
+	var actions []pullEntry
+	var warnings []string
+
+	for _, remote := range remoteSkills {
+		trackedName := ""
+		if name, ok := skillIdToName[remote.ID]; ok {
+			trackedName = name
+		}
+
+		if trackedName != "" {
+			localDir, exists := localSkills[trackedName]
+			if !exists {
+				warnings = append(warnings, fmt.Sprintf(
+					"%s: tracked but missing locally — run 'airskills rm %s' to delete server-side, or 'airskills pull %s' to restore",
+					trackedName, trackedName, trackedName,
+				))
+				continue
+			}
+
+			marker := syncState.Skills[trackedName]
+			if remote.ContentHash == "" || marker.ContentHash == "" || remote.ContentHash == marker.ContentHash {
+				continue
+			}
+
+			localFiles := readSkillFiles(localDir)
+			localHash := computeMerkleHash(localFiles)
+
+			if localHash == marker.ContentHash {
+				actions = append(actions, pullEntry{skill: remote, reason: "updated", localDir: localDir, marker: marker})
+			} else {
+				actions = append(actions, pullEntry{skill: remote, reason: "diverged", localDir: localDir, marker: marker})
+			}
+			continue
+		}
+
+		if _, exists := localSkills[remote.Name]; exists {
+			continue
+		}
+
+		actions = append(actions, pullEntry{skill: remote, reason: "new"})
+	}
+
+	return actions, warnings
 }
