@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/chrismdp/airskills/telemetry"
 	"github.com/spf13/cobra"
 )
 
@@ -110,6 +111,19 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		if !remoteByName[name] {
 			needPush++
 		}
+	}
+
+	// Skip capture on the shell-prompt hot path (quiet mode is used by
+	// `eval "$(airskills status)"` in shell init). Capturing there would
+	// flood PostHog with one event per shell window and block the prompt
+	// on Flush every time.
+	if !quiet {
+		telemetry.Capture("cli_status", map[string]interface{}{
+			"need_push":        needPush,
+			"need_pull":        needPull,
+			"need_update":      needUpdate,
+			"upstream_updates": upstreamUpdates,
+		})
 	}
 
 	if needPush == 0 && needPull == 0 && needUpdate == 0 && upstreamUpdates == 0 && hr.latestCLI == "" {

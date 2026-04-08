@@ -1,22 +1,16 @@
 package cmd
 
 import (
-	"bytes"
-	"encoding/json"
 	"fmt"
-	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/chrismdp/airskills/config"
+	"github.com/chrismdp/airskills/telemetry"
 	"github.com/spf13/cobra"
 )
-
-const posthogAPIKey = "" // TODO: set PostHog project API key
-const posthogEndpoint = "https://eu.i.posthog.com/capture/"
 
 var feedbackMessage string
 var feedbackIncludeLogs bool
@@ -30,7 +24,6 @@ var feedbackCmd = &cobra.Command{
 			return fmt.Errorf("--message is required")
 		}
 
-		// Build PostHog event
 		properties := map[string]interface{}{
 			"message": feedbackMessage,
 		}
@@ -44,32 +37,7 @@ var feedbackCmd = &cobra.Command{
 			}
 		}
 
-		// Try to get user identity from token
-		distinctID := "anonymous"
-		token, _ := config.LoadToken()
-		if token != nil && time.Now().Unix() < token.ExpiresAt {
-			distinctID = token.AccessToken[:16] // truncated token as stable ID
-		}
-
-		event := map[string]interface{}{
-			"api_key":     posthogAPIKey,
-			"event":       "cli_feedback",
-			"distinct_id": distinctID,
-			"properties":  properties,
-			"timestamp":   time.Now().UTC().Format(time.RFC3339),
-		}
-
-		data, err := json.Marshal(event)
-		if err != nil {
-			return err
-		}
-
-		resp, err := http.Post(posthogEndpoint, "application/json", bytes.NewReader(data))
-		if err != nil {
-			return fmt.Errorf("failed to send feedback: %w", err)
-		}
-		resp.Body.Close()
-
+		telemetry.Capture("cli_feedback", properties)
 		fmt.Println("Thanks! Feedback sent.")
 		return nil
 	},

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/chrismdp/airskills/config"
+	"github.com/chrismdp/airskills/telemetry"
 	"github.com/spf13/cobra"
 )
 
@@ -59,6 +60,7 @@ var addCmd = &cobra.Command{
 		if authHeader != "" {
 			req.Header.Set("Authorization", authHeader)
 		}
+		setAnonHeader(req)
 
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
@@ -171,6 +173,14 @@ var addCmd = &cobra.Command{
 			fmt.Println(line)
 		}
 		fmt.Printf("\nInstalled %s/%s to %d agents\n", username, slug, len(installed))
+
+		telemetry.Capture("cli_add", map[string]interface{}{
+			"owner":         username,
+			"slug":          slug,
+			"skill_id":      result.ID,
+			"agents":        len(installed),
+			"authenticated": authHeader != "",
+		})
 		return nil
 	},
 }
@@ -197,6 +207,7 @@ func downloadSkillByID(apiURL, skillID, fallbackContent, authHeader string) (map
 	if authHeader != "" {
 		archiveReq.Header.Set("Authorization", authHeader)
 	}
+	setAnonHeader(archiveReq)
 
 	archiveResp, err := http.DefaultClient.Do(archiveReq)
 	if err == nil && archiveResp.StatusCode == 200 {

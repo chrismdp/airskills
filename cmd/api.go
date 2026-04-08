@@ -9,7 +9,17 @@ import (
 	"time"
 
 	"github.com/chrismdp/airskills/config"
+	"github.com/chrismdp/airskills/telemetry"
 )
+
+// setAnonHeader attaches the machine-level anonymous telemetry ID so the
+// server can attribute anonymous events (e.g. `airskills add` without login)
+// to a stable identity across sessions.
+func setAnonHeader(req *http.Request) {
+	if id := telemetry.AnonymousID(); id != "" {
+		req.Header.Set("X-Airskills-Anon-ID", id)
+	}
+}
 
 // apiSkill represents a skill from the API.
 type apiSkill struct {
@@ -53,8 +63,9 @@ func (c *apiClient) pullUpstream(skillID string) (*apiSkill, error) {
 
 // apiProfile represents the current user's profile from /api/v1/me.
 type apiProfile struct {
-	ID       string `json:"id"`
-	Username string `json:"username"`
+	ID          string `json:"id"`
+	Username    string `json:"username"`
+	DisplayName string `json:"display_name"`
 }
 
 // getMe fetches the current user's profile.
@@ -158,6 +169,7 @@ func (c *apiClient) get(path string) ([]byte, error) {
 		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
+	setAnonHeader(req)
 
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -188,6 +200,7 @@ func (c *apiClient) post(path string, payload interface{}) ([]byte, error) {
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	req.Header.Set("Content-Type", "application/json")
+	setAnonHeader(req)
 
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -218,6 +231,7 @@ func (c *apiClient) put(path string, payload interface{}) ([]byte, int, error) {
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	req.Header.Set("Content-Type", "application/json")
+	setAnonHeader(req)
 
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -239,6 +253,7 @@ func (c *apiClient) del(path string) error {
 		return err
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
+	setAnonHeader(req)
 
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -340,6 +355,7 @@ func (c *apiClient) putArchive(skillID string, archive []byte, expectedHash, con
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	req.Header.Set("Content-Type", "application/gzip")
+	setAnonHeader(req)
 	if expectedHash != "" {
 		req.Header.Set("X-Expected-Hash", expectedHash)
 	}

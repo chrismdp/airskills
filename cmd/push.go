@@ -14,6 +14,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/chrismdp/airskills/telemetry"
 	"github.com/spf13/cobra"
 )
 
@@ -430,6 +431,17 @@ var pushCmd = &cobra.Command{
 				fmt.Printf("  %s %s\n", yellow("!"), w)
 			}
 		}
+
+		telemetry.Capture("cli_push", map[string]interface{}{
+			"pushed":    pushed,
+			"created":   created,
+			"linked":    linked,
+			"renamed":   renamed,
+			"conflicts": conflicts,
+			"failed":    failed,
+			"skipped":   skipped,
+			"force":     pushForce,
+		})
 
 		// Show conflict resolution instructions
 		if len(conflictMessages) > 0 {

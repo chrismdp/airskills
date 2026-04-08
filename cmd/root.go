@@ -3,7 +3,9 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"time"
 
+	"github.com/chrismdp/airskills/telemetry"
 	"github.com/spf13/cobra"
 )
 
@@ -38,6 +40,14 @@ func Execute() {
 		defer logFile.Close()
 	}
 
+	// Skip telemetry init/flush for no-op commands so `airskills version`,
+	// `--help`, and arg-parse errors don't pay the file-read / 2s-flush cost.
+	if wantsTelemetry(os.Args[1:]) {
+		telemetry.CLIVersion = version
+		telemetry.Init()
+		defer telemetry.Flush(2 * time.Second)
+	}
+
 	rootCmd.PersistentPreRun = func(cmd *cobra.Command, args []string) {
 		name := cmd.Name()
 		if name != "self-update" && name != "version" {
@@ -49,6 +59,20 @@ func Execute() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+}
+
+// wantsTelemetry returns false for commands that don't need the telemetry
+// subsystem — version, help, and argless invocations. This keeps those paths
+// free of file I/O and the Flush wait.
+func wantsTelemetry(args []string) bool {
+	if len(args) == 0 {
+		return false
+	}
+	switch args[0] {
+	case "version", "--version", "-v", "help", "--help", "-h":
+		return false
+	}
+	return true
 }
 
 func init() {

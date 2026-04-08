@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 
 	"github.com/chrismdp/airskills/config"
+	"github.com/chrismdp/airskills/telemetry"
 	"github.com/spf13/cobra"
 )
 
@@ -233,6 +234,15 @@ func runPull(cmd *cobra.Command, args []string) error {
 
 	saveSyncState(syncState)
 	_ = saveLastSync()
+
+	telemetry.Capture("cli_pull", map[string]interface{}{
+		"pulled":      pulled,
+		"updated":     updated,
+		"diverged":    diverged,
+		"failed":      failed,
+		"missing":     len(missingWarnings),
+		"anonymous":   false,
+	})
 	return nil
 }
 
@@ -261,7 +271,9 @@ func runPullAnon(localSkills map[string]string, syncState *SyncState) error {
 
 		// Resolve the skill from its source
 		resolveURL := fmt.Sprintf("%s/api/v1/resolve/%s/%s", cfg.APIURL, entry.Source.Owner, entry.Source.Slug)
-		resp, err := http.Get(resolveURL)
+		resolveReq, _ := http.NewRequest("GET", resolveURL, nil)
+		setAnonHeader(resolveReq)
+		resp, err := http.DefaultClient.Do(resolveReq)
 		if err != nil {
 			continue
 		}
@@ -303,6 +315,11 @@ func runPullAnon(localSkills map[string]string, syncState *SyncState) error {
 	}
 
 	saveSyncState(syncState)
+
+	telemetry.Capture("cli_pull", map[string]interface{}{
+		"pulled":    pulled,
+		"anonymous": true,
+	})
 	return nil
 }
 

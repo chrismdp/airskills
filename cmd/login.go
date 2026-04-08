@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/chrismdp/airskills/config"
+	"github.com/chrismdp/airskills/telemetry"
 	"github.com/spf13/cobra"
 )
 
@@ -127,12 +128,15 @@ var loginCmd = &cobra.Command{
 				logInfo("Logged in, but could not verify session: %s", err)
 				return nil
 			}
-			if _, err := client.get("/api/v1/me"); err != nil {
+			profile, err := client.getMe()
+			if err != nil {
 				fmt.Println("failed")
 				return fmt.Errorf("token saved but verification failed: %w", err)
 			}
 			fmt.Println("ok")
 			logInfo("Logged in successfully!")
+			telemetry.Identify(profile.ID, profile.Username)
+			telemetry.Capture("cli_login", nil)
 			fmt.Println()
 			// Show status so user sees their skills immediately
 			return runStatus(cmd, nil)
@@ -148,6 +152,8 @@ var logoutCmd = &cobra.Command{
 	Use:   "logout",
 	Short: "Log out of airskills",
 	RunE: func(cmd *cobra.Command, args []string) error {
+		telemetry.Capture("cli_logout", nil)
+		telemetry.Logout()
 		if err := config.ClearToken(); err != nil {
 			return err
 		}
@@ -165,16 +171,8 @@ var whoamiCmd = &cobra.Command{
 			return err
 		}
 
-		body, err := client.get("/api/v1/me")
+		profile, err := client.getMe()
 		if err != nil {
-			return err
-		}
-
-		var profile struct {
-			Username    string `json:"username"`
-			DisplayName string `json:"display_name"`
-		}
-		if err := json.Unmarshal(body, &profile); err != nil {
 			return err
 		}
 

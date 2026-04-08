@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 
+	"github.com/chrismdp/airskills/telemetry"
 	"github.com/spf13/cobra"
 )
 
@@ -39,6 +40,9 @@ var syncCmd = &cobra.Command{
 			return err
 		}
 
+		telemetry.Capture("cli_sync", map[string]interface{}{
+			"pushed": canPush,
+		})
 		return nil
 	},
 }
