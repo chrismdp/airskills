@@ -48,14 +48,9 @@ var addCmd = &cobra.Command{
 			authHeader = "Bearer " + token.AccessToken
 		}
 
-		// Resolve the skill
-		lines := []progressLine{{name: slug, status: "resolving", pct: 0.2}}
-		if isTTY {
-			for _, l := range lines {
-				fmt.Printf("  %-20s  %s  %s\n", l.name, renderBar(l.pct), l.status)
-			}
-		}
-
+		// Resolve the skill silently — we don't show any UI until we know
+		// the skill exists, so 404/401 paths produce a clean error with
+		// no half-drawn progress bar.
 		resolveURL := fmt.Sprintf("%s/api/v1/resolve/%s/%s", cfg.APIURL, username, slug)
 		req, err := http.NewRequest("GET", resolveURL, nil)
 		if err != nil {
@@ -96,6 +91,14 @@ var addCmd = &cobra.Command{
 		if result.Type == "bundle" {
 			fmt.Printf("Bundles are not yet supported for direct install. Visit https://airskills.ai/%s/%s\n", username, slug)
 			return nil
+		}
+
+		// Skill exists — start the progress UI now.
+		lines := []progressLine{{name: result.Slug, status: "downloading", pct: 0.4}}
+		if isTTY {
+			for _, l := range lines {
+				fmt.Printf("  %-20s  %s  %s\n", l.name, renderBar(l.pct), l.status)
+			}
 		}
 
 		// Collect the files to install

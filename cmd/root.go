@@ -24,6 +24,12 @@ Get started:
   airskills status     Check for updates
 
 Works with 18 AI agents.`,
+	// Don't print usage on runtime errors (e.g. "skill not found").
+	// Cobra still prints usage on argument-parse errors, which is correct.
+	SilenceUsage: true,
+	// Don't let cobra print "Error: ..." — Execute() prints the error itself
+	// in a single, prefix-free line. Without this we double-print.
+	SilenceErrors: true,
 }
 
 func Execute() {
