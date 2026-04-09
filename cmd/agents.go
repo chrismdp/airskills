@@ -34,6 +34,7 @@ var agents = []agentDef{
 	{"opencode", "OpenCode", ".agents/skills", ".config/opencode/skills"},
 	{"aider", "Aider", ".agents/skills", ".aider/skills"},
 	{"amazon-q", "Amazon Q", ".amazonq/skills", ".amazonq/skills"},
+	{"pi", "Pi", ".pi/skills", ".pi/agent/skills"},
 }
 
 // detectInstalledAgents returns agents whose global skills directory exists
