@@ -77,3 +77,191 @@ func TestDetectInstalledAgents(t *testing.T) {
 		t.Errorf("expected [claude-code], got %v", detected)
 	}
 }
+
+// writeSkillFile is a small test helper that creates parent dirs and writes a file.
+func writeSkillFile(t *testing.T, path string, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatalf("mkdir %s: %v", filepath.Dir(path), err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+}
+
+// TestMirrorPropagatesEditFromNonFirstDir covers the core requirement: when a
+// skill exists in two detected agent dirs and the user has edited the copy
+// that isn't first in the agent registry, the edit still wins and is mirrored
+// to the other copies.
+func TestMirrorPropagatesEditFromNonFirstDir(t *testing.T) {
+	tmpHome := t.TempDir()
+	setTestHome(t, tmpHome)
+
+	claudePath := filepath.Join(tmpHome, ".claude", "skills", "foo", "SKILL.md")
+	cursorPath := filepath.Join(tmpHome, ".cursor", "skills", "foo", "SKILL.md")
+
+	// Old (marker-matching) version lives in the first-found dir (.claude).
+	writeSkillFile(t, claudePath, "# old")
+	// Edited version lives in a later dir.
+	writeSkillFile(t, cursorPath, "# edited")
+
+	markerHash := computeMerkleHash(map[string][]byte{"SKILL.md": []byte("# old")})
+	state := &SyncState{
+		Version: 1,
+		Skills: map[string]*SyncEntry{
+			"foo": {SkillID: "skill-1", Version: "1.0.0", ContentHash: markerHash, Tool: "claude-code"},
+		},
+	}
+
+	_, conflicts := mirrorLocalSkills(state)
+	if len(conflicts) != 0 {
+		t.Fatalf("unexpected conflicts: %+v", conflicts)
+	}
+
+	claude, _ := os.ReadFile(claudePath)
+	if string(claude) != "# edited" {
+		t.Errorf("claude copy = %q, want '# edited'", string(claude))
+	}
+	cursor, _ := os.ReadFile(cursorPath)
+	if string(cursor) != "# edited" {
+		t.Errorf("cursor copy = %q, want '# edited'", string(cursor))
+	}
+}
+
+// TestMirrorCreatesInMissingDetectedDir verifies that sync mirrors a local
+// skill into every *detected* agent dir, even if the skill doesn't exist
+// there yet. The user explicitly asked for "all other" — not "only existing".
+func TestMirrorCreatesInMissingDetectedDir(t *testing.T) {
+	tmpHome := t.TempDir()
+	setTestHome(t, tmpHome)
+
+	// Both agents are installed (parent dirs exist)…
+	os.MkdirAll(filepath.Join(tmpHome, ".claude", "skills"), 0755)
+	os.MkdirAll(filepath.Join(tmpHome, ".cursor", "skills"), 0755)
+
+	// …but the skill only lives in .claude.
+	claudePath := filepath.Join(tmpHome, ".claude", "skills", "foo", "SKILL.md")
+	writeSkillFile(t, claudePath, "# content")
+
+	state := &SyncState{Version: 1, Skills: map[string]*SyncEntry{}}
+
+	_, conflicts := mirrorLocalSkills(state)
+	if len(conflicts) != 0 {
+		t.Fatalf("unexpected conflicts: %+v", conflicts)
+	}
+
+	cursorPath := filepath.Join(tmpHome, ".cursor", "skills", "foo", "SKILL.md")
+	cursor, err := os.ReadFile(cursorPath)
+	if err != nil {
+		t.Fatalf("expected cursor copy to be created: %v", err)
+	}
+	if string(cursor) != "# content" {
+		t.Errorf("cursor copy = %q, want '# content'", string(cursor))
+	}
+}
+
+// TestMirrorConflictSkipsAndReports verifies that when two local copies have
+// diverged in different ways and neither is safely identifiable as the edit,
+// mirror leaves them alone and reports the slug as conflicting.
+func TestMirrorConflictSkipsAndReports(t *testing.T) {
+	tmpHome := t.TempDir()
+	setTestHome(t, tmpHome)
+
+	claudePath := filepath.Join(tmpHome, ".claude", "skills", "foo", "SKILL.md")
+	cursorPath := filepath.Join(tmpHome, ".cursor", "skills", "foo", "SKILL.md")
+
+	writeSkillFile(t, claudePath, "# claude edit")
+	writeSkillFile(t, cursorPath, "# cursor edit")
+
+	// Marker refers to a third, older content that doesn't match either copy.
+	markerHash := computeMerkleHash(map[string][]byte{"SKILL.md": []byte("# original")})
+	state := &SyncState{
+		Version: 1,
+		Skills: map[string]*SyncEntry{
+			"foo": {SkillID: "skill-1", Version: "1.0.0", ContentHash: markerHash, Tool: "claude-code"},
+		},
+	}
+
+	_, conflicts := mirrorLocalSkills(state)
+	if len(conflicts) != 1 || conflicts[0].slug != "foo" {
+		t.Fatalf("expected 1 conflict for foo, got %+v", conflicts)
+	}
+	if len(conflicts[0].paths) < 2 {
+		t.Errorf("conflict should list both paths, got %v", conflicts[0].paths)
+	}
+
+	// Neither copy should have been touched.
+	claude, _ := os.ReadFile(claudePath)
+	if string(claude) != "# claude edit" {
+		t.Errorf("claude copy mutated: %q", string(claude))
+	}
+	cursor, _ := os.ReadFile(cursorPath)
+	if string(cursor) != "# cursor edit" {
+		t.Errorf("cursor copy mutated: %q", string(cursor))
+	}
+}
+
+// TestMirrorAllCopiesIdenticalNoOp verifies that when every copy already
+// matches, mirror reports no changes (and no conflicts).
+func TestMirrorAllCopiesIdenticalNoOp(t *testing.T) {
+	tmpHome := t.TempDir()
+	setTestHome(t, tmpHome)
+
+	claudePath := filepath.Join(tmpHome, ".claude", "skills", "foo", "SKILL.md")
+	cursorPath := filepath.Join(tmpHome, ".cursor", "skills", "foo", "SKILL.md")
+	writeSkillFile(t, claudePath, "# same")
+	writeSkillFile(t, cursorPath, "# same")
+
+	state := &SyncState{Version: 1, Skills: map[string]*SyncEntry{}}
+
+	changes, conflicts := mirrorLocalSkills(state)
+	if len(conflicts) != 0 {
+		t.Fatalf("unexpected conflicts: %+v", conflicts)
+	}
+	for _, c := range changes {
+		if len(c.written) != 0 {
+			t.Errorf("expected no writes, got %+v", c)
+		}
+	}
+}
+
+// TestMirrorRemovesStaleFilesInTarget verifies that mirror performs a true
+// replace: files present in the target but absent from the authoritative
+// source are deleted, so both copies end up byte-identical.
+func TestMirrorRemovesStaleFilesInTarget(t *testing.T) {
+	tmpHome := t.TempDir()
+	setTestHome(t, tmpHome)
+
+	claudeDir := filepath.Join(tmpHome, ".claude", "skills", "foo")
+	cursorDir := filepath.Join(tmpHome, ".cursor", "skills", "foo")
+
+	// Source (claude) has only SKILL.md.
+	writeSkillFile(t, filepath.Join(claudeDir, "SKILL.md"), "# new")
+	// Target (cursor) still has an old helper file.
+	writeSkillFile(t, filepath.Join(cursorDir, "SKILL.md"), "# old")
+	writeSkillFile(t, filepath.Join(cursorDir, "helper.sh"), "#!/bin/sh\n")
+
+	markerHash := computeMerkleHash(map[string][]byte{
+		"SKILL.md":  []byte("# old"),
+		"helper.sh": []byte("#!/bin/sh\n"),
+	})
+	state := &SyncState{
+		Version: 1,
+		Skills: map[string]*SyncEntry{
+			"foo": {SkillID: "skill-1", Version: "1.0.0", ContentHash: markerHash, Tool: "claude-code"},
+		},
+	}
+
+	_, conflicts := mirrorLocalSkills(state)
+	if len(conflicts) != 0 {
+		t.Fatalf("unexpected conflicts: %+v", conflicts)
+	}
+
+	if _, err := os.Stat(filepath.Join(cursorDir, "helper.sh")); !os.IsNotExist(err) {
+		t.Errorf("stale helper.sh should have been removed from cursor, err=%v", err)
+	}
+	cursorSkill, _ := os.ReadFile(filepath.Join(cursorDir, "SKILL.md"))
+	if string(cursorSkill) != "# new" {
+		t.Errorf("cursor SKILL.md = %q, want '# new'", string(cursorSkill))
+	}
+}

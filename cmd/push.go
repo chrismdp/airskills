@@ -65,6 +65,18 @@ var pushCmd = &cobra.Command{
 
 		var conflictMessages []conflictInfo
 
+		syncState := loadSyncState()
+
+		// Propagate any local edit across every detected agent dir before we
+		// scan, so push sees a consistent view. Slugs whose copies can't be
+		// safely reconciled are reported and skipped below.
+		_, mirrorConflicts := mirrorLocalSkills(syncState)
+		printMirrorConflicts(mirrorConflicts)
+		mirrorConflictSet := map[string]bool{}
+		for _, c := range mirrorConflicts {
+			mirrorConflictSet[c.slug] = true
+		}
+
 		// Scan all detected agent directories for skills
 		localSkills, err := scanSkillsFromAgents()
 		if err != nil || len(localSkills) == 0 {
@@ -79,10 +91,11 @@ var pushCmd = &cobra.Command{
 			marker *SyncEntry
 		}
 
-		syncState := loadSyncState()
-
 		var skills []skillEntry
 		for name, dir := range localSkills {
+			if mirrorConflictSet[name] {
+				continue
+			}
 			se := skillEntry{name: name, dir: dir}
 			if m, ok := syncState.Skills[name]; ok {
 				se.marker = m

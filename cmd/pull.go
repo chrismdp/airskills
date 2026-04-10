@@ -47,16 +47,30 @@ func runPull(cmd *cobra.Command, args []string) error {
 	client, err := newAPIClientAuto()
 	loggedIn := err == nil
 
+	syncState := loadSyncState()
+
+	// Propagate local edits across every detected agent dir before scanning,
+	// so pull's divergence check works regardless of which copy was edited.
+	// Slugs whose copies can't be reconciled are skipped to avoid clobbering
+	// the user's in-progress work.
+	_, mirrorConflicts := mirrorLocalSkills(syncState)
+	printMirrorConflicts(mirrorConflicts)
+	mirrorConflictSet := map[string]bool{}
+	for _, c := range mirrorConflicts {
+		mirrorConflictSet[c.slug] = true
+	}
+
 	localSkills, err := scanSkillsFromAgents()
 	if err != nil {
 		return err
 	}
-
-	syncState := loadSyncState()
+	for slug := range mirrorConflictSet {
+		delete(localSkills, slug)
+	}
 
 	// If not logged in, pull sourced skills (from add) by re-downloading from source
 	if !loggedIn {
-		return runPullAnon(localSkills, syncState)
+		return runPullAnon(localSkills, syncState, mirrorConflictSet)
 	}
 
 	// Fetch owned skills only (scope=personal filters server-side)
@@ -76,6 +90,20 @@ func runPull(cmd *cobra.Command, args []string) error {
 	}
 
 	toPull, missingWarnings := decidePullActions(remoteSkills, localSkills, syncState)
+
+	// Drop any actions for slugs that have unresolved local divergence —
+	// we already warned the user above, and we must not clobber their
+	// in-progress copies with a remote install.
+	if len(mirrorConflictSet) > 0 {
+		filtered := toPull[:0]
+		for _, p := range toPull {
+			if mirrorConflictSet[p.skill.Name] {
+				continue
+			}
+			filtered = append(filtered, p)
+		}
+		toPull = filtered
+	}
 
 	if len(toPull) == 0 && len(missingWarnings) == 0 {
 		fmt.Printf("  %s all up to date\n", green("✓"))
@@ -257,7 +285,7 @@ func runPull(cmd *cobra.Command, args []string) error {
 }
 
 // runPullAnon pulls sourced skills without authentication by re-downloading from the original source.
-func runPullAnon(localSkills map[string]string, syncState *SyncState) error {
+func runPullAnon(localSkills map[string]string, syncState *SyncState, skipSlugs map[string]bool) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return err
@@ -268,6 +296,9 @@ func runPullAnon(localSkills map[string]string, syncState *SyncState) error {
 
 	for name, entry := range syncState.Skills {
 		if entry.Source == nil {
+			continue
+		}
+		if skipSlugs[name] {
 			continue
 		}
 
