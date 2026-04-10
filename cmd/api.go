@@ -31,6 +31,7 @@ type apiSkill struct {
 	ContentHash         string   `json:"content_hash"`
 	OrgID               *string  `json:"org_id"`
 	ForkedFrom          *string  `json:"forked_from"`
+	Visibility          string   `json:"visibility"`
 	ToolFormats         []string `json:"tool_formats"`
 	Warning             string   `json:"warning,omitempty"`
 	UpstreamContentHash *string  `json:"upstream_content_hash"`
