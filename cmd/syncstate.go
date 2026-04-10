@@ -8,11 +8,13 @@ import (
 
 // SyncEntry tracks the sync state of a single skill.
 type SyncEntry struct {
-	SkillID     string       `json:"skill_id"`
-	Version     string       `json:"version"`
-	ContentHash string       `json:"content_hash,omitempty"`
-	Tool        string       `json:"tool"`
-	Source      *skillSource `json:"source,omitempty"`
+	SkillID         string       `json:"skill_id"`
+	Version         string       `json:"version"`
+	ContentHash     string       `json:"content_hash,omitempty"`
+	Tool            string       `json:"tool"`
+	Source          *skillSource `json:"source,omitempty"`
+	SuggestionID    string       `json:"suggestion_id,omitempty"`
+	SuggestDeclined bool         `json:"suggest_declined,omitempty"`
 }
 
 // SyncState holds sync metadata for all tracked skills.
@@ -20,6 +22,10 @@ type SyncEntry struct {
 type SyncState struct {
 	Version int                   `json:"version"`
 	Skills  map[string]*SyncEntry `json:"skills"`
+	// LastSuggestionNotifyAt is the cutoff for printing suggestion
+	// accept/decline notifications. Anything reviewed at or before this
+	// has already been shown. Stateless alternative to tracking IDs.
+	LastSuggestionNotifyAt string `json:"last_suggestion_notify_at,omitempty"`
 }
 
 func syncStatePath() string {

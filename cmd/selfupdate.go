@@ -166,7 +166,6 @@ func httpGet(client *http.Client, url string) ([]byte, error) {
 	return io.ReadAll(resp.Body)
 }
 
-
 func extractBinaryFromTarGz(data []byte, name string) ([]byte, error) {
 	gr, err := gzip.NewReader(bytes.NewReader(data))
 	if err != nil {

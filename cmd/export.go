@@ -191,14 +191,8 @@ func exportDir(skill apiSkill, files map[string][]byte, dir, outFile string) err
 		skillDir = filepath.Join(dir, skill.Name)
 	}
 
-	for path, content := range files {
-		fullPath := filepath.Join(skillDir, path)
-		if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
-			return fmt.Errorf("creating directory: %w", err)
-		}
-		if err := os.WriteFile(fullPath, content, 0o644); err != nil {
-			return err
-		}
+	if err := writeFilesToDir(skillDir, files); err != nil {
+		return err
 	}
 
 	fmt.Printf("  exported: %s → %s/ (%d files)\n", skill.Name, skillDir, len(files))

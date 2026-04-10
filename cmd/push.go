@@ -31,6 +31,15 @@ type conflictInfo struct {
 	remotePath string
 }
 
+// pendingSuggestionPrompt is collected inside the concurrent push goroutines
+// and drained sequentially after wg.Wait so we can prompt the user without
+// racing multiple goroutines on stdin.
+type pendingSuggestionPrompt struct {
+	name             string
+	suggesterSkillID string
+	source           *skillSource
+}
+
 var pushForce bool
 
 var pushCmd = &cobra.Command{
@@ -146,6 +155,7 @@ var pushCmd = &cobra.Command{
 		var mu sync.Mutex
 		var wg sync.WaitGroup
 		var warnings []string
+		var pendingPrompts []pendingSuggestionPrompt
 		sem := make(chan struct{}, 5) // max 5 concurrent uploads
 
 		// Free tier limits (checked client-side as guidance, server enforces)
@@ -365,6 +375,16 @@ var pushCmd = &cobra.Command{
 					pushedNames = append(pushedNames, s.name)
 					mu.Unlock()
 				}
+
+				if s.marker.Source != nil && s.marker.SuggestionID == "" && !s.marker.SuggestDeclined {
+					mu.Lock()
+					pendingPrompts = append(pendingPrompts, pendingSuggestionPrompt{
+						name:             s.name,
+						suggesterSkillID: s.marker.SkillID,
+						source:           s.marker.Source,
+					})
+					mu.Unlock()
+				}
 				if updated != nil {
 					s.marker.Version = updated.Version
 					s.marker.ContentHash = updated.ContentHash
@@ -391,6 +411,46 @@ var pushCmd = &cobra.Command{
 		}
 
 		wg.Wait()
+
+		// Drain sequentially so goroutines don't race on stdin. Skip the
+		// prompt entirely in non-interactive sessions without marking them
+		// declined, so the next interactive push still asks.
+		if len(pendingPrompts) > 0 && isTTY {
+			reader := bufio.NewReader(os.Stdin)
+			for _, p := range pendingPrompts {
+				fmt.Printf("\n  %s was originally from %s/%s\n", p.name, p.source.Owner, p.source.Slug)
+				fmt.Print("  Create a suggestion for the owner, or just keep your version? [s/K] ")
+				answer, _ := reader.ReadString('\n')
+				answer = strings.TrimSpace(strings.ToLower(answer))
+
+				if answer != "s" && answer != "suggest" && answer != "y" && answer != "yes" {
+					if entry, ok := syncState.Skills[p.name]; ok {
+						entry.SuggestDeclined = true
+					}
+					continue
+				}
+
+				fmt.Print("  Message (optional, press Enter to skip): ")
+				message, _ := reader.ReadString('\n')
+				message = strings.TrimSpace(message)
+
+				suggestion, err := client.createSuggestion(
+					p.suggesterSkillID,
+					p.source.ID,
+					p.source.ContentHash,
+					message,
+				)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "  %s suggestion failed: %v\n", yellow("!"), err)
+					continue
+				}
+				fmt.Printf("  %s suggestion sent to %s/%s\n", green("✓"), p.source.Owner, p.source.Slug)
+				if entry, ok := syncState.Skills[p.name]; ok {
+					entry.SuggestionID = suggestion.ID
+				}
+			}
+		}
+
 		saveSyncState(syncState)
 
 		parts := []string{}
@@ -543,5 +603,3 @@ func readSkillFiles(dir string) map[string][]byte {
 	})
 	return files
 }
-
-

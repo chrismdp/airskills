@@ -12,11 +12,11 @@ import (
 
 // apiBundle represents a bundle from the API.
 type apiBundle struct {
-	ID          string           `json:"id"`
-	Name        string           `json:"name"`
-	Slug        string           `json:"slug"`
-	Description string           `json:"description"`
-	Visibility  string           `json:"visibility"`
+	ID           string           `json:"id"`
+	Name         string           `json:"name"`
+	Slug         string           `json:"slug"`
+	Description  string           `json:"description"`
+	Visibility   string           `json:"visibility"`
 	BundleSkills []apiBundleSkill `json:"bundle_skills"`
 }
 

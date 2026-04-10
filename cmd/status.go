@@ -30,7 +30,6 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	// Parallel: fetch skills and health check at the same time
 	type skillsResult struct {
 		skills []apiSkill
 		err    error
@@ -41,6 +40,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 
 	skillsCh := make(chan skillsResult, 1)
 	healthCh := make(chan healthResult, 1)
+	suggCh := make(chan int, 1)
 
 	go func() {
 		skills, err := client.listSkills("personal")
@@ -60,14 +60,27 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		healthCh <- healthResult{latest}
 	}()
 
+	go func() {
+		n, err := client.countSuggestions("owner", "pending", "")
+		if err != nil {
+			suggCh <- 0
+			return
+		}
+		suggCh <- n
+	}()
+
 	localSkills, _ := scanSkillsFromAgents()
 	syncState := loadSyncState()
 
 	sr := <-skillsCh
 	if sr.err != nil {
+		// Still drain the other channels so their goroutines don't leak
+		<-healthCh
+		<-suggCh
 		return nil
 	}
 	hr := <-healthCh
+	pendingSuggestions := <-suggCh
 
 	skillIdToName := map[string]string{}
 	for name, entry := range syncState.Skills {
@@ -119,14 +132,15 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	// on Flush every time.
 	if !quiet {
 		telemetry.Capture("cli_status", map[string]interface{}{
-			"need_push":        needPush,
-			"need_pull":        needPull,
-			"need_update":      needUpdate,
-			"upstream_updates": upstreamUpdates,
+			"need_push":           needPush,
+			"need_pull":           needPull,
+			"need_update":         needUpdate,
+			"upstream_updates":    upstreamUpdates,
+			"pending_suggestions": pendingSuggestions,
 		})
 	}
 
-	if needPush == 0 && needPull == 0 && needUpdate == 0 && upstreamUpdates == 0 && hr.latestCLI == "" {
+	if needPush == 0 && needPull == 0 && needUpdate == 0 && upstreamUpdates == 0 && pendingSuggestions == 0 && hr.latestCLI == "" {
 		if !quiet {
 			fmt.Fprintf(os.Stderr, "[airskills] %s\n", green("✓ in sync"))
 		}
@@ -146,7 +160,17 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	if upstreamUpdates > 0 {
 		parts = append(parts, cyan(fmt.Sprintf("⬆ %d upstream", upstreamUpdates)))
 	}
-	fmt.Fprintf(os.Stderr, "[airskills] %s — run 'airskills sync'\n", strings.Join(parts, ", "))
+	if pendingSuggestions > 0 {
+		parts = append(parts, cyan(fmt.Sprintf("? %d suggestions", pendingSuggestions)))
+	}
+
+	// Pick the most relevant hint for the one-line command: suggestions
+	// trumps sync because review is a separate workflow.
+	hint := "airskills sync"
+	if pendingSuggestions > 0 && needPush == 0 && needPull == 0 && needUpdate == 0 && upstreamUpdates == 0 {
+		hint = "airskills review"
+	}
+	fmt.Fprintf(os.Stderr, "[airskills] %s — run '%s'\n", strings.Join(parts, ", "), hint)
 
 	if hr.latestCLI != "" {
 		fmt.Fprintf(os.Stderr, "[airskills] %s → %s: run 'airskills self-update'\n",

@@ -116,14 +116,9 @@ func runPull(cmd *cobra.Command, args []string) error {
 		}
 
 		if p.reason == "diverged" {
-			// Save remote version to unique conflict dir — don't overwrite local
 			conflictDir := filepath.Join(conflictBase, p.skill.Name)
 			os.MkdirAll(conflictDir, 0755)
-			for name, content := range files {
-				target := filepath.Join(conflictDir, name)
-				os.MkdirAll(filepath.Dir(target), 0755)
-				os.WriteFile(target, content, 0644)
-			}
+			_ = writeFilesToDir(conflictDir, files)
 
 			lines[i].status = "DIVERGED"
 			lines[i].pct = 1
@@ -224,24 +219,39 @@ func runPull(cmd *cobra.Command, args []string) error {
 		fmt.Println("\n--- Diverged skills ---")
 		fmt.Println("These skills were edited locally AND remotely. The remote version")
 		fmt.Println("has been saved so you can merge the changes.")
+		var hasSourced bool
 		for _, d := range divergedDetails {
 			fmt.Printf("\n  %s\n", d.name)
 			fmt.Printf("    Local:  %s\n", d.localDir)
 			fmt.Printf("    Remote: %s\n", d.remoteDir)
+			if entry, ok := syncState.Skills[d.name]; ok && entry.Source != nil {
+				hasSourced = true
+				fmt.Printf("    Source: %s/%s (owner's version has moved)\n",
+					entry.Source.Owner, entry.Source.Slug)
+			}
 		}
 		fmt.Println("\nMerge the files, then run 'airskills push --force' to resolve.")
+		if hasSourced {
+			fmt.Println()
+			fmt.Println("For skills originally from another user, your agent can:")
+			fmt.Println("  a) Replace your version with the owner's (accept their update)")
+			fmt.Println("  b) Merge the owner's changes into your version")
+			fmt.Println("  c) Keep your version as-is (skip)")
+		}
 	}
+
+	notifyResolvedSuggestions(client, syncState)
 
 	saveSyncState(syncState)
 	_ = saveLastSync()
 
 	telemetry.Capture("cli_pull", map[string]interface{}{
-		"pulled":      pulled,
-		"updated":     updated,
-		"diverged":    diverged,
-		"failed":      failed,
-		"missing":     len(missingWarnings),
-		"anonymous":   false,
+		"pulled":    pulled,
+		"updated":   updated,
+		"diverged":  diverged,
+		"failed":    failed,
+		"missing":   len(missingWarnings),
+		"anonymous": false,
 	})
 	return nil
 }
@@ -321,6 +331,53 @@ func runPullAnon(localSkills map[string]string, syncState *SyncState) error {
 		"anonymous": true,
 	})
 	return nil
+}
+
+// notifyResolvedSuggestions shows a one-time accept/decline notification for
+// each suggestion reviewed since the last time we printed. State is a single
+// cutoff timestamp on syncState so the list doesn't grow unbounded.
+func notifyResolvedSuggestions(client *apiClient, syncState *SyncState) {
+	suggestions, err := client.listSuggestions("suggester", "", "")
+	if err != nil {
+		return
+	}
+	cutoff := syncState.LastSuggestionNotifyAt
+	var newest string
+	var shown bool
+	for _, s := range suggestions {
+		if s.Status == "pending" || s.ReviewedAt == nil {
+			continue
+		}
+		if cutoff != "" && *s.ReviewedAt <= cutoff {
+			continue
+		}
+		if !shown {
+			fmt.Println()
+			fmt.Println("--- Suggestions ---")
+			shown = true
+		}
+		skillName := s.OwnerSkillName
+		if skillName == "" {
+			skillName = s.OwnerSkillID
+		}
+		switch s.Status {
+		case "accepted":
+			fmt.Printf("  %s your suggestion for %q was accepted\n", green("✓"), skillName)
+		case "declined":
+			if s.ResponseMessage != "" {
+				fmt.Printf("  %s your suggestion for %q was declined: %q\n",
+					yellow("✗"), skillName, s.ResponseMessage)
+			} else {
+				fmt.Printf("  %s your suggestion for %q was declined\n", yellow("✗"), skillName)
+			}
+		}
+		if *s.ReviewedAt > newest {
+			newest = *s.ReviewedAt
+		}
+	}
+	if newest != "" {
+		syncState.LastSuggestionNotifyAt = newest
+	}
 }
 
 // decidePullActions inspects remote, local, and sync state to decide which

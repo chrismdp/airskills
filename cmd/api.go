@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/chrismdp/airskills/config"
@@ -397,6 +398,125 @@ func (c *apiClient) recordInstallation(skillID, tool, version string) error {
 
 func parseJSON(data []byte, v interface{}) error {
 	return json.Unmarshal(data, v)
+}
+
+type apiSuggestion struct {
+	ID                 string  `json:"id"`
+	SuggesterSkillID   string  `json:"suggester_skill_id"`
+	OwnerSkillID       string  `json:"owner_skill_id"`
+	SuggesterID        string  `json:"suggester_id"`
+	OwnerID            string  `json:"owner_id"`
+	BaseContentHash    string  `json:"base_content_hash"`
+	Message            string  `json:"message"`
+	Status             string  `json:"status"`
+	ResponseMessage    string  `json:"response_message"`
+	ReviewedAt         *string `json:"reviewed_at"`
+	CreatedAt          string  `json:"created_at"`
+	UpdatedAt          string  `json:"updated_at"`
+	SuggesterUsername  string  `json:"suggester_username,omitempty"`
+	SuggesterSkillName string  `json:"suggester_skill_name,omitempty"`
+	OwnerSkillName     string  `json:"owner_skill_name,omitempty"`
+	OwnerSkillSlug     string  `json:"owner_skill_slug,omitempty"`
+}
+
+func (c *apiClient) createSuggestion(suggesterSkillID, ownerSkillID, baseContentHash, message string) (*apiSuggestion, error) {
+	payload := map[string]string{
+		"suggester_skill_id": suggesterSkillID,
+		"owner_skill_id":     ownerSkillID,
+		"base_content_hash":  baseContentHash,
+		"message":            message,
+	}
+	body, err := c.post("/api/v1/suggestions", payload)
+	if err != nil {
+		return nil, err
+	}
+	var s apiSuggestion
+	if err := json.Unmarshal(body, &s); err != nil {
+		return nil, err
+	}
+	return &s, nil
+}
+
+func (c *apiClient) listSuggestions(role, status, skillID string) ([]apiSuggestion, error) {
+	body, err := c.get(suggestionsPath(role, status, skillID, false))
+	if err != nil {
+		return nil, err
+	}
+	var resp struct {
+		Suggestions []apiSuggestion `json:"suggestions"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, err
+	}
+	return resp.Suggestions, nil
+}
+
+// countSuggestions hits the count-only fast path — used by `airskills status`
+// so the shell prompt doesn't pay for enrichment just to render a number.
+func (c *apiClient) countSuggestions(role, status, skillID string) (int, error) {
+	body, err := c.get(suggestionsPath(role, status, skillID, true))
+	if err != nil {
+		return 0, err
+	}
+	var resp struct {
+		Count int `json:"count"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return 0, err
+	}
+	return resp.Count, nil
+}
+
+func suggestionsPath(role, status, skillID string, countOnly bool) string {
+	params := []string{}
+	if role != "" {
+		params = append(params, "role="+role)
+	}
+	if status != "" {
+		params = append(params, "status="+status)
+	}
+	if skillID != "" {
+		params = append(params, "skill_id="+skillID)
+	}
+	if countOnly {
+		params = append(params, "count=1")
+	}
+	if len(params) == 0 {
+		return "/api/v1/suggestions"
+	}
+	return "/api/v1/suggestions?" + strings.Join(params, "&")
+}
+
+func (c *apiClient) getSuggestion(id string) (*apiSuggestion, error) {
+	body, err := c.get(fmt.Sprintf("/api/v1/suggestions/%s", id))
+	if err != nil {
+		return nil, err
+	}
+	var s apiSuggestion
+	if err := json.Unmarshal(body, &s); err != nil {
+		return nil, err
+	}
+	return &s, nil
+}
+
+// Server RLS enforces that only the owner of the referenced skill can update.
+func (c *apiClient) updateSuggestion(id, status, responseMessage string) (*apiSuggestion, error) {
+	payload := map[string]string{
+		"status":           status,
+		"response_message": responseMessage,
+	}
+	body, statusCode, err := c.put(fmt.Sprintf("/api/v1/suggestions/%s", id), payload)
+	if err != nil {
+		return nil, err
+	}
+	if statusCode >= 400 {
+		return nil, fmt.Errorf("API error (%d): %s", statusCode, string(body))
+	}
+	var s apiSuggestion
+	if err := json.Unmarshal(body, &s); err != nil {
+		return nil, err
+	}
+	return &s, nil
 }
 
 // syncCheck checks for updates since the given timestamp.
