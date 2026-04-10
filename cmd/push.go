@@ -425,9 +425,12 @@ var pushCmd = &cobra.Command{
 
 		wg.Wait()
 
-		// Drain sequentially so goroutines don't race on stdin. Skip the
-		// prompt entirely in non-interactive sessions without marking them
-		// declined, so the next interactive push still asks.
+		// Drain sequentially so goroutines don't race on stdin. In a headless
+		// session we can't prompt, so print agent-focused instructions instead
+		// and leave the entry unmarked — the next interactive push will ask.
+		if len(pendingPrompts) > 0 && !isTTY {
+			fmt.Fprint(os.Stderr, agentSuggestionInstructions(pendingPrompts))
+		}
 		if len(pendingPrompts) > 0 && isTTY {
 			reader := bufio.NewReader(os.Stdin)
 			for _, p := range pendingPrompts {

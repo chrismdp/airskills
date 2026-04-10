@@ -54,37 +54,6 @@ var reviewDeclineCmd = &cobra.Command{
 
 var reviewDeclineMessage string
 
-const reviewGuide = `=== How to review and merge suggestions ===
-
-You can batch multiple suggestions into a single push — that's the
-intended workflow. Read all pending suggestions, merge what you want
-from each, push once, then accept/decline each individually.
-
-For each suggestion:
-
-  1. Download the suggested version:
-       airskills review download <suggestion-id>
-     Prints a tmp path containing the suggester's files.
-
-  2. Read both the suggested files and your current skill files.
-     The suggestion was built against a specific version hash of your
-     skill — shown above. Your current version may have moved on.
-
-  3. Decide what to incorporate. Merge desired changes into your
-     local skill directory — or replace entirely, or leave as-is.
-     Nothing auto-merges; you stay in control of versioning and the
-     changelog.
-
-  4. Once you've merged everything you want from all suggestions,
-     push your changes:
-       airskills push
-
-  5. Mark each suggestion resolved:
-       airskills review accept <suggestion-id>
-       airskills review decline <suggestion-id> --message "why"
-
-`
-
 func init() {
 	reviewDeclineCmd.Flags().StringVar(&reviewDeclineMessage, "message", "", "Optional reason shown to the contributor")
 	reviewCmd.AddCommand(reviewDownloadCmd)
@@ -143,7 +112,7 @@ func runReviewList(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	fmt.Print(reviewGuide)
+	fmt.Print(reviewGuideText(!isTTY))
 
 	telemetry.Capture("cli_review_list", map[string]interface{}{
 		"pending_count": len(suggestions),
