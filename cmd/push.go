@@ -31,6 +31,11 @@ type conflictInfo struct {
 	remotePath string
 }
 
+type validationInfo struct {
+	name string
+	err  error
+}
+
 // pendingSuggestionPrompt is collected inside the concurrent push goroutines
 // and drained sequentially after wg.Wait so we can prompt the user without
 // racing multiple goroutines on stdin.
@@ -64,6 +69,7 @@ var pushCmd = &cobra.Command{
 		}
 
 		var conflictMessages []conflictInfo
+		var validationMessages []validationInfo
 
 		syncState := loadSyncState()
 
@@ -198,6 +204,18 @@ var pushCmd = &cobra.Command{
 				defer wg.Done()
 				defer func() { <-sem }()
 
+				localFiles := readSkillFiles(s.dir)
+				if err := validateSkillFiles(s.dir, localFiles); err != nil {
+					lines[i].status = "invalid"
+					lines[i].pct = 0
+					renderProgress(lines)
+					mu.Lock()
+					validationMessages = append(validationMessages, validationInfo{name: s.name, err: err})
+					mu.Unlock()
+					atomic.AddInt64(&failed, 1)
+					return
+				}
+
 				lines[i].status = "compressing"
 				lines[i].pct = 0.2
 				renderProgress(lines)
@@ -212,8 +230,6 @@ var pushCmd = &cobra.Command{
 				}
 
 				archiveSize := int64(len(archive))
-
-				localFiles := readSkillFiles(s.dir)
 
 				var sizeWarning string
 				contentHash := computeMerkleHash(localFiles)
@@ -518,6 +534,14 @@ var pushCmd = &cobra.Command{
 			"skipped":   skipped,
 			"force":     pushForce,
 		})
+
+		if len(validationMessages) > 0 {
+			fmt.Println("\n--- Invalid SKILL.md frontmatter ---")
+			for _, v := range validationMessages {
+				fmt.Printf("\n  %s\n", v.name)
+				fmt.Printf("  %s\n", strings.ReplaceAll(v.err.Error(), "\n", "\n  "))
+			}
+		}
 
 		// Show conflict resolution instructions
 		if len(conflictMessages) > 0 {
