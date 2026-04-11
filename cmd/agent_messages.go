@@ -42,6 +42,57 @@ func agentSuggestionInstructions(prompts []pendingSuggestionPrompt) string {
 	return b.String()
 }
 
+// pushConflictResolutionInstructions returns the per-conflict block shown
+// under the "--- Conflicts ---" header after a push reports a remote-content
+// change. TTY readers are told how to brief their agent; the non-TTY variant
+// addresses the agent directly since it's the one reading the output.
+func pushConflictResolutionInstructions(c conflictInfo, isAgent bool) string {
+	var b strings.Builder
+	if isAgent {
+		b.WriteString("\n  You are an agent. Merge the remote version with the local version,\n")
+		fmt.Fprintf(&b, "  keeping local changes where they conflict:\n")
+		fmt.Fprintf(&b, "    Remote: %s\n", c.remotePath)
+		fmt.Fprintf(&b, "    Local:  %s\n", c.localPath)
+		b.WriteString("  Show the user the diff before saving, and don't overwrite the\n")
+		b.WriteString("  local file until they've agreed.\n")
+	} else {
+		b.WriteString("\n  To resolve, tell your AI agent:\n")
+		fmt.Fprintf(&b, "  \"Merge %s (remote) with %s (my version),\n", c.remotePath, c.localPath)
+		b.WriteString("   keeping my local changes where possible. Show me the diff before saving.\"\n")
+	}
+	return b.String()
+}
+
+// pullDivergenceFooter returns the footer shown below the diverged-skills
+// list. When hasSourced is true it also explains the fork-specific options
+// (replace/merge/keep). The agent variant addresses the agent directly and
+// drops the "your agent can" framing that makes no sense when the agent is
+// the reader.
+func pullDivergenceFooter(hasSourced bool, isAgent bool) string {
+	var b strings.Builder
+	if isAgent {
+		b.WriteString("\nYou are an agent. Merge the files shown above with the user, then\n")
+		b.WriteString("run 'airskills push --force' to resolve. Don't overwrite local\n")
+		b.WriteString("content until the user has reviewed the diff.\n")
+		if hasSourced {
+			b.WriteString("\nFor skills originally from another user, walk the user through\n")
+			b.WriteString("these options and let them choose:\n")
+			b.WriteString("  a) Replace their version with the owner's (accept the update)\n")
+			b.WriteString("  b) Merge the owner's changes into their version\n")
+			b.WriteString("  c) Keep their version as-is (skip)\n")
+		}
+	} else {
+		b.WriteString("\nMerge the files, then run 'airskills push --force' to resolve.\n")
+		if hasSourced {
+			b.WriteString("\nFor skills originally from another user, your agent can:\n")
+			b.WriteString("  a) Replace your version with the owner's (accept their update)\n")
+			b.WriteString("  b) Merge the owner's changes into your version\n")
+			b.WriteString("  c) Keep your version as-is (skip)\n")
+		}
+	}
+	return b.String()
+}
+
 // reviewGuideText returns the step-by-step review workflow printed after the
 // list of pending suggestions. When isAgent is true the opening paragraph
 // addresses the agent directly and the steps are phrased as imperatives the

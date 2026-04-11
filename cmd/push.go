@@ -534,9 +534,7 @@ var pushCmd = &cobra.Command{
 				remoteLines := len(strings.Split(string(remoteData), "\n"))
 				fmt.Printf("  Local: %d lines, Remote: %d lines\n", localLines, remoteLines)
 
-				fmt.Printf("\n  To resolve, tell your AI agent:\n")
-				fmt.Printf("  \"Merge %s (remote) with %s (my version),\n", c.remotePath, c.localPath)
-				fmt.Printf("   keeping my local changes where possible. Show me the diff before saving.\"\n")
+				fmt.Print(pushConflictResolutionInstructions(c, !isTTY))
 			}
 			fmt.Println("\n  After merging, run: airskills push --force")
 			fmt.Println("  To see the full diff: diff", conflictMessages[0].localPath, conflictMessages[0].remotePath)

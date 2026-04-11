@@ -258,14 +258,7 @@ func runPull(cmd *cobra.Command, args []string) error {
 					entry.Source.Owner, entry.Source.Slug)
 			}
 		}
-		fmt.Println("\nMerge the files, then run 'airskills push --force' to resolve.")
-		if hasSourced {
-			fmt.Println()
-			fmt.Println("For skills originally from another user, your agent can:")
-			fmt.Println("  a) Replace your version with the owner's (accept their update)")
-			fmt.Println("  b) Merge the owner's changes into your version")
-			fmt.Println("  c) Keep your version as-is (skip)")
-		}
+		fmt.Print(pullDivergenceFooter(hasSourced, !isTTY))
 	}
 
 	notifyResolvedSuggestions(client, syncState)
