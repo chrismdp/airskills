@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"strings"
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
@@ -15,9 +16,12 @@ func init() {
 
 var listCmd = &cobra.Command{
 	Use:   "list",
-	Short: "Show skills from your account with install status",
-	Long: `Lists skills from your airskills account (personal and org).
-Use --scope to filter by personal or org skills only.`,
+	Short: "Show skills in your skillset with descriptions and install status",
+	Long: `Lists skills in your airskills skillset, including the ones you
+have added from other people. Shows the description, version, and whether
+each skill is currently installed on this machine.
+
+Use --scope org to filter to org skills only.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		scope, _ := cmd.Flags().GetString("scope")
 
@@ -42,19 +46,29 @@ Use --scope to filter by personal or org skills only.`,
 		localNames, _ := scanSkillsFromAgents()
 
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(w, "NAME\tSOURCE\tVERSION\tINSTALLED")
+		fmt.Fprintln(w, "NAME\tDESCRIPTION\tVERSION\tINSTALLED")
 		for _, s := range skills {
-			source := "personal"
-			if s.OrgID != nil {
-				source = "org"
-			}
 			installed := "no"
 			if _, exists := localNames[s.Name]; exists {
 				installed = "yes"
 			}
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", s.Name, source, s.Version, installed)
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", s.Name, truncateDescription(s.Description, 60), s.Version, installed)
 		}
 		w.Flush()
 		return nil
 	},
+}
+
+// truncateDescription shortens a description for the list table, collapsing
+// internal whitespace and ending with an ellipsis if it exceeds max runes.
+func truncateDescription(desc string, max int) string {
+	desc = strings.Join(strings.Fields(desc), " ")
+	if desc == "" {
+		return "—"
+	}
+	runes := []rune(desc)
+	if len(runes) <= max {
+		return desc
+	}
+	return string(runes[:max-1]) + "…"
 }

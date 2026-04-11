@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -16,11 +17,15 @@ import (
 const onceTmpDir = "/tmp/airskills-once"
 
 var onceCmd = &cobra.Command{
-	Use:   "once <username/skill>",
-	Short: "Download a skill to a temp folder for one-time use",
+	Use:     "once <username/skill>",
+	Aliases: []string{"show"},
+	Short:   "Download a skill to a temp folder for one-time use",
 	Long: `Download a skill from airskills.ai to a temporary folder without
-installing it permanently. Prints the path so you can reference it
-with @ in your AI agent for the current session.`,
+installing it permanently. Prints the SKILL.md path so you can reference
+it with @ in your AI agent, plus @ paths for any additional skill files
+so your agent can load them one at a time as needed.
+
+Also available as 'airskills show'.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		input := args[0]
@@ -128,8 +133,25 @@ with @ in your AI agent for the current session.`,
 		renderProgress(lines)
 
 		skillMdPath := filepath.Join(destDir, "SKILL.md")
-		fmt.Printf("\nSkill downloaded to %s\n", skillMdPath)
-		fmt.Printf("Use with: @ %s\n", skillMdPath)
+		fmt.Printf("\nSkill downloaded to %s\n", destDir)
+		fmt.Printf("\nStart with: @ %s\n", skillMdPath)
+
+		// List any additional files as follow-on @ references so the AI
+		// can load them one at a time after reading SKILL.md.
+		extras := make([]string, 0, len(files))
+		for relPath := range files {
+			if relPath == "SKILL.md" {
+				continue
+			}
+			extras = append(extras, relPath)
+		}
+		sort.Strings(extras)
+		if len(extras) > 0 {
+			fmt.Println("\nAdditional files in this skill:")
+			for _, rel := range extras {
+				fmt.Printf("  @ %s\n", filepath.Join(destDir, rel))
+			}
+		}
 
 		return nil
 	},
