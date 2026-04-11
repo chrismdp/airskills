@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"time"
 )
 
 type agentDef struct {
@@ -290,28 +291,8 @@ func mirrorLocalSkills(syncState *SyncState) ([]mirrorChange, []mirrorConflict) 
 			}
 		}
 
-		var authorHash string
-		switch len(hashGroups) {
-		case 1:
-			for h := range hashGroups {
-				authorHash = h
-			}
-		case 2:
-			if markerHash == "" {
-				conflicts = append(conflicts, mirrorConflict{slug: slug, paths: paths})
-				continue
-			}
-			_, markerPresent := hashGroups[markerHash]
-			if !markerPresent {
-				conflicts = append(conflicts, mirrorConflict{slug: slug, paths: paths})
-				continue
-			}
-			for h := range hashGroups {
-				if h != markerHash {
-					authorHash = h
-				}
-			}
-		default:
+		authorHash := pickAuthoritativeHash(paths, hashByPath, hashGroups, markerHash)
+		if authorHash == "" {
 			conflicts = append(conflicts, mirrorConflict{slug: slug, paths: paths})
 			continue
 		}
@@ -333,6 +314,57 @@ func mirrorLocalSkills(syncState *SyncState) ([]mirrorChange, []mirrorConflict) 
 	}
 
 	return changes, conflicts
+}
+
+// pickAuthoritativeHash chooses which version of a slug's content should
+// win when its copies have diverged across agent directories.
+//
+//   - Single distinct hash → that hash wins.
+//   - Marker disambiguates a 2-way split (exactly one group matches the
+//     sync-state marker) → the non-marker group is the edit.
+//   - Otherwise → newest SKILL.md mtime wins. This handles the case where
+//     a prior mirror ran and fanned content out to a secondary agent dir,
+//     and the user has since edited the original: the stale mirrored copy
+//     has an older mtime, so the intentional edit wins.
+//
+// Returns "" only when the heuristics all fail (no stat-able paths), in
+// which case the caller reports a conflict and skips.
+func pickAuthoritativeHash(
+	paths []string,
+	hashByPath map[string]string,
+	hashGroups map[string][]string,
+	markerHash string,
+) string {
+	if len(hashGroups) == 1 {
+		for h := range hashGroups {
+			return h
+		}
+	}
+	if len(hashGroups) == 2 && markerHash != "" {
+		if _, ok := hashGroups[markerHash]; ok {
+			for h := range hashGroups {
+				if h != markerHash {
+					return h
+				}
+			}
+		}
+	}
+	newestPath := ""
+	var newestTime time.Time
+	for _, p := range paths {
+		info, err := os.Stat(filepath.Join(p, "SKILL.md"))
+		if err != nil {
+			continue
+		}
+		if newestPath == "" || info.ModTime().After(newestTime) {
+			newestPath = p
+			newestTime = info.ModTime()
+		}
+	}
+	if newestPath == "" {
+		return ""
+	}
+	return hashByPath[newestPath]
 }
 
 // replaceSkillDir writes files into target, deleting any existing non-marker

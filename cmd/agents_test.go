@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func setTestHome(t *testing.T, dir string) {
@@ -160,20 +161,29 @@ func TestMirrorCreatesInMissingDetectedDir(t *testing.T) {
 	}
 }
 
-// TestMirrorConflictSkipsAndReports verifies that when two local copies have
-// diverged in different ways and neither is safely identifiable as the edit,
-// mirror leaves them alone and reports the slug as conflicting.
-func TestMirrorConflictSkipsAndReports(t *testing.T) {
+// TestMirrorStaleSecondaryCopyLosesToFreshPrimaryEdit covers the case that
+// broke the platform e2e: a previous mirror fanned content out to a
+// secondary agent dir, and the user has since edited the original in place.
+// The marker is stale (pre-edit), neither copy matches it, and naively
+// this looks like a conflict. Mirror must fall back to newest mtime so the
+// fresh edit wins and overwrites the stale secondary.
+func TestMirrorStaleSecondaryCopyLosesToFreshPrimaryEdit(t *testing.T) {
 	tmpHome := t.TempDir()
 	setTestHome(t, tmpHome)
 
 	claudePath := filepath.Join(tmpHome, ".claude", "skills", "foo", "SKILL.md")
 	cursorPath := filepath.Join(tmpHome, ".cursor", "skills", "foo", "SKILL.md")
 
-	writeSkillFile(t, claudePath, "# claude edit")
-	writeSkillFile(t, cursorPath, "# cursor edit")
+	// The stale secondary copy is written first, then backdated so its
+	// mtime is clearly older than the user's edit.
+	writeSkillFile(t, cursorPath, "# stale mirror from last run")
+	staleTime := time.Now().Add(-1 * time.Hour)
+	if err := os.Chtimes(cursorPath, staleTime, staleTime); err != nil {
+		t.Fatalf("chtimes: %v", err)
+	}
+	writeSkillFile(t, claudePath, "# fresh user edit")
 
-	// Marker refers to a third, older content that doesn't match either copy.
+	// Marker references a third, older content that doesn't match either copy.
 	markerHash := computeMerkleHash(map[string][]byte{"SKILL.md": []byte("# original")})
 	state := &SyncState{
 		Version: 1,
@@ -183,21 +193,18 @@ func TestMirrorConflictSkipsAndReports(t *testing.T) {
 	}
 
 	_, conflicts := mirrorLocalSkills(state)
-	if len(conflicts) != 1 || conflicts[0].slug != "foo" {
-		t.Fatalf("expected 1 conflict for foo, got %+v", conflicts)
-	}
-	if len(conflicts[0].paths) < 2 {
-		t.Errorf("conflict should list both paths, got %v", conflicts[0].paths)
+	if len(conflicts) != 0 {
+		t.Fatalf("unexpected conflicts: %+v", conflicts)
 	}
 
-	// Neither copy should have been touched.
+	// Both copies should now hold the fresh user edit.
 	claude, _ := os.ReadFile(claudePath)
-	if string(claude) != "# claude edit" {
-		t.Errorf("claude copy mutated: %q", string(claude))
+	if string(claude) != "# fresh user edit" {
+		t.Errorf("claude copy = %q, want fresh user edit", string(claude))
 	}
 	cursor, _ := os.ReadFile(cursorPath)
-	if string(cursor) != "# cursor edit" {
-		t.Errorf("cursor copy mutated: %q", string(cursor))
+	if string(cursor) != "# fresh user edit" {
+		t.Errorf("cursor copy = %q, want fresh user edit", string(cursor))
 	}
 }
 
