@@ -121,6 +121,9 @@ var syncCmd = &cobra.Command{
 			fmt.Printf("  %s\n", dim("Log in to push your skills, back up, and share: airskills login"))
 		}
 
+		// Check GitHub-sourced skills for upstream updates
+		syncGitHubSkills()
+
 		fmt.Printf("\n%s %s\n", cyan("▼"), "Pull")
 		if err := runPull(cmd, args); err != nil {
 			return err

@@ -19,22 +19,33 @@ import (
 
 var addPreview bool
 
+var addSkillFlag string
+
 var addCmd = &cobra.Command{
 	Use:   "add <username/skill>",
 	Short: "Install a shared skill",
-	Long:  "Install a skill from airskills.ai to all detected AI agents.",
-	Args:  cobra.ExactArgs(1),
+	Long: `Install a skill from airskills.ai or directly from GitHub.
+
+  airskills add chrismdp/retro                       # from airskills.ai
+  airskills add github.com/supabase/agent-skills      # from GitHub (single skill)
+  airskills add github.com/supabase/agent-skills --skill supabase  # specific skill from multi-skill repo`,
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		input := args[0]
 
-		// Strip github.com/ or https://github.com/ prefix
+		// Explicit GitHub URLs go through the GitHub import path
+		if isGitHubURL(input) {
+			return addFromGitHub(input, addSkillFlag)
+		}
+
+		// Strip github.com/ prefix for legacy compat (resolves against airskills API)
 		input = strings.TrimPrefix(input, "https://")
 		input = strings.TrimPrefix(input, "http://")
 		input = strings.TrimPrefix(input, "github.com/")
 
 		parts := strings.SplitN(input, "/", 2)
 		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-			return fmt.Errorf("expected format: username/skill-name or github.com/username/skill-name")
+			return fmt.Errorf("expected format: username/skill-name or github.com/owner/repo")
 		}
 		username, slug := parts[0], parts[1]
 
@@ -288,5 +299,6 @@ func countFiles(dir string) int {
 
 func init() {
 	addCmd.Flags().BoolVar(&addPreview, "preview", false, "Show skill content without installing")
+	addCmd.Flags().StringVar(&addSkillFlag, "skill", "", "Install a specific skill from a multi-skill GitHub repository")
 	rootCmd.AddCommand(addCmd)
 }

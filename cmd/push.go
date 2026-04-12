@@ -24,6 +24,8 @@ type skillSource struct {
 	ID           string `json:"id"`                      // original skill ID from the server
 	ContentHash  string `json:"content_hash,omitempty"`  // sha256 of original content at add time
 	SkillsetSlug string `json:"skillset_slug,omitempty"` // org skillset slug (non-empty for org-distributed skills)
+	GitHubURL    string `json:"github_url,omitempty"`    // GitHub repo URL (for skills imported from GitHub)
+	GitHubSkill  string `json:"github_skill,omitempty"`  // skill subdirectory within the GitHub repo (for multi-skill repos)
 }
 
 type conflictInfo struct {
