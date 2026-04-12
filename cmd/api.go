@@ -348,6 +348,27 @@ func (c *apiClient) createSkill(name, description string, tools []string, forked
 	return &skill, nil
 }
 
+// createSkillWithGitHub creates a skill on the server with GitHub provenance.
+func (c *apiClient) createSkillWithGitHub(name, githubURL, githubSkill string) (*apiSkill, error) {
+	payload := map[string]interface{}{
+		"name":         name,
+		"tool_formats": []string{"claude-code"},
+		"github_url":   githubURL,
+	}
+	if githubSkill != "" {
+		payload["github_skill"] = githubSkill
+	}
+	body, err := c.post("/api/v1/skills", payload)
+	if err != nil {
+		return nil, err
+	}
+	var skill apiSkill
+	if err := json.Unmarshal(body, &skill); err != nil {
+		return nil, err
+	}
+	return &skill, nil
+}
+
 // putArchive uploads a tar.gz to the archive endpoint (single write path).
 func (c *apiClient) putArchive(skillID string, archive []byte, expectedHash, contentHash string) (*apiSkill, int, error) {
 	url := c.baseURL + fmt.Sprintf("/api/v1/skills/%s/archive", skillID)

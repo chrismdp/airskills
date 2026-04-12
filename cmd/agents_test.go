@@ -90,6 +90,66 @@ func writeSkillFile(t *testing.T, path string, content string) {
 	}
 }
 
+// TestInstallSkillToOpenClaw verifies that airskills installs skills to
+// OpenClaw's global skill directory (~/.openclaw/skills/) when it is detected.
+func TestInstallSkillToOpenClaw(t *testing.T) {
+	tmpHome := t.TempDir()
+	setTestHome(t, tmpHome)
+
+	// Only create the OpenClaw parent dir — no other agents installed.
+	os.MkdirAll(filepath.Join(tmpHome, ".openclaw", "skills"), 0755)
+
+	files := map[string][]byte{
+		"SKILL.md": []byte("# OpenClaw Test\nHello from OpenClaw"),
+	}
+
+	installed, err := installSkillToAgents("test-skill", files)
+	if err != nil {
+		t.Fatalf("installSkillToAgents: %v", err)
+	}
+
+	if len(installed) == 0 {
+		t.Fatalf("expected openclaw to be detected and skill installed, got 0 installs")
+	}
+
+	content, err := os.ReadFile(filepath.Join(tmpHome, ".openclaw", "skills", "test-skill", "SKILL.md"))
+	if err != nil {
+		t.Fatalf("missing SKILL.md in OpenClaw: %v", err)
+	}
+	if string(content) != "# OpenClaw Test\nHello from OpenClaw" {
+		t.Errorf("openclaw content = %q", string(content))
+	}
+}
+
+// TestDetectOpenClawAgent verifies that an ~/.openclaw directory triggers
+// detection of the openclaw agent entry.
+func TestDetectOpenClawAgent(t *testing.T) {
+	tmpHome := t.TempDir()
+	setTestHome(t, tmpHome)
+
+	// No OpenClaw dir — should not detect.
+	detected := detectInstalledAgents()
+	for _, a := range detected {
+		if a.Key == "openclaw" {
+			t.Errorf("should not detect openclaw without ~/.openclaw present")
+		}
+	}
+
+	// Create ~/.openclaw — detection should now find it.
+	os.MkdirAll(filepath.Join(tmpHome, ".openclaw"), 0755)
+	detected = detectInstalledAgents()
+	found := false
+	for _, a := range detected {
+		if a.Key == "openclaw" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected openclaw to be detected after creating ~/.openclaw")
+	}
+}
+
 // TestMirrorPropagatesEditFromNonFirstDir covers the core requirement: when a
 // skill exists in two detected agent dirs and the user has edited the copy
 // that isn't first in the agent registry, the edit still wins and is mirrored
