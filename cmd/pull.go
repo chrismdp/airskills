@@ -164,18 +164,20 @@ func runPull(cmd *cobra.Command, args []string) error {
 		lines[i].pct = 0.8
 		renderProgress(lines)
 
-		destinations, err := installSkillToAgents(p.skill.Name, files)
+		// Use the existing local dir name when updating a tracked skill so
+		// that namespaced dirs (e.g. "chrismdp-my-skill") are preserved
+		// rather than silently reinstalling under the bare API name.
+		dirName := p.skill.Name
+		if p.localDir != "" {
+			dirName = filepath.Base(p.localDir)
+		}
+
+		destinations, err := installSkillToAgents(dirName, files)
 		if err != nil {
 			lines[i].status = "failed"
 			renderProgress(lines)
 			failed++
 			continue
-		}
-
-		// Update sync state
-		dirName := p.skill.Name
-		if p.localDir != "" {
-			dirName = filepath.Base(p.localDir)
 		}
 		syncState.Skills[dirName] = &SyncEntry{
 			SkillID:     p.skill.ID,

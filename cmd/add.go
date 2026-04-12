@@ -119,12 +119,18 @@ var addCmd = &cobra.Command{
 			return nil
 		}
 
+		// Compute the namespaced directory name ({owner}-{slug}).
+		// Migrate any existing bare-slug installation before writing the new one.
+		dirName := namespacedSlug(username, result.Slug)
+		syncState := loadSyncState()
+		migrateToNamespacedDirs(syncState)
+
 		// Install to all detected agents
 		lines[0].status = "installing"
 		lines[0].pct = 0.9
 		renderProgress(lines)
 
-		installed, err := installSkillToAgents(result.Slug, files)
+		installed, err := installSkillToAgents(dirName, files)
 		if err != nil {
 			return err
 		}
@@ -138,11 +144,10 @@ var addCmd = &cobra.Command{
 		// no physical copy until the user modifies and pushes).
 		// If logged in, create immediately; otherwise track source for next sync.
 		home, _ := os.UserHomeDir()
-		primaryDir := filepath.Join(home, ".claude", "skills", result.Slug)
+		primaryDir := filepath.Join(home, ".claude", "skills", dirName)
 		os.MkdirAll(primaryDir, 0755)
 		originalContent, _ := os.ReadFile(filepath.Join(primaryDir, "SKILL.md"))
 
-		syncState := loadSyncState()
 		entry := &SyncEntry{
 			Version: result.Version,
 			Tool:    "claude-code",
@@ -165,7 +170,7 @@ var addCmd = &cobra.Command{
 			// If creation fails (e.g. network), fall through — sync will handle it
 		}
 
-		syncState.Skills[result.Slug] = entry
+		syncState.Skills[dirName] = entry
 		saveSyncState(syncState)
 
 		fmt.Println()

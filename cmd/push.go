@@ -19,10 +19,11 @@ import (
 )
 
 type skillSource struct {
-	Owner       string `json:"owner"`                  // username of the original author
-	Slug        string `json:"slug"`                   // original skill slug
-	ID          string `json:"id"`                     // original skill ID from the server
-	ContentHash string `json:"content_hash,omitempty"` // sha256 of original content at add time
+	Owner        string `json:"owner"`                   // username of the original author
+	Slug         string `json:"slug"`                    // original skill slug
+	ID           string `json:"id"`                      // original skill ID from the server
+	ContentHash  string `json:"content_hash,omitempty"`  // sha256 of original content at add time
+	SkillsetSlug string `json:"skillset_slug,omitempty"` // org skillset slug (non-empty for org-distributed skills)
 }
 
 type conflictInfo struct {

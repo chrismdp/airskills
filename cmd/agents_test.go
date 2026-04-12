@@ -232,6 +232,144 @@ func TestMirrorAllCopiesIdenticalNoOp(t *testing.T) {
 	}
 }
 
+// TestNamespacedSlug verifies the naming helper used by the add command.
+func TestNamespacedSlug(t *testing.T) {
+	tests := []struct {
+		owner, slug, want string
+	}{
+		{"chrismdp", "my-skill", "chrismdp-my-skill"},
+		{"acme-corp", "deploy", "acme-corp-deploy"},
+		{"", "my-skill", "my-skill"}, // no owner → no prefix (local/personal skill)
+	}
+	for _, tt := range tests {
+		got := namespacedSlug(tt.owner, tt.slug)
+		if got != tt.want {
+			t.Errorf("namespacedSlug(%q, %q) = %q, want %q", tt.owner, tt.slug, got, tt.want)
+		}
+	}
+}
+
+// TestMigrateToNamespacedDirsRenamesOldInstall verifies that a skill installed
+// under the bare slug is renamed to the namespaced {owner}-{slug} format.
+func TestMigrateToNamespacedDirsRenamesOldInstall(t *testing.T) {
+	tmpHome := t.TempDir()
+	setTestHome(t, tmpHome)
+
+	// Set up Claude Code and Cursor with a skill under the old (bare) slug.
+	for _, dir := range []string{".claude/skills/my-skill", ".cursor/skills/my-skill"} {
+		writeSkillFile(t, filepath.Join(tmpHome, dir, "SKILL.md"), "# my skill")
+	}
+
+	syncState := &SyncState{
+		Version: 1,
+		Skills: map[string]*SyncEntry{
+			"my-skill": {
+				SkillID: "skill-123",
+				Version: "1.0.0",
+				Tool:    "claude-code",
+				Source: &skillSource{
+					Owner: "chrismdp",
+					Slug:  "my-skill",
+					ID:    "skill-123",
+				},
+			},
+		},
+	}
+
+	migrateToNamespacedDirs(syncState)
+
+	// Old dirs should be gone
+	if _, err := os.Stat(filepath.Join(tmpHome, ".claude", "skills", "my-skill")); !os.IsNotExist(err) {
+		t.Error("old .claude/skills/my-skill should have been removed")
+	}
+	if _, err := os.Stat(filepath.Join(tmpHome, ".cursor", "skills", "my-skill")); !os.IsNotExist(err) {
+		t.Error("old .cursor/skills/my-skill should have been removed")
+	}
+
+	// New namespaced dirs should exist with correct content
+	data, err := os.ReadFile(filepath.Join(tmpHome, ".claude", "skills", "chrismdp-my-skill", "SKILL.md"))
+	if err != nil {
+		t.Fatalf("expected chrismdp-my-skill to exist in .claude: %v", err)
+	}
+	if string(data) != "# my skill" {
+		t.Errorf("content = %q", string(data))
+	}
+
+	// Sync state key should be updated
+	if _, ok := syncState.Skills["my-skill"]; ok {
+		t.Error("old sync state key 'my-skill' should have been removed")
+	}
+	if _, ok := syncState.Skills["chrismdp-my-skill"]; !ok {
+		t.Error("new sync state key 'chrismdp-my-skill' should exist")
+	}
+}
+
+// TestMigrateToNamespacedDirsNoop verifies that already-namespaced skills are
+// left untouched.
+func TestMigrateToNamespacedDirsNoop(t *testing.T) {
+	tmpHome := t.TempDir()
+	setTestHome(t, tmpHome)
+
+	writeSkillFile(t, filepath.Join(tmpHome, ".claude", "skills", "chrismdp-my-skill", "SKILL.md"), "# content")
+
+	syncState := &SyncState{
+		Version: 1,
+		Skills: map[string]*SyncEntry{
+			"chrismdp-my-skill": {
+				SkillID: "skill-123",
+				Version: "1.0.0",
+				Tool:    "claude-code",
+				Source: &skillSource{
+					Owner: "chrismdp",
+					Slug:  "my-skill",
+					ID:    "skill-123",
+				},
+			},
+		},
+	}
+
+	migrateToNamespacedDirs(syncState)
+
+	// Key should still be present and unchanged
+	if _, ok := syncState.Skills["chrismdp-my-skill"]; !ok {
+		t.Error("already-namespaced key should still exist")
+	}
+	if _, ok := syncState.Skills["my-skill"]; ok {
+		t.Error("bare key should not appear after noop migration")
+	}
+}
+
+// TestMigrateToNamespacedDirsLeavesLocalSkillsAlone verifies that skills
+// without a Source (user-created, not installed via add) are not renamed.
+func TestMigrateToNamespacedDirsLeavesLocalSkillsAlone(t *testing.T) {
+	tmpHome := t.TempDir()
+	setTestHome(t, tmpHome)
+
+	writeSkillFile(t, filepath.Join(tmpHome, ".claude", "skills", "my-local-skill", "SKILL.md"), "# local")
+
+	syncState := &SyncState{
+		Version: 1,
+		Skills: map[string]*SyncEntry{
+			"my-local-skill": {
+				SkillID: "skill-456",
+				Version: "1.0.0",
+				Tool:    "claude-code",
+				// No Source — this is a user-created skill
+			},
+		},
+	}
+
+	migrateToNamespacedDirs(syncState)
+
+	// Local skill dir should be untouched
+	if _, err := os.Stat(filepath.Join(tmpHome, ".claude", "skills", "my-local-skill")); err != nil {
+		t.Errorf("local skill should not be moved: %v", err)
+	}
+	if _, ok := syncState.Skills["my-local-skill"]; !ok {
+		t.Error("local skill sync state key should be unchanged")
+	}
+}
+
 // TestMirrorRemovesStaleFilesInTarget verifies that mirror performs a true
 // replace: files present in the target but absent from the authoritative
 // source are deleted, so both copies end up byte-identical.
@@ -270,5 +408,95 @@ func TestMirrorRemovesStaleFilesInTarget(t *testing.T) {
 	cursorSkill, _ := os.ReadFile(filepath.Join(cursorDir, "SKILL.md"))
 	if string(cursorSkill) != "# new" {
 		t.Errorf("cursor SKILL.md = %q, want '# new'", string(cursorSkill))
+	}
+}
+
+// TestContextSlug verifies that contextSlug returns the skillset slug for org
+// skills and the owner username for personal skills.
+func TestContextSlug(t *testing.T) {
+	tests := []struct {
+		name   string
+		source skillSource
+		want   string
+	}{
+		{
+			name:   "personal skill uses owner",
+			source: skillSource{Owner: "chrismdp", Slug: "retro"},
+			want:   "chrismdp",
+		},
+		{
+			name:   "org skillset uses skillset slug",
+			source: skillSource{Owner: "acme-corp", Slug: "retro", SkillsetSlug: "acme-dev"},
+			want:   "acme-dev",
+		},
+		{
+			name:   "default org skillset uses org slug",
+			source: skillSource{Owner: "acme-corp", Slug: "retro", SkillsetSlug: "acme-corp"},
+			want:   "acme-corp",
+		},
+	}
+	for _, tt := range tests {
+		got := contextSlug(&tt.source)
+		if got != tt.want {
+			t.Errorf("[%s] contextSlug(%+v) = %q, want %q", tt.name, tt.source, got, tt.want)
+		}
+	}
+}
+
+// TestMigrateToNamespacedDirsOrgSkill verifies that an org-distributed skill
+// (with SkillsetSlug set) is renamed to "{skillset-slug}-{slug}", not "{owner}-{slug}".
+func TestMigrateToNamespacedDirsOrgSkill(t *testing.T) {
+	tmpHome := t.TempDir()
+	setTestHome(t, tmpHome)
+
+	// Org skill installed under bare slug before namespacing was introduced.
+	for _, dir := range []string{".claude/skills/deploy", ".cursor/skills/deploy"} {
+		writeSkillFile(t, filepath.Join(tmpHome, dir, "SKILL.md"), "# deploy skill")
+	}
+
+	syncState := &SyncState{
+		Version: 1,
+		Skills: map[string]*SyncEntry{
+			"deploy": {
+				SkillID: "skill-org-1",
+				Version: "1.0.0",
+				Tool:    "claude-code",
+				Source: &skillSource{
+					Owner:        "acme-corp",
+					Slug:         "deploy",
+					ID:           "skill-org-1",
+					SkillsetSlug: "acme-dev",
+				},
+			},
+		},
+	}
+
+	migrateToNamespacedDirs(syncState)
+
+	// Old bare-slug dirs should be gone.
+	if _, err := os.Stat(filepath.Join(tmpHome, ".claude", "skills", "deploy")); !os.IsNotExist(err) {
+		t.Error("old .claude/skills/deploy should have been removed")
+	}
+
+	// New dir should use skillset slug, not owner slug.
+	data, err := os.ReadFile(filepath.Join(tmpHome, ".claude", "skills", "acme-dev-deploy", "SKILL.md"))
+	if err != nil {
+		t.Fatalf("expected acme-dev-deploy to exist in .claude: %v", err)
+	}
+	if string(data) != "# deploy skill" {
+		t.Errorf("content = %q", string(data))
+	}
+
+	// Sync state key should be the skillset-namespaced key.
+	if _, ok := syncState.Skills["deploy"]; ok {
+		t.Error("old sync state key 'deploy' should have been removed")
+	}
+	if _, ok := syncState.Skills["acme-dev-deploy"]; !ok {
+		t.Error("new sync state key 'acme-dev-deploy' should exist")
+	}
+
+	// Must not have created an owner-namespaced key.
+	if _, ok := syncState.Skills["acme-corp-deploy"]; ok {
+		t.Error("owner-namespaced key 'acme-corp-deploy' should not exist — skillset takes precedence")
 	}
 }

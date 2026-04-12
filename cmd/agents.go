@@ -107,6 +107,83 @@ func installSkillToAgents(slug string, files map[string][]byte) ([]string, error
 	return installed, nil
 }
 
+// namespacedSlug returns the local directory name for a sourced skill.
+// Skills installed from the marketplace use the "{owner}-{slug}" format so
+// that same-named skills from different owners can coexist. Skills without
+// an owner (user-created, local) are stored under the bare slug.
+func namespacedSlug(owner, slug string) string {
+	if owner == "" {
+		return slug
+	}
+	return owner + "-" + slug
+}
+
+// contextSlug returns the local directory prefix for a skill based on its
+// distribution source:
+//   - Org-distributed skills (SkillsetSlug set): use the skillset slug
+//   - Personal skills: use the owner's username
+//
+// This implements the confirmed naming rule: org-distributed skills are
+// scoped to the skillset (e.g. "acme-dev-retro"), personal skills to the
+// owner (e.g. "chrismdp-retro"). The fork origin is stored in metadata, not
+// encoded in the directory name.
+func contextSlug(source *skillSource) string {
+	if source.SkillsetSlug != "" {
+		return source.SkillsetSlug
+	}
+	return source.Owner
+}
+
+// migrateToNamespacedDirs renames skill directories from the old bare-slug
+// format to the namespaced "{owner}-{slug}" format for skills that were
+// installed via `airskills add` (identified by having a Source in sync state).
+// User-created skills (no Source) are left untouched.
+//
+// This handles the upgrade path for machines that installed skills before
+// namespaced directory names were introduced.
+func migrateToNamespacedDirs(syncState *SyncState) {
+	home, _ := os.UserHomeDir()
+
+	// Collect migrations to perform (iterate over copy to avoid map mutation during range)
+	type migration struct {
+		oldKey      string
+		expectedKey string
+		entry       *SyncEntry
+	}
+	var migrations []migration
+	for oldKey, entry := range syncState.Skills {
+		if entry == nil || entry.Source == nil {
+			continue
+		}
+		ctx := contextSlug(entry.Source)
+		if ctx == "" {
+			continue // no context to namespace by — leave bare
+		}
+		expectedKey := namespacedSlug(ctx, entry.Source.Slug)
+		if oldKey == expectedKey {
+			continue // already namespaced
+		}
+		migrations = append(migrations, migration{oldKey, expectedKey, entry})
+	}
+
+	for _, m := range migrations {
+		for _, a := range agents {
+			globalPath := resolveGlobalDir(home, a.GlobalDir)
+			oldDir := filepath.Join(globalPath, m.oldKey)
+			newDir := filepath.Join(globalPath, m.expectedKey)
+			if _, err := os.Stat(oldDir); err != nil {
+				continue // not present in this agent dir
+			}
+			if _, err := os.Stat(newDir); err == nil {
+				continue // new location already occupied — don't clobber
+			}
+			os.Rename(oldDir, newDir)
+		}
+		syncState.Skills[m.expectedKey] = m.entry
+		delete(syncState.Skills, m.oldKey)
+	}
+}
+
 // scanSkillsFromAgents finds all local skills across all detected agents
 func scanSkillsFromAgents() (map[string]string, error) {
 	home, err := os.UserHomeDir()
