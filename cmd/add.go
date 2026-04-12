@@ -26,16 +26,16 @@ var addCmd = &cobra.Command{
 	Short: "Install a shared skill",
 	Long: `Install a skill from airskills.ai or directly from GitHub.
 
-  airskills add chrismdp/retro                       # from airskills.ai
-  airskills add github.com/supabase/agent-skills      # from GitHub (single skill)
-  airskills add github.com/supabase/agent-skills --skill supabase  # specific skill from multi-skill repo`,
+  airskills add chrismdp/retro                              # from airskills.ai
+  airskills add github.com/supabase/agent-skills/supabase   # specific skill from GitHub repo
+  airskills add github.com/owner/repo                       # single-skill GitHub repo`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		input := args[0]
 
 		// Explicit GitHub URLs go through the GitHub import path
 		if isGitHubURL(input) {
-			return addFromGitHub(input, addSkillFlag)
+			return addFromGitHub(input)
 		}
 
 		// Strip github.com/ prefix for legacy compat (resolves against airskills API)

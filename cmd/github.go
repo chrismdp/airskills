@@ -19,28 +19,35 @@ func isGitHubURL(raw string) bool {
 	return strings.HasPrefix(s, "github.com/")
 }
 
-// parseGitHubURL extracts owner and repo from a GitHub URL.
-// Returns (owner, repo, error).
-// Handles: github.com/owner/repo, https://github.com/owner/repo,
-//          github.com/owner/repo.git, github.com/owner/repo/tree/main/...
-func parseGitHubURL(raw string) (string, string, error) {
+// parseGitHubURL extracts owner, repo, and optional skill path from a GitHub URL.
+// Returns (owner, repo, skillPath, error).
+// Handles:
+//   github.com/owner/repo                          → ("owner", "repo", "")
+//   github.com/owner/repo/skill-name               → ("owner", "repo", "skill-name")
+//   github.com/owner/repo/tree/main/skill-name     → ("owner", "repo", "skill-name")
+//   https://github.com/owner/repo.git              → ("owner", "repo", "")
+func parseGitHubURL(raw string) (string, string, string, error) {
 	s := strings.TrimPrefix(raw, "https://")
 	s = strings.TrimPrefix(s, "http://")
 	s = strings.TrimPrefix(s, "github.com/")
 	s = strings.TrimSuffix(s, ".git")
+	s = strings.TrimSuffix(s, "/")
 
-	// Strip any /tree/main/... or /blob/main/... suffix
-	for _, marker := range []string{"/tree/", "/blob/"} {
-		if idx := strings.Index(s, marker); idx > 0 {
-			s = s[:idx]
-		}
-	}
-
-	parts := strings.SplitN(s, "/", 3)
+	parts := strings.Split(s, "/")
 	if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
-		return "", "", fmt.Errorf("expected github.com/owner/repo format")
+		return "", "", "", fmt.Errorf("expected github.com/owner/repo format")
 	}
-	return parts[0], parts[1], nil
+
+	owner, repo := parts[0], parts[1]
+	remaining := parts[2:]
+
+	// Strip /tree/<branch>/ or /blob/<branch>/ prefix from remaining path
+	if len(remaining) >= 2 && (remaining[0] == "tree" || remaining[0] == "blob") {
+		remaining = remaining[2:] // skip "tree" and branch name
+	}
+
+	skillPath := strings.Join(remaining, "/")
+	return owner, repo, skillPath, nil
 }
 
 // downloadGitHubTarball fetches the default-branch tarball from GitHub's API
@@ -118,8 +125,8 @@ func findSkillsInFiles(allFiles map[string][]byte) map[string]map[string][]byte 
 // Downloads from GitHub, installs locally, registers on airskills.ai with
 // GitHub provenance, and stores the GitHub URL in sync state for future
 // update checking.
-func addFromGitHub(rawURL, skillFlag string) error {
-	owner, repo, err := parseGitHubURL(rawURL)
+func addFromGitHub(rawURL string) error {
+	owner, repo, skillPath, err := parseGitHubURL(rawURL)
 	if err != nil {
 		return err
 	}
@@ -137,13 +144,18 @@ func addFromGitHub(rawURL, skillFlag string) error {
 		return fmt.Errorf("no skills found in %s/%s (no SKILL.md files)", owner, repo)
 	}
 
-	// Select the right skill
+	// Select the right skill: URL path takes priority, then --skill flag, then auto
+	skillSelector := skillPath
+	if skillSelector == "" && addSkillFlag != "" {
+		skillSelector = addSkillFlag
+	}
+
 	var selectedName string
 	var selectedFiles map[string][]byte
 
-	if skillFlag != "" {
-		// User specified which skill
-		sf, ok := skills[skillFlag]
+	if skillSelector != "" {
+		// User specified which skill (via URL path or --skill flag)
+		sf, ok := skills[skillSelector]
 		if !ok {
 			available := make([]string, 0, len(skills))
 			for name := range skills {
@@ -151,9 +163,9 @@ func addFromGitHub(rawURL, skillFlag string) error {
 					available = append(available, name)
 				}
 			}
-			return fmt.Errorf("skill %q not found in repo. Available: %s", skillFlag, strings.Join(available, ", "))
+			return fmt.Errorf("skill %q not found in repo. Available: %s", skillSelector, strings.Join(available, ", "))
 		}
-		selectedName = skillFlag
+		selectedName = skillSelector
 		selectedFiles = sf
 	} else if len(skills) == 1 {
 		// Single skill in repo
@@ -252,7 +264,7 @@ func syncGitHubSkills() {
 		}
 
 		src := entry.Source
-		owner, repo, err := parseGitHubURL(src.GitHubURL)
+		owner, repo, _, err := parseGitHubURL(src.GitHubURL)
 		if err != nil {
 			continue
 		}
