@@ -11,6 +11,7 @@ import (
 
 func init() {
 	listCmd.Flags().String("scope", "", "Filter by scope: personal, org")
+	listCmd.Flags().Bool("deleted", false, "Show soft-deleted skills instead of live ones")
 	rootCmd.AddCommand(listCmd)
 }
 
@@ -21,13 +22,37 @@ var listCmd = &cobra.Command{
 have added from other people. Shows the description, version, and whether
 each skill is currently installed on this machine.
 
-Use --scope org to filter to org skills only.`,
+Use --scope org to filter to org skills only.
+Use --deleted to show soft-deleted skills.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		scope, _ := cmd.Flags().GetString("scope")
+		showDeleted, _ := cmd.Flags().GetBool("deleted")
 
 		client, err := newAPIClientAuto()
 		if err != nil {
 			return err
+		}
+
+		if showDeleted {
+			skills, err := client.listDeletedSkills()
+			if err != nil {
+				return fmt.Errorf("fetching deleted skills: %w", err)
+			}
+			if len(skills) == 0 {
+				fmt.Println("No deleted skills found.")
+				return nil
+			}
+			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+			fmt.Fprintln(w, "NAME\tDESCRIPTION\tVERSION\tDELETED AT")
+			for _, s := range skills {
+				deletedAt := ""
+				if s.DeletedAt != nil {
+					deletedAt = *s.DeletedAt
+				}
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", s.Name, truncateDescription(s.Description, 60), s.Version, deletedAt)
+			}
+			w.Flush()
+			return nil
 		}
 
 		if scope == "" {

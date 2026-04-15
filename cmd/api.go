@@ -23,19 +23,38 @@ func setAnonHeader(req *http.Request) {
 }
 
 // apiSkill represents a skill from the API.
+//
+// OwnerID is a pointer because skills can be owned by an org instead of a
+// user — in that case owner_id is null and org_id is set.
+//
+// CurrentOwner is set on push responses so the CLI can detect server-side
+// transfers and keep the local marker in sync. The server never returns
+// "previous owner" — that would let attackers probe transfer history by
+// spoofing markers.
 type apiSkill struct {
-	ID                  string   `json:"id"`
-	OwnerID             string   `json:"owner_id"`
-	Name                string   `json:"name"`
-	Description         string   `json:"description"`
-	Version             string   `json:"version"`
-	ContentHash         string   `json:"content_hash"`
-	OrgID               *string  `json:"org_id"`
-	ForkedFrom          *string  `json:"forked_from"`
-	Visibility          string   `json:"visibility"`
-	ToolFormats         []string `json:"tool_formats"`
-	Warning             string   `json:"warning,omitempty"`
-	UpstreamContentHash *string  `json:"upstream_content_hash"`
+	ID                  string          `json:"id"`
+	OwnerID             *string         `json:"owner_id"`
+	Slug                string          `json:"slug"`
+	Name                string          `json:"name"`
+	Description         string          `json:"description"`
+	Version             string          `json:"version"`
+	ContentHash         string          `json:"content_hash"`
+	OrgID               *string         `json:"org_id"`
+	ForkedFrom          *string         `json:"forked_from"`
+	Visibility          string          `json:"visibility"`
+	ToolFormats         []string        `json:"tool_formats"`
+	Warning             string          `json:"warning,omitempty"`
+	UpstreamContentHash *string         `json:"upstream_content_hash"`
+	CurrentOwner        *ownerNamespace `json:"current_owner,omitempty"`
+	DeletedAt           *string         `json:"deleted_at,omitempty"`
+	DeletionReason      *string         `json:"deletion_reason,omitempty"`
+}
+
+// ownerNamespace identifies a skill's owner — either a user (kind="user",
+// slug=username) or an org (kind="org", slug=org_slug).
+type ownerNamespace struct {
+	Kind string `json:"kind"`
+	Slug string `json:"slug"`
 }
 
 // HasUpstreamUpdate returns true if this is a forked skill whose parent has changed.
@@ -281,6 +300,21 @@ func (c *apiClient) listSkills(scope string) ([]apiSkill, error) {
 		return nil, err
 	}
 
+	var resp struct {
+		Skills []apiSkill `json:"skills"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, err
+	}
+	return resp.Skills, nil
+}
+
+// listDeletedSkills fetches soft-deleted skills owned by the caller.
+func (c *apiClient) listDeletedSkills() ([]apiSkill, error) {
+	body, err := c.get("/api/v1/skills?deleted=true")
+	if err != nil {
+		return nil, err
+	}
 	var resp struct {
 		Skills []apiSkill `json:"skills"`
 	}
