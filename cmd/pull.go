@@ -325,6 +325,12 @@ func runPull(cmd *cobra.Command, args []string) error {
 	saveSyncState(syncState)
 	_ = saveLastSync()
 
+	// Run broken-ref walker after pull so newly-transferred skills are flagged.
+	if brokenIssues, err := walkBrokenRefs(); err == nil && len(brokenIssues) > 0 {
+		fmt.Fprintf(os.Stderr, "\n%s %d broken ref(s) found. Run 'airskills doctor' for details.\n",
+			yellow("!"), len(brokenIssues))
+	}
+
 	telemetry.Capture("cli_pull", map[string]interface{}{
 		"pulled":    pulled,
 		"updated":   updated,
