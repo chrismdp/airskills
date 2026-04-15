@@ -7,11 +7,18 @@ import (
 )
 
 // SyncEntry tracks the sync state of a single skill.
+//
+// OwnerKind / OwnerSlug record the skill's CURRENT namespace as last seen on
+// the server. They get updated after every push so a server-side transfer is
+// picked up on the next push without a separate sync step. If they change
+// between pushes, the local dir is renamed to match.
 type SyncEntry struct {
 	SkillID         string       `json:"skill_id"`
 	Version         string       `json:"version"`
 	ContentHash     string       `json:"content_hash,omitempty"`
 	Tool            string       `json:"tool"`
+	OwnerKind       string       `json:"owner_kind,omitempty"` // "user" or "org"
+	OwnerSlug       string       `json:"owner_slug,omitempty"` // e.g. "chrismdp" or "cherrypick"
 	Source          *skillSource `json:"source,omitempty"`
 	SuggestionID    string       `json:"suggestion_id,omitempty"`
 	SuggestDeclined bool         `json:"suggest_declined,omitempty"`

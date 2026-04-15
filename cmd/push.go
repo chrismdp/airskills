@@ -360,6 +360,57 @@ var pushCmd = &cobra.Command{
 					s.marker.SkillID, archive, expectedHash, contentHash,
 				)
 				if err != nil {
+					// 403/404: most likely server-side transfer or deletion.
+					// GET the skill to confirm and produce a clear message.
+					if statusCode == 403 || statusCode == 404 {
+						state, gerr := classifyMarkerSkill(client, s.marker)
+						if gerr == nil {
+							switch state.kind {
+							case markerStateMoved:
+								mu.Lock()
+								warnings = append(warnings, fmt.Sprintf(
+									"%s: skill was moved to %s/%s and you no longer have write access. Run `airskills add %s/%s` to install the new copy.",
+									s.name, state.ownerSlug, state.skillSlug,
+									state.ownerSlug, state.skillSlug))
+								mu.Unlock()
+							case markerStateOrphan:
+								mu.Lock()
+								warnings = append(warnings, fmt.Sprintf(
+									"%s: skill no longer exists on the server. Marker is orphaned — remove the local dir if you don't need it.",
+									s.name))
+								mu.Unlock()
+							default:
+								mu.Lock()
+								warnings = append(warnings, fmt.Sprintf("%s: %v", s.name, err))
+								mu.Unlock()
+							}
+						} else {
+							mu.Lock()
+							warnings = append(warnings, fmt.Sprintf("%s: %v", s.name, err))
+							mu.Unlock()
+						}
+						lines[i].status = "skipped"
+						renderProgress(lines)
+						atomic.AddInt64(&failed, 1)
+						return
+					}
+					if statusCode == 410 {
+						var resp struct {
+							Message string `json:"message"`
+						}
+						json.Unmarshal([]byte(err.Error()), &resp)
+						msg := resp.Message
+						if msg == "" {
+							msg = "skill was deleted server-side"
+						}
+						mu.Lock()
+						warnings = append(warnings, fmt.Sprintf("%s: %s Run `airskills restore %s` to recover it.", s.name, msg, s.name))
+						mu.Unlock()
+						lines[i].status = "skipped"
+						renderProgress(lines)
+						atomic.AddInt64(&failed, 1)
+						return
+					}
 					if statusCode == 409 {
 						lines[i].status = "CONFLICT"
 						renderProgress(lines)
@@ -424,6 +475,25 @@ var pushCmd = &cobra.Command{
 						mu.Lock()
 						warnings = append(warnings, fmt.Sprintf("%s: %s", s.name, updated.Warning))
 						mu.Unlock()
+					}
+
+					// Track current owner namespace in the marker so the CLI
+					// always knows which namespace a skill lives in. We do
+					// NOT rename the local dir on transfer — the agentskills
+					// spec requires the SKILL.md `name` field to match the
+					// dir name, so renaming the dir would also require
+					// rewriting `name` (a content change). Keep the dir
+					// stable; ownership lives in the marker only.
+					if updated.CurrentOwner != nil {
+						oldSlug := s.marker.OwnerSlug
+						newSlug := updated.CurrentOwner.Slug
+						if oldSlug != "" && oldSlug != newSlug {
+							fmt.Fprintf(os.Stderr,
+								"\n  %s moved namespace %s → %s (dir unchanged)\n",
+								s.name, oldSlug, newSlug)
+						}
+						s.marker.OwnerKind = updated.CurrentOwner.Kind
+						s.marker.OwnerSlug = updated.CurrentOwner.Slug
 					}
 				}
 				if sizeWarning != "" {

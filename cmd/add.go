@@ -90,12 +90,13 @@ var addCmd = &cobra.Command{
 		}
 
 		var result struct {
-			Type    string `json:"type"`
-			ID      string `json:"id"`
-			Name    string `json:"name"`
-			Slug    string `json:"slug"`
-			Content string `json:"content"`
-			Version string `json:"version"`
+			Type         string          `json:"type"`
+			ID           string          `json:"id"`
+			Name         string          `json:"name"`
+			Slug         string          `json:"slug"`
+			Content      string          `json:"content"`
+			Version      string          `json:"version"`
+			CurrentOwner *ownerNamespace `json:"current_owner"`
 		}
 		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 			return fmt.Errorf("failed to parse response: %w", err)
@@ -130,11 +131,45 @@ var addCmd = &cobra.Command{
 			return nil
 		}
 
-		// Compute the namespaced directory name ({owner}-{slug}).
-		// Migrate any existing bare-slug installation before writing the new one.
-		dirName := namespacedSlug(username, result.Slug)
+		// Per the agentskills.io spec, the SKILL.md `name` field must match
+		// the parent directory name. The server's slug IS the name field, so
+		// the local dir name MUST equal the server slug — no namespace
+		// prefixing on disk. Org/user namespace is recorded in the marker
+		// (OwnerKind/OwnerSlug), not in the dir name.
+		ownerKind := "user"
+		ownerSlug := username
+		if result.CurrentOwner != nil {
+			ownerKind = result.CurrentOwner.Kind
+			ownerSlug = result.CurrentOwner.Slug
+		}
+		dirName := result.Slug
+
 		syncState := loadSyncState()
-		migrateToNamespacedDirs(syncState)
+
+		// Collision check: if a different skill already lives at this dir
+		// name, write the incoming SKILL.md to /tmp and bail. We never
+		// silently overwrite — the user (or their agent) decides how to
+		// reconcile.
+		if existing, conflict := detectAddCollision(dirName, result.ID, syncState); conflict {
+			tmpPath, writeErr := writeConflictToTmp(dirName, files)
+			if writeErr != nil {
+				return fmt.Errorf("could not save incoming skill to tmp: %w", writeErr)
+			}
+			localPath := existing
+			fmt.Printf("\n  %s You already have a skill called %q at %s.\n",
+				yellow("⚠"), result.Slug, localPath)
+			fmt.Printf("  The new version from %s/%s is at:\n    %s\n\n",
+				ownerSlug, result.Slug, tmpPath)
+			if isTTY {
+				fmt.Println("  Ask your agent to read both files and incorporate anything")
+				fmt.Println("  worth keeping into your existing skill, or rename one to coexist.")
+			} else {
+				fmt.Printf("  AGENT INSTRUCTIONS: Read %s and %s.\n", localPath, tmpPath)
+				fmt.Println("  Ask the user one question at a time to resolve any ambiguity")
+				fmt.Println("  about which behaviours to keep, then patch the local SKILL.md.")
+			}
+			return nil
+		}
 
 		// Install to all detected agents
 		lines[0].status = "installing"
@@ -160,8 +195,10 @@ var addCmd = &cobra.Command{
 		originalContent, _ := os.ReadFile(filepath.Join(primaryDir, "SKILL.md"))
 
 		entry := &SyncEntry{
-			Version: result.Version,
-			Tool:    "claude-code",
+			Version:   result.Version,
+			Tool:      "claude-code",
+			OwnerKind: ownerKind,
+			OwnerSlug: ownerSlug,
 			Source: &skillSource{
 				Owner:       username,
 				Slug:        slug,
