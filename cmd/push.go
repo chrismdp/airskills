@@ -207,6 +207,23 @@ var pushCmd = &cobra.Command{
 				defer wg.Done()
 				defer func() { <-sem }()
 
+				// Proactive refuse for markers flagged as deleted/transferred
+				if s.marker != nil && s.marker.Deleted {
+					msg := fmt.Sprintf("%s: skill was transferred to %s — local edits here are NOT being pushed. Merge them into %s/ and rm -rf %s/",
+						s.name, s.marker.MovedTo, s.marker.MovedTo, s.name)
+					if s.marker.MovedTo == "" {
+						msg = fmt.Sprintf("%s: skill was deleted server-side — local edits here are NOT being pushed. Run 'airskills restore %s' to recover.", s.name, s.name)
+					}
+					lines[i].status = "skipped"
+					lines[i].pct = 0
+					renderProgress(lines)
+					mu.Lock()
+					warnings = append(warnings, msg)
+					mu.Unlock()
+					atomic.AddInt64(&failed, 1)
+					return
+				}
+
 				localFiles := readSkillFiles(s.dir)
 				if err := validateSkillFiles(s.dir, localFiles); err != nil {
 					lines[i].status = "invalid"

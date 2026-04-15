@@ -22,6 +22,10 @@ type SyncEntry struct {
 	Source          *skillSource `json:"source,omitempty"`
 	SuggestionID    string       `json:"suggestion_id,omitempty"`
 	SuggestDeclined bool         `json:"suggest_declined,omitempty"`
+	// Deleted is set when the skill was transferred away and local edits
+	// prevent removing the old dir. Pushes are blocked for deleted markers.
+	Deleted bool   `json:"deleted,omitempty"`
+	MovedTo string `json:"moved_to,omitempty"` // new dir name after transfer
 }
 
 // SyncState holds sync metadata for all tracked skills.

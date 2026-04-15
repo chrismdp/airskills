@@ -160,6 +160,63 @@ func runPull(cmd *cobra.Command, args []string) error {
 			continue
 		}
 
+		if p.reason == "transferred" {
+			// Server-side transfer: old slug → new slug.
+			// Install new dir, then reconcile the old one.
+			newDirName := p.skill.Name
+			lines[i].status = "transferred"
+			lines[i].pct = 0.8
+			renderProgress(lines)
+
+			if _, err := installSkillToAgents(newDirName, files); err != nil {
+				lines[i].status = "failed"
+				renderProgress(lines)
+				failed++
+				continue
+			}
+
+			// Add marker for the new dir
+			syncState.Skills[newDirName] = &SyncEntry{
+				SkillID:     p.skill.ID,
+				Version:     p.skill.Version,
+				ContentHash: p.skill.ContentHash,
+				Tool:        "claude-code",
+			}
+
+			// Reconcile old dir
+			oldDirName := filepath.Base(p.localDir)
+			if p.marker != nil && p.localDir != "" {
+				localFiles := readSkillFiles(p.localDir)
+				localHash := computeMerkleHash(localFiles)
+				if localHash == p.marker.ContentHash {
+					// No local edits — delete old dir (safe, soft-delete on server)
+					_ = os.RemoveAll(p.localDir)
+					delete(syncState.Skills, oldDirName)
+				} else {
+					// Local edits exist — mark deleted and warn
+					p.marker.Deleted = true
+					p.marker.MovedTo = newDirName
+					syncState.Skills[oldDirName] = p.marker
+					fmt.Fprintf(os.Stderr,
+						"\n  %s %s: local edits not pushed — skill transferred to %s. Merge manually into %s/ then rm -rf %s/\n",
+						yellow("!"), oldDirName, newDirName, newDirName, oldDirName)
+				}
+			}
+
+			lines[i].status = "done"
+			lines[i].size = fmt.Sprintf("%s → %s", oldDirName, newDirName)
+			lines[i].pct = 1
+			renderProgress(lines)
+			updated++
+			updateDetails = append(updateDetails, updateDetail{
+				name:       p.skill.Name,
+				oldVersion: p.marker.Version,
+				newVersion: p.skill.Version,
+				messages:   []string{"transferred"},
+			})
+			continue
+		}
+
 		lines[i].status = "installing"
 		lines[i].pct = 0.8
 		renderProgress(lines)
@@ -411,6 +468,7 @@ func notifyResolvedSuggestions(client *apiClient, syncState *SyncState) {
 // no network calls. The hashLocal helper reads disk for divergence checks.
 //
 // Behaviour:
+//   - tracked + slug changed (server-side transfer): "transferred"
 //   - tracked + local present + remote unchanged: skip
 //   - tracked + local present + only remote changed: "updated"
 //   - tracked + local present + both changed: "diverged"
@@ -437,6 +495,18 @@ func decidePullActions(remoteSkills []apiSkill, localSkills map[string]string, s
 		}
 
 		if trackedName != "" {
+			// Server-side transfer: slug changed from what we last tracked
+			if remote.Name != trackedName {
+				localDir := localSkills[trackedName]
+				actions = append(actions, pullEntry{
+					skill:    remote,
+					reason:   "transferred",
+					localDir: localDir,
+					marker:   syncState.Skills[trackedName],
+				})
+				continue
+			}
+
 			localDir, exists := localSkills[trackedName]
 			if !exists {
 				warnings = append(warnings, fmt.Sprintf(
