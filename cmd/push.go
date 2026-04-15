@@ -49,6 +49,7 @@ type pendingSuggestionPrompt struct {
 }
 
 var pushForce bool
+var pushOrg string
 
 var pushCmd = &cobra.Command{
 	Use:   "push",
@@ -58,6 +59,16 @@ var pushCmd = &cobra.Command{
 		client, err := newAPIClientAuto()
 		if err != nil {
 			return err
+		}
+
+		// Resolve org ID once before the goroutines so we don't hammer the API
+		// with concurrent identical lookups.
+		var createOrgID string
+		if pushOrg != "" {
+			createOrgID, err = lookupCallerOrgID(client, pushOrg)
+			if err != nil {
+				return fmt.Errorf("org %q: %w", pushOrg, err)
+			}
 		}
 
 		// Confirm force push
@@ -347,7 +358,7 @@ var pushCmd = &cobra.Command{
 							forkedFrom = s.marker.Source.ID
 						}
 
-						skill, err := client.createSkill(s.name, "", []string{"claude-code"}, forkedFrom)
+						skill, err := client.createSkill(s.name, "", []string{"claude-code"}, forkedFrom, createOrgID)
 						if err != nil {
 							lines[i].status = "failed"
 							renderProgress(lines)
@@ -356,6 +367,10 @@ var pushCmd = &cobra.Command{
 						}
 
 						s.marker = &SyncEntry{SkillID: skill.ID, Version: skill.Version, Tool: "claude-code"}
+						if createOrgID != "" {
+							s.marker.OwnerKind = "org"
+							s.marker.OwnerSlug = pushOrg
+						}
 						mu.Lock()
 						if old, ok := syncState.Skills[s.name]; ok && old.Source != nil {
 							s.marker.Source = old.Source
@@ -661,6 +676,7 @@ var pushCmd = &cobra.Command{
 func init() {
 	pushCmd.Flags().BoolVar(&pushForce, "force", false, "Skip conflict check (use after resolving conflicts)")
 	pushCmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "Show per-skill progress")
+	pushCmd.Flags().StringVar(&pushOrg, "org", "", "Create new skills under this org (org admins only)")
 	rootCmd.AddCommand(pushCmd)
 }
 

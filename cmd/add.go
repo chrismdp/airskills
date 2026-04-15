@@ -210,7 +210,7 @@ var addCmd = &cobra.Command{
 		// If logged in, register the skill on the server now
 		if token != nil && time.Now().Unix() < token.ExpiresAt {
 			client := newAPIClient(cfg, token)
-			skill, createErr := client.createSkill(result.Slug, "", []string{"claude-code"}, result.ID)
+			skill, createErr := client.createSkill(result.Slug, "", []string{"claude-code"}, result.ID, "")
 			if createErr == nil {
 				entry.SkillID = skill.ID
 				entry.ContentHash = skill.ContentHash

@@ -362,7 +362,8 @@ func (c *apiClient) getVersionHistory(skillID string) ([]skillCommit, error) {
 }
 
 // createSkill creates a skill metadata shell (files uploaded separately via archive).
-func (c *apiClient) createSkill(name, description string, tools []string, forkedFrom string) (*apiSkill, error) {
+// orgID is optional — non-empty creates the skill under the given org (caller must be admin/owner).
+func (c *apiClient) createSkill(name, description string, tools []string, forkedFrom, orgID string) (*apiSkill, error) {
 	payload := map[string]interface{}{
 		"name":         name,
 		"description":  description,
@@ -370,6 +371,9 @@ func (c *apiClient) createSkill(name, description string, tools []string, forked
 	}
 	if forkedFrom != "" {
 		payload["forked_from"] = forkedFrom
+	}
+	if orgID != "" {
+		payload["org_id"] = orgID
 	}
 	body, err := c.post("/api/v1/skills", payload)
 	if err != nil {
