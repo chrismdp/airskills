@@ -26,6 +26,26 @@ func dirNameForOwner(currentName, oldSlug, newSlug string) string {
 	return newSlug + "-" + base
 }
 
+// removeSkillDirAcrossAgents removes a skill directory (identified by its
+// base name) from every agent's global skills directory where it exists.
+// fullPath is the canonical path on this machine; basename is derived from it.
+// Errors from individual agents are ignored (best-effort cleanup).
+func removeSkillDirAcrossAgents(fullPath string) error {
+	basename := filepath.Base(fullPath)
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+	for _, a := range agents {
+		globalPath := resolveGlobalDir(home, a.GlobalDir)
+		dir := filepath.Join(globalPath, basename)
+		if _, err := os.Stat(dir); err == nil {
+			_ = os.RemoveAll(dir)
+		}
+	}
+	return nil
+}
+
 // renameSkillDirAcrossAgents renames `oldName` → `newName` in every agent's
 // global skills directory where `oldName` exists. Bails out (returning an
 // error) if `newName` already exists in any agent dir, to avoid clobber.
