@@ -189,8 +189,8 @@ func runPull(cmd *cobra.Command, args []string) error {
 				localFiles := readSkillFiles(p.localDir)
 				localHash := computeMerkleHash(localFiles)
 				if localHash == p.marker.ContentHash {
-					// No local edits — delete old dir (safe, soft-delete on server)
-					_ = os.RemoveAll(p.localDir)
+					// No local edits — delete old dir across all agents
+					_ = removeSkillDirAcrossAgents(p.localDir)
 					delete(syncState.Skills, oldDirName)
 				} else {
 					// Local edits exist — mark deleted and warn
