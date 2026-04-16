@@ -9,6 +9,7 @@ import (
 func TestDetectAddCollision_NoLocalDir(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
+	t.Setenv("USERPROFILE", tmp)
 	state := &SyncState{Skills: map[string]*SyncEntry{}}
 	if path, conflict := detectAddCollision("plan", "skill-id-1", state); conflict {
 		t.Fatalf("expected no conflict for fresh install, got conflict at %q", path)
@@ -18,6 +19,7 @@ func TestDetectAddCollision_NoLocalDir(t *testing.T) {
 func TestDetectAddCollision_SameSkillIsNoConflict(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
+	t.Setenv("USERPROFILE", tmp)
 	// Create a local dir for "plan" that the marker links to skill-id-1.
 	for _, a := range agents {
 		dir := filepath.Join(resolveGlobalDir(tmp, a.GlobalDir), "plan")
@@ -37,6 +39,7 @@ func TestDetectAddCollision_SameSkillIsNoConflict(t *testing.T) {
 func TestDetectAddCollision_DifferentSkillIsConflict(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
+	t.Setenv("USERPROFILE", tmp)
 	for _, a := range agents {
 		dir := filepath.Join(resolveGlobalDir(tmp, a.GlobalDir), "plan")
 		if err := os.MkdirAll(dir, 0755); err != nil {

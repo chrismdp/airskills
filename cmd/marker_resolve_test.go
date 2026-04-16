@@ -74,6 +74,7 @@ func TestRenameSkillDirAcrossAgents_RenamesExistingDir(t *testing.T) {
 	}
 	defer os.RemoveAll(tmp)
 	t.Setenv("HOME", tmp)
+	t.Setenv("USERPROFILE", tmp)
 
 	// Create a fake skill dir under each agent's global path.
 	for _, a := range agents {
