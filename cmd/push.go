@@ -237,6 +237,12 @@ var pushCmd = &cobra.Command{
 
 				localFiles := readSkillFiles(s.dir)
 
+				// Compute hash from raw files before any name-fix so that rename
+				// detection (orphan hash lookup) still works even when SKILL.md name
+				// doesn't yet match the directory. The name-fix changes the hash,
+				// so the orphan map must be probed with the pre-fix hash.
+				rawContentHash := computeMerkleHash(localFiles)
+
 				// Auto-fix SKILL.md name for new skills: cp-ing a skill dir leaves the
 				// original name field intact. The server validates name == slug strictly,
 				// so rewrite client-side and warn rather than fail the push.
@@ -297,9 +303,11 @@ var pushCmd = &cobra.Command{
 
 				isNew := s.marker == nil || s.marker.SkillID == ""
 				if isNew {
-					// Check for rename
+					// Check for rename using the pre-name-fix hash so that orphan
+					// entries (stored with their original hash) are correctly matched
+					// even after the SKILL.md name field has been rewritten.
 					mu.Lock()
-					oldName, found := orphanHashToName[contentHash]
+					oldName, found := orphanHashToName[rawContentHash]
 					if found {
 						oldEntry := syncState.Skills[oldName]
 						s.marker = &SyncEntry{
@@ -311,7 +319,7 @@ var pushCmd = &cobra.Command{
 						}
 						isNew = false
 						delete(syncState.Skills, oldName)
-						delete(orphanHashToName, contentHash)
+						delete(orphanHashToName, rawContentHash)
 						syncState.Skills[s.name] = s.marker
 						mu.Unlock()
 						fmt.Fprintf(os.Stderr, "\n  %s → %s (renamed)\n", oldName, s.name)
