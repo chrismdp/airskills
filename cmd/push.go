@@ -236,6 +236,23 @@ var pushCmd = &cobra.Command{
 				}
 
 				localFiles := readSkillFiles(s.dir)
+
+				// Auto-fix SKILL.md name for new skills: cp-ing a skill dir leaves the
+				// original name field intact. The server validates name == slug strictly,
+				// so rewrite client-side and warn rather than fail the push.
+				if s.marker == nil || s.marker.SkillID == "" {
+					if skillMd, ok := localFiles["SKILL.md"]; ok {
+						dirName := filepath.Base(s.dir)
+						if fixed, changed := fixSkillNameInContent(dirName, skillMd); changed {
+							_ = os.WriteFile(filepath.Join(s.dir, "SKILL.md"), fixed, 0644)
+							localFiles["SKILL.md"] = fixed
+							mu.Lock()
+							warnings = append(warnings, fmt.Sprintf("%s: SKILL.md name field auto-updated to %q to match directory", s.name, dirName))
+							mu.Unlock()
+						}
+					}
+				}
+
 				if err := validateSkillFiles(s.dir, localFiles); err != nil {
 					lines[i].status = "invalid"
 					lines[i].pct = 0
