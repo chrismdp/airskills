@@ -25,7 +25,9 @@ Get started:
   airskills add u/s    Install a public skill
   airskills status     Check for updates
 
-Works with 19 AI agents.`,
+Works with 19 AI agents.
+
+Docs: https://airskills.ai/docs`,
 	// Don't print usage on runtime errors (e.g. "skill not found").
 	// Cobra still prints usage on argument-parse errors, which is correct.
 	SilenceUsage: true,
