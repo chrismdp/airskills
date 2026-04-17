@@ -10,10 +10,16 @@ import (
 
 var mvCmd = &cobra.Command{
 	Use:   "mv <old-name> <new-name>",
-	Short: "Rename a skill locally and on the server",
-	Long: `Renames a skill directory across all detected agents and updates the
-server-side skill name. Sync state is updated to point at the new key
-without losing the skill's history or remote ID.`,
+	Short: "Rename a skill (does not change ownership — use `transfer` for that)",
+	Long: `Renames a skill's name across all detected agents and on the server.
+
+This only changes the name. It does not change the owner, the commit
+history, or the skill's identity. Consumers who installed your skill via
+airskills add keep receiving updates because the CLI tracks skills by
+ID, not by name.
+
+To change ownership of a skill (user ↔ org), use 'airskills transfer'.
+That is a deliberate, consumer-visible move; rename is not.`,
 	Args: cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		oldName, newName := args[0], args[1]

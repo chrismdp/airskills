@@ -32,6 +32,17 @@ What this means for our design:
 - **On collision at install time, abort with conflict-to-tmp.** Don't
   silently rename to disambiguate. The user (or their agent) decides.
 
+## Command semantics
+
+Two command verbs you must never conflate:
+
+- **`airskills mv <old> <new>`** — rename. Same owner, new name. Consumer-transparent: the skill's `skill_id` is stable, consumers pinning by `skill_id` keep getting updates. Must hard-reject any attempt to change owner.
+- **`airskills transfer <skill> --to-org <slug>` / `--to-user`** — ownership change. Server-side this is "soft-delete old + create new with new `skill_id`". Consumers see an "upstream archived" event on their next pull. Old slug returns 410.
+
+If code ever looks like it's trying to change owner via the name-PUT path (`PUT /api/v1/skills/:id` with `{name}`), that's wrong. Owner change goes through the transfer endpoint.
+
+User-facing docs for this split live at `airskills.ai/docs/getting-started/rename` and `airskills.ai/docs/concepts/transfers`. If you change behaviour in either command, keep those pages in sync.
+
 ## Architecture
 
 Single Go binary, no runtime dependencies. Cobra for CLI commands. Config and tokens stored in `~/.config/airskills/`.
