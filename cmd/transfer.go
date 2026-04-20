@@ -152,13 +152,15 @@ func findSkillByName(c *apiClient, name string) (*apiSkill, error) {
 	return nil, nil
 }
 
-// lookupCallerOrgID returns the caller's current org ID if its slug matches
-// the requested one. Today users belong to a single org via profiles.org_id;
-// when memberships land, this should consult that table instead.
+// lookupCallerOrgID returns the caller's current organization ID if its
+// slug matches the requested one. The platform endpoint reads from the
+// memberships table (single-org assumption). Multi-org callers will need
+// an explicit org param once the dashboard supports switching — see the
+// platform repo's doc/changes/multi-org-dashboard.md.
 func lookupCallerOrgID(c *apiClient, slug string) (string, error) {
-	body, err := c.get("/api/v1/org")
+	body, err := c.get("/api/v1/organization")
 	if err != nil {
-		return "", fmt.Errorf("looking up your org: %w", err)
+		return "", fmt.Errorf("looking up your organization: %w", err)
 	}
 	var resp struct {
 		Org *struct {
