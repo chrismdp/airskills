@@ -99,16 +99,23 @@ type markerState struct {
 	skillSlug  string
 }
 
-// updateLocalMarkerForTransfer records the new owner namespace in the local
-// marker after the CLI itself executed a transfer. The local dir is NOT
-// renamed: the agentskills.io spec requires SKILL.md `name` to equal the
-// parent dir name, so renaming the dir would also require rewriting `name`
-// (a content change). Ownership is tracked in the marker; the dir stays
-// stable.
-func updateLocalMarkerForTransfer(skillID, newKind, newSlug string) error {
+// updateLocalMarkerForTransfer records the new owner namespace AND the new
+// skill_id in the local marker after the CLI itself executed a transfer.
+//
+// Under the v2 transfer model the skill_id changes — server soft-deletes the
+// original and creates a new skill row at the target owner with a fresh
+// skill_id. The local copy is the same bytes as before; we just need to
+// repoint the marker so subsequent push/pull find the new server-side row.
+//
+// The local dir is NOT renamed: the agentskills.io spec requires SKILL.md
+// `name` to equal the parent dir name, so renaming the dir would also
+// require rewriting `name` (a content change). Ownership and skill_id
+// are tracked in the marker; the dir stays stable.
+func updateLocalMarkerForTransfer(oldSkillID, newSkillID, newKind, newSlug string) error {
 	state := loadSyncState()
 	for name, e := range state.Skills {
-		if e != nil && e.SkillID == skillID {
+		if e != nil && e.SkillID == oldSkillID {
+			e.SkillID = newSkillID
 			e.OwnerKind = newKind
 			e.OwnerSlug = newSlug
 			state.Skills[name] = e

@@ -105,9 +105,11 @@ links keep resolving.`,
 			return fmt.Errorf("invalid server response: %w", jsonErr)
 		}
 
-		// Update local marker + rename dir on this machine. Other machines
-		// learn about the transfer the next time they push (server returns
-		// current_owner; CLI re-resolves).
+		// Update local marker. Under the v2 transfer model the server
+		// soft-deletes the original skill and creates a new row with a
+		// fresh skill_id; we repoint the marker so subsequent push/pull
+		// hit the new row. Other machines that sourced this skill will
+		// see the OLD skill_id as archived on next pull and warn.
 		newSlug := transferToOrg
 		newKind := "org"
 		if newSlug == "" {
@@ -117,8 +119,8 @@ links keep resolving.`,
 			}
 			newKind = "user"
 		}
-		if newSlug != "" {
-			if err := updateLocalMarkerForTransfer(skill.ID, newKind, newSlug); err != nil {
+		if newSlug != "" && updated.ID != "" {
+			if err := updateLocalMarkerForTransfer(skill.ID, updated.ID, newKind, newSlug); err != nil {
 				fmt.Fprintf(os.Stderr, "  %s server transferred OK but local marker update failed: %v\n", yellow("!"), err)
 			}
 		}
