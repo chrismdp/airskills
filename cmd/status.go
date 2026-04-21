@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/chrismdp/airskills/telemetry"
@@ -89,14 +90,14 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	var needPush, needPull, needUpdate, upstreamUpdates int
+	var toPush, toPull, toUpdate, upstream []string
 
 	remoteByName := map[string]bool{}
 	for _, remote := range sr.skills {
 		remoteByName[remote.Name] = true
 
 		if remote.HasUpstreamUpdate() {
-			upstreamUpdates++
+			upstream = append(upstream, remote.Name)
 		}
 
 		trackedName := ""
@@ -110,21 +111,31 @@ func runStatus(cmd *cobra.Command, args []string) error {
 			}
 			marker := syncState.Skills[trackedName]
 			if marker.ContentHash != "" && remote.ContentHash != "" && marker.ContentHash != remote.ContentHash {
-				needUpdate++
+				toUpdate = append(toUpdate, trackedName)
 			}
 			continue
 		}
 
 		if _, exists := localSkills[remote.Name]; !exists {
-			needPull++
+			toPull = append(toPull, remote.Name)
 		}
 	}
 
 	for name := range localSkills {
 		if !remoteByName[name] {
-			needPush++
+			toPush = append(toPush, name)
 		}
 	}
+
+	sort.Strings(toPush)
+	sort.Strings(toPull)
+	sort.Strings(toUpdate)
+	sort.Strings(upstream)
+
+	needPush := len(toPush)
+	needPull := len(toPull)
+	needUpdate := len(toUpdate)
+	upstreamUpdates := len(upstream)
 
 	// Skip capture on the shell-prompt hot path (quiet mode is used by
 	// `eval "$(airskills status)"` in shell init). Capturing there would
@@ -172,10 +183,39 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	}
 	fmt.Fprintf(os.Stderr, "[airskills] %s — run '%s'\n", strings.Join(parts, ", "), hint)
 
+	// Detail groups — show the actual skill names under each action so the
+	// user (and any agent driving the CLI) can see exactly what's about to
+	// move. Matches git status's "to push / to pull" layout. Skipped when
+	// --quiet so the shell-prompt hot path stays one-line.
+	if !quiet {
+		printStatusGroup("to push", toPush, yellow)
+		printStatusGroup("to pull", toPull, cyan)
+		printStatusGroup("changed", toUpdate, yellow)
+		printStatusGroup("upstream", upstream, cyan)
+	}
+
 	if hr.latestCLI != "" {
 		fmt.Fprintf(os.Stderr, "[airskills] %s → %s: run 'airskills self-update'\n",
 			yellow("update"), hr.latestCLI)
 	}
 
 	return nil
+}
+
+// printStatusGroup prints a detail block for one action category, e.g.
+//
+//	  to push (2):
+//	    my-skill
+//	    other-skill
+//
+// Silent when names is empty — keeps the output compact for the common
+// "nothing in this bucket" case.
+func printStatusGroup(label string, names []string, color func(string) string) {
+	if len(names) == 0 {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "  %s (%d):\n", color(label), len(names))
+	for _, n := range names {
+		fmt.Fprintf(os.Stderr, "    %s\n", n)
+	}
 }
