@@ -6,12 +6,29 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
 	"github.com/chrismdp/airskills/config"
 	"github.com/chrismdp/airskills/telemetry"
 )
+
+// SkillsetNotFoundError is returned when the server reports an unknown
+// skillset slug on /api/v1/skills. Callers render it as a human-readable
+// hint listing the user's available skillsets.
+type SkillsetNotFoundError struct {
+	RequestedSlug string
+	Available     []string
+}
+
+func (e *SkillsetNotFoundError) Error() string {
+	if len(e.Available) == 0 {
+		return fmt.Sprintf("skillset %q not found — you have no personal skillsets yet", e.RequestedSlug)
+	}
+	return fmt.Sprintf("skillset %q not found. Your skillsets: %s",
+		e.RequestedSlug, strings.Join(e.Available, ", "))
+}
 
 // setAnonHeader attaches the machine-level anonymous telemetry ID so the
 // server can attribute anonymous events (e.g. `airskills add` without login)
@@ -307,6 +324,71 @@ func (c *apiClient) listSkills(scope string) ([]apiSkill, error) {
 		return nil, err
 	}
 	return resp.Skills, nil
+}
+
+// listPersonalSkillsInSkillset fetches the caller's personal skills scoped
+// to a specific skillset (empty slug = server resolves to the caller's
+// is_default=true skillset). Returns the resolved skillset slug alongside
+// the skills so callers can log which skillset they synced against.
+//
+// A SkillsetNotFoundError is returned when the server reports an unknown
+// slug; callers should render its message and exit non-zero.
+func (c *apiClient) listPersonalSkillsInSkillset(skillset string) ([]apiSkill, string, error) {
+	path := "/api/v1/skills?scope=personal"
+	if skillset != "" {
+		path += "&skillset=" + url.QueryEscape(skillset)
+	}
+
+	req, err := http.NewRequest("GET", c.baseURL+path, nil)
+	if err != nil {
+		return nil, "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	setAnonHeader(req)
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, "", err
+	}
+	defer resp.Body.Close()
+
+	body, readErr := io.ReadAll(resp.Body)
+	if readErr != nil {
+		return nil, "", readErr
+	}
+
+	if resp.StatusCode == http.StatusNotFound {
+		var errResp struct {
+			Error     string   `json:"error"`
+			Available []string `json:"available"`
+		}
+		if jErr := json.Unmarshal(body, &errResp); jErr == nil && errResp.Available != nil {
+			return nil, "", &SkillsetNotFoundError{
+				RequestedSlug: skillset,
+				Available:     errResp.Available,
+			}
+		}
+		return nil, "", fmt.Errorf("API error (404): %s", string(body))
+	}
+	if resp.StatusCode >= 400 {
+		return nil, "", fmt.Errorf("API error (%d): %s", resp.StatusCode, string(body))
+	}
+
+	var parsed struct {
+		Skillset *struct {
+			Slug string `json:"slug"`
+			Name string `json:"name"`
+		} `json:"skillset,omitempty"`
+		Skills []apiSkill `json:"skills"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return nil, "", err
+	}
+	resolved := ""
+	if parsed.Skillset != nil {
+		resolved = parsed.Skillset.Slug
+	}
+	return parsed.Skills, resolved, nil
 }
 
 // listDeletedSkills fetches soft-deleted skills owned by the caller.

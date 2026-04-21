@@ -14,7 +14,8 @@ const (
 )
 
 type Config struct {
-	APIURL string `json:"api_url"`
+	APIURL   string `json:"api_url"`
+	Skillset string `json:"skillset,omitempty"`
 }
 
 type TokenData struct {

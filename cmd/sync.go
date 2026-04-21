@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/chrismdp/airskills/config"
@@ -19,6 +20,7 @@ const guideSlug = "airskills-guide"
 
 func init() {
 	syncCmd.Flags().BoolVarP(&syncVerbose, "verbose", "v", false, "Show per-skill progress")
+	syncCmd.Flags().StringVar(&skillsetFlag, "skillset", "", "Personal skillset to sync against (default: your last-used skillset)")
 	rootCmd.AddCommand(syncCmd)
 }
 
@@ -107,6 +109,20 @@ var syncCmd = &cobra.Command{
 		// Check if we can authenticate (handles no token, expired token, failed refresh)
 		_, authErr := newAPIClientAuto()
 		canPush := authErr == nil
+
+		// Resolve the --skillset flag once up front so push and pull see a
+		// consistent value and the confirmation prompt doesn't fire twice.
+		// Errors from the prompt (cancel) should abort the whole sync.
+		if canPush {
+			cfg, cfgErr := config.Load()
+			if cfgErr != nil {
+				return cfgErr
+			}
+			if _, err := resolveSkillsetFlag(cfg, skillsetFlag, stdinReader(), stderrWriter()); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				return err
+			}
+		}
 
 		if canPush {
 			fmt.Printf("%s %s\n", cyan("▲"), "Push")

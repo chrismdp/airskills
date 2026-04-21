@@ -13,6 +13,7 @@ import (
 )
 
 func init() {
+	pullCmd.Flags().StringVar(&skillsetFlag, "skillset", "", "Personal skillset to pull against (default: your last-used skillset)")
 	rootCmd.AddCommand(pullCmd)
 }
 
@@ -73,10 +74,29 @@ func runPull(cmd *cobra.Command, args []string) error {
 		return runPullAnon(localSkills, syncState, mirrorConflictSet)
 	}
 
-	// Fetch owned skills only (scope=personal filters server-side)
-	remoteSkills, err := client.listSkills("personal")
+	// Fetch the caller's skills scoped to their selected personal skillset
+	// (and any org skillsets they've been assigned to). Empty slug =>
+	// server resolves to their is_default=true skillset.
+	cfg, cfgErr := config.Load()
+	if cfgErr != nil {
+		return cfgErr
+	}
+	sendSlug, err := resolveSkillsetFlag(cfg, skillsetFlag, stdinReader(), stderrWriter())
 	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return err
+	}
+	remoteSkills, resolvedSlug, err := client.listPersonalSkillsInSkillset(sendSlug)
+	if err != nil {
+		if notFound, ok := err.(*SkillsetNotFoundError); ok {
+			fmt.Fprintln(os.Stderr, notFound.Error())
+			return err
+		}
 		return fmt.Errorf("fetching skills: %w", err)
+	}
+	rememberSkillsetAfterSuccess(cfg, resolvedSlug)
+	if resolvedSlug != "" {
+		fmt.Printf("  %s %s\n", dim("Skillset:"), resolvedSlug)
 	}
 
 	// Resolve upstream updates on forked skills before deciding actions.
