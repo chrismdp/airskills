@@ -152,32 +152,29 @@ func findSkillByName(c *apiClient, name string) (*apiSkill, error) {
 	return nil, nil
 }
 
-// lookupCallerOrgID returns the caller's current organization ID if its
-// slug matches the requested one. The platform endpoint reads from the
-// memberships table (single-org assumption). Multi-org callers will need
-// an explicit org param once the dashboard supports switching — see the
-// platform repo's doc/changes/multi-org-dashboard.md.
+// lookupCallerOrgID returns the org ID for the given slug if the caller is a
+// member of that org. Uses /api/v1/organizations (multi-org endpoint) so users
+// who belong to multiple orgs can target any of them.
 func lookupCallerOrgID(c *apiClient, slug string) (string, error) {
-	body, err := c.get("/api/v1/organization")
+	body, err := c.get("/api/v1/organizations")
 	if err != nil {
-		return "", fmt.Errorf("looking up your organization: %w", err)
+		return "", fmt.Errorf("looking up your organizations: %w", err)
 	}
 	var resp struct {
-		Org *struct {
+		Organizations []struct {
 			ID   string `json:"id"`
 			Slug string `json:"slug"`
-		} `json:"org"`
+		} `json:"organizations"`
 	}
 	if err := json.Unmarshal(body, &resp); err != nil {
-		return "", fmt.Errorf("invalid org response: %w", err)
+		return "", fmt.Errorf("invalid organizations response: %w", err)
 	}
-	if resp.Org == nil {
-		return "", fmt.Errorf("you are not a member of any org")
+	for _, org := range resp.Organizations {
+		if org.Slug == slug {
+			return org.ID, nil
+		}
 	}
-	if resp.Org.Slug != slug {
-		return "", fmt.Errorf("you are not a member of %q (your org is %q)", slug, resp.Org.Slug)
-	}
-	return resp.Org.ID, nil
+	return "", fmt.Errorf("you are not a member of %q", slug)
 }
 
 func init() {
