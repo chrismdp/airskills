@@ -21,14 +21,18 @@ var addPreview bool
 
 var addSkillFlag string
 
+var addAllFlag bool
+
 var addCmd = &cobra.Command{
 	Use:   "add <username/skill>",
 	Short: "Install a shared skill",
 	Long: `Install a skill from airskills.ai or directly from GitHub.
 
-  airskills add chrismdp/retro                              # from airskills.ai
-  airskills add github.com/supabase/agent-skills/supabase   # specific skill from GitHub repo
-  airskills add github.com/owner/repo                       # single-skill GitHub repo`,
+  airskills add chrismdp/retro                                          # from airskills.ai
+  airskills add github.com/supabase/agent-skills/supabase               # specific skill from GitHub repo
+  airskills add github.com/owner/repo                                   # single-skill GitHub repo
+  airskills add github.com/modelcontextprotocol/ext-apps --all          # install all skills in repo
+  airskills add github.com/modelcontextprotocol/ext-apps --skill a,b   # install subset`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		input := args[0]
@@ -336,6 +340,7 @@ func countFiles(dir string) int {
 
 func init() {
 	addCmd.Flags().BoolVar(&addPreview, "preview", false, "Show skill content without installing")
-	addCmd.Flags().StringVar(&addSkillFlag, "skill", "", "Install a specific skill from a multi-skill GitHub repository")
+	addCmd.Flags().StringVar(&addSkillFlag, "skill", "", "Install specific skill(s) from a multi-skill GitHub repo (comma-separated names or path/to/name)")
+	addCmd.Flags().BoolVar(&addAllFlag, "all", false, "Install all skills found in a GitHub repository")
 	rootCmd.AddCommand(addCmd)
 }
