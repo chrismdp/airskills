@@ -185,3 +185,78 @@ func TestConfigSkillsetRoundtrip(t *testing.T) {
 		t.Errorf("on-disk missing skillset field: %s", string(raw))
 	}
 }
+
+// --- CRUD command tests -----------------------------------------------------
+
+func TestValidSkillsetSlug_Accepts(t *testing.T) {
+	for _, ok := range []string{"default", "work", "a1", "my-work-skills", "abc-123"} {
+		if err := validSkillsetSlug(ok); err != nil {
+			t.Errorf("expected %q to be valid, got %v", ok, err)
+		}
+	}
+}
+
+func TestValidSkillsetSlug_Rejects(t *testing.T) {
+	cases := []struct {
+		slug string
+		why  string
+	}{
+		{"", "empty"},
+		{"UPPER", "uppercase"},
+		{"-leading", "leading dash"},
+		{"trailing-", "trailing dash"},
+		{"con--secutive", "consecutive dashes"},
+		{"under_score", "underscore"},
+		{"has space", "space"},
+		{strings.Repeat("a", 65), "too long"},
+	}
+	for _, c := range cases {
+		if err := validSkillsetSlug(c.slug); err == nil {
+			t.Errorf("expected %q (%s) to be rejected", c.slug, c.why)
+		}
+	}
+}
+
+func TestRenderSkillsetList_MarksSelected(t *testing.T) {
+	skillsets := []apiSkillset{
+		{Slug: "default", SkillCount: 12, IsDefault: true},
+		{Slug: "writing", SkillCount: 3},
+		{Slug: "minimal", SkillCount: 5},
+	}
+	var out bytes.Buffer
+	renderSkillsetList(&out, skillsets, "writing")
+	s := out.String()
+	// writing should be asterisked, the others bare.
+	if !strings.Contains(s, "* writing (3 skills)") {
+		t.Errorf("selected row missing '*' prefix, got:\n%s", s)
+	}
+	if !strings.Contains(s, "  default (12 skills)") {
+		t.Errorf("non-selected row should have leading space, got:\n%s", s)
+	}
+	if strings.Count(s, "*") != 1 {
+		t.Errorf("expected exactly one '*' marker, got:\n%s", s)
+	}
+}
+
+func TestRenderSkillsetList_FallsBackToIsDefault(t *testing.T) {
+	// When no local preference is set, the is_default row should still
+	// show an asterisk so the user knows what they're on.
+	skillsets := []apiSkillset{
+		{Slug: "default", SkillCount: 1, IsDefault: true},
+		{Slug: "other", SkillCount: 0},
+	}
+	var out bytes.Buffer
+	renderSkillsetList(&out, skillsets, "")
+	s := out.String()
+	if !strings.Contains(s, "* default (1 skills)") {
+		t.Errorf("is_default row should be marked when nothing remembered, got:\n%s", s)
+	}
+}
+
+func TestRenderSkillsetList_Empty(t *testing.T) {
+	var out bytes.Buffer
+	renderSkillsetList(&out, nil, "")
+	if !strings.Contains(out.String(), "No skillsets") {
+		t.Errorf("expected empty message, got %q", out.String())
+	}
+}
