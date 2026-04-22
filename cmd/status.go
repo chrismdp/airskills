@@ -154,6 +154,10 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	if needPush == 0 && needPull == 0 && needUpdate == 0 && upstreamUpdates == 0 && pendingSuggestions == 0 && hr.latestCLI == "" {
 		if !quiet {
 			fmt.Fprintf(os.Stderr, "[airskills] %s\n", green("✓ in sync"))
+			printAgentNextSteps(os.Stderr, []agentNextStep{
+				{Cmd: "airskills add <owner>/<skill>", Why: "install a public skill"},
+				{Cmd: "airskills push", Why: "upload a skill you've created locally"},
+			})
 		}
 		return nil
 	}
@@ -197,6 +201,23 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	if hr.latestCLI != "" {
 		fmt.Fprintf(os.Stderr, "[airskills] %s → %s: run 'airskills self-update'\n",
 			yellow("update"), hr.latestCLI)
+	}
+
+	// Next-step hints for an agent reading this output: tuned to the
+	// specific mix of work detected above. Suppressed in --quiet mode
+	// (shell-prompt hot path) and on TTY by printAgentNextSteps.
+	if !quiet {
+		var steps []agentNextStep
+		if needPull > 0 || needUpdate > 0 || upstreamUpdates > 0 {
+			steps = append(steps, agentNextStep{Cmd: "airskills sync", Why: "pull remote changes"})
+		}
+		if needPush > 0 {
+			steps = append(steps, agentNextStep{Cmd: "airskills push", Why: "upload local changes"})
+		}
+		if pendingSuggestions > 0 {
+			steps = append(steps, agentNextStep{Cmd: "airskills review", Why: "review incoming suggestions"})
+		}
+		printAgentNextSteps(os.Stderr, steps)
 	}
 
 	return nil

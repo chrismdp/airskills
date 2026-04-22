@@ -181,6 +181,11 @@ var whoamiCmd = &cobra.Command{
 			name = profile.Username
 		}
 		fmt.Printf("%s (@%s)\n", name, profile.Username)
+		printAgentNextSteps(os.Stdout, []agentNextStep{
+			{Cmd: "airskills status", Why: "check what's in sync for this user"},
+			{Cmd: "airskills sync", Why: "pull their skills to this machine"},
+			{Cmd: "airskills add <owner>/<skill>", Why: "install a public skill"},
+		})
 		return nil
 	},
 }

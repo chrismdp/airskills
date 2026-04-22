@@ -359,6 +359,20 @@ func runPull(cmd *cobra.Command, args []string) error {
 		"missing":   len(missingWarnings),
 		"anonymous": false,
 	})
+
+	// Next-step hints for an agent. Skip when called from `sync` — sync
+	// prints its own consolidated block after pull.
+	if cmd.Name() != "sync" {
+		steps := []agentNextStep{
+			{Cmd: "airskills status", Why: "confirm local matches remote"},
+		}
+		if diverged > 0 {
+			steps = []agentNextStep{
+				{Cmd: "airskills push --force", Why: "re-push after merging the diverged skills above"},
+			}
+		}
+		printAgentNextSteps(os.Stdout, steps)
+	}
 	return nil
 }
 

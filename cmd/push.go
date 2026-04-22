@@ -694,6 +694,21 @@ var pushCmd = &cobra.Command{
 			fmt.Println("  To see the full diff: diff", conflictMessages[0].localPath, conflictMessages[0].remotePath)
 		}
 
+		// Next-step hints for an agent. Skip when called from `sync` —
+		// sync prints its own consolidated block after pull so we don't
+		// double up.
+		if cmd.Name() != "sync" {
+			steps := []agentNextStep{
+				{Cmd: "airskills status", Why: "confirm everything landed on the server"},
+			}
+			if len(conflictMessages) > 0 {
+				steps = []agentNextStep{
+					{Cmd: "airskills push --force", Why: "re-push after merging the conflicts above"},
+				}
+			}
+			printAgentNextSteps(os.Stdout, steps)
+		}
+
 		return nil
 	},
 }

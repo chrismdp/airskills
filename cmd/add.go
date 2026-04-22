@@ -238,6 +238,18 @@ var addCmd = &cobra.Command{
 			"agents":        len(installed),
 			"authenticated": authHeader != "",
 		})
+
+		steps := []agentNextStep{
+			{Cmd: "airskills status", Why: "see the new skill alongside the rest"},
+			{Cmd: "airskills sync", Why: "pull any other remote skills onto this machine"},
+		}
+		if authHeader == "" {
+			steps = append(steps, agentNextStep{
+				Cmd: "airskills login",
+				Why: "log in to track this fork and push edits back",
+			})
+		}
+		printAgentNextSteps(os.Stdout, steps)
 		return nil
 	},
 }

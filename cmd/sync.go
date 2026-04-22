@@ -148,6 +148,22 @@ var syncCmd = &cobra.Command{
 		telemetry.Capture("cli_sync", map[string]interface{}{
 			"pushed": canPush,
 		})
+
+		// Next-step hints for an agent. `sync` is normally a terminal
+		// action — most agents run it to reach steady state, so the
+		// primary nudge is to verify with status. Login-gated side paths
+		// show up too when relevant.
+		steps := []agentNextStep{
+			{Cmd: "airskills status", Why: "confirm everything is in sync"},
+		}
+		if !canPush {
+			steps = append(steps, agentNextStep{
+				Cmd: "airskills login",
+				Why: "log in to back up and push local changes",
+			})
+		}
+		printAgentNextSteps(os.Stdout, steps)
+
 		return nil
 	},
 }
