@@ -231,10 +231,14 @@ func newAPIClientAuto() (*apiClient, error) {
 		}
 		refreshed, err := refreshAccessToken(cfg.APIURL, token.RefreshToken)
 		if err != nil {
-			return nil, fmt.Errorf("session expired and refresh failed — run 'airskills login'")
+			return nil, fmt.Errorf("session expired and refresh failed (%s) — run 'airskills login'", err)
 		}
 		token = refreshed
-		config.SaveToken(token)
+		if err := config.SaveToken(token); err != nil {
+			// Non-fatal — continue with in-memory token for this request.
+			// Next run will re-refresh (slightly wasteful but correct).
+			_ = err
+		}
 	}
 
 	return newAPIClient(cfg, token), nil
@@ -250,7 +254,8 @@ func refreshAccessToken(apiURL, refreshToken string) (*config.TokenData, error) 
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("refresh returned %d", resp.StatusCode)
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("refresh returned HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 
 	var token config.TokenData
