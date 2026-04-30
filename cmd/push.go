@@ -469,13 +469,30 @@ var pushCmd = &cobra.Command{
 						return
 					}
 					if statusCode == 409 {
-						lines[i].status = "CONFLICT"
-						renderProgress(lines)
-
-						var conflict struct {
+						var conflictResp struct {
 							RemoteContentHash string `json:"remote_content_hash"`
 						}
-						json.Unmarshal([]byte(err.Error()), &conflict)
+						json.Unmarshal([]byte(err.Error()), &conflictResp)
+
+						// Auto-detect: if local already matches remote, the marker is stale.
+						// Link the marker silently without uploading.
+						if conflictResp.RemoteContentHash != "" && conflictResp.RemoteContentHash == contentHash {
+							s.marker.ContentHash = contentHash
+							if remote, gerr := client.getSkill(s.marker.SkillID); gerr == nil {
+								s.marker.Version = remote.Version
+							}
+							mu.Lock()
+							syncState.Skills[s.name] = s.marker
+							mu.Unlock()
+							lines[i].status = "linked"
+							lines[i].pct = 1
+							renderProgress(lines)
+							atomic.AddInt64(&linked, 1)
+							return
+						}
+
+						lines[i].status = "CONFLICT"
+						renderProgress(lines)
 
 						tmpDir := filepath.Join(os.TempDir(), "airskills-conflicts", s.name)
 						os.MkdirAll(tmpDir, 0755)
@@ -675,23 +692,16 @@ var pushCmd = &cobra.Command{
 
 		// Show conflict resolution instructions
 		if len(conflictMessages) > 0 {
-			fmt.Println("\n--- Conflicts ---")
+			var entries []conflictEntry
 			for _, c := range conflictMessages {
-				fmt.Printf("\n  %s (content changed on remote)\n", c.name)
-				fmt.Printf("  Local:  %s\n", c.localPath)
-				fmt.Printf("  Remote: %s\n", c.remotePath)
-
-				// Show a brief diff summary
-				localData, _ := os.ReadFile(c.localPath)
-				remoteData, _ := os.ReadFile(c.remotePath)
-				localLines := len(strings.Split(string(localData), "\n"))
-				remoteLines := len(strings.Split(string(remoteData), "\n"))
-				fmt.Printf("  Local: %d lines, Remote: %d lines\n", localLines, remoteLines)
-
-				fmt.Print(pushConflictResolutionInstructions(c, !isTTY))
+				entries = append(entries, conflictEntry{
+					name:      c.name,
+					localDir:  filepath.Dir(c.localPath),
+					remoteDir: filepath.Dir(c.remotePath),
+					source:    nil, // push doesn't have syncState in scope here; sourced caveat skipped
+				})
 			}
-			fmt.Println("\n  After merging, run: airskills push --force")
-			fmt.Println("  To see the full diff: diff", conflictMessages[0].localPath, conflictMessages[0].remotePath)
+			fmt.Print(conflictResolutionMessage(entries, !isTTY))
 		}
 
 		// Next-step hints for an agent. Skip when called from `sync` —

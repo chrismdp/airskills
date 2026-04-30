@@ -1,19 +1,27 @@
 package cmd
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
+	"time"
 
 	"github.com/chrismdp/airskills/config"
 	"github.com/chrismdp/airskills/telemetry"
 	"github.com/spf13/cobra"
 )
 
+var pullForceFlag bool
+var pullVersionFlag string
+
 func init() {
 	pullCmd.Flags().StringVar(&skillsetFlag, "skillset", "", "Personal skillset to pull against (default: your last-used skillset)")
+	pullCmd.Flags().BoolVar(&pullForceFlag, "force", false, "Overwrite local with remote for diverged skills (backs up local first)")
+	pullCmd.Flags().StringVar(&pullVersionFlag, "version", "", "Pull a specific commit version of a skill: pull --version <commit-hash> <skill>")
 	rootCmd.AddCommand(pullCmd)
 }
 
@@ -45,6 +53,13 @@ type pullEntry struct {
 }
 
 func runPull(cmd *cobra.Command, args []string) error {
+	if pullForceFlag {
+		return runPullForce(cmd, args)
+	}
+	if pullVersionFlag != "" {
+		return runPullVersion(cmd, args)
+	}
+
 	client, err := newAPIClientAuto()
 	loggedIn := err == nil
 
@@ -142,7 +157,7 @@ func runPull(cmd *cobra.Command, args []string) error {
 		fmt.Printf("  %s %d skills\n", dim("·"), len(lines))
 	}
 
-	var pulled, updated, diverged, failed int
+	var pulled, updated, diverged, failed, autoResolved int
 	var pulledNames []string
 	var divergedDetails []conflictDetail
 	var updateDetails []updateDetail
@@ -151,6 +166,22 @@ func runPull(cmd *cobra.Command, args []string) error {
 	conflictBase, _ := os.MkdirTemp("", "airskills-conflicts-")
 
 	for i, p := range toPull {
+		// Auto-resolved: local already matches remote — update marker silently, no download.
+		if p.reason == "auto-resolved" {
+			if p.marker != nil {
+				p.marker.ContentHash = p.skill.ContentHash
+				p.marker.Version = p.skill.Version
+			}
+			autoResolved++
+			if verbose {
+				fmt.Printf("  %s %s  %s\n", dim("-"), p.skill.Name, dim("auto-resolved (bytes match)"))
+			}
+			lines[i].status = "done"
+			lines[i].pct = 1
+			renderProgress(lines)
+			continue
+		}
+
 		lines[i].status = "downloading"
 		lines[i].pct = 0.5
 		renderProgress(lines)
@@ -309,7 +340,7 @@ func runPull(cmd *cobra.Command, args []string) error {
 			fmt.Printf("  %s %s %s → %s\n", cyan("↓"), u.name, u.oldVersion, u.newVersion)
 		}
 	}
-	fmt.Printf("\n%d pulled, %d updated, %d diverged, %d failed", pulled, updated, diverged, failed)
+	fmt.Printf("\n%d pulled, %d updated, %d diverged, %d auto-resolved, %d failed", pulled, updated, diverged, autoResolved, failed)
 	if len(missingWarnings) > 0 {
 		fmt.Printf(", %d missing locally", len(missingWarnings))
 	}
@@ -323,21 +354,20 @@ func runPull(cmd *cobra.Command, args []string) error {
 	}
 
 	if len(divergedDetails) > 0 {
-		fmt.Println("\n--- Diverged skills ---")
-		fmt.Println("These skills were edited locally AND remotely. The remote version")
-		fmt.Println("has been saved so you can merge the changes.")
-		var hasSourced bool
+		var entries []conflictEntry
 		for _, d := range divergedDetails {
-			fmt.Printf("\n  %s\n", d.name)
-			fmt.Printf("    Local:  %s\n", d.localDir)
-			fmt.Printf("    Remote: %s\n", d.remoteDir)
-			if entry, ok := syncState.Skills[d.name]; ok && entry.Source != nil {
-				hasSourced = true
-				fmt.Printf("    Source: %s/%s (owner's version has moved)\n",
-					entry.Source.Owner, entry.Source.Slug)
+			var source *skillSource
+			if entry, ok := syncState.Skills[d.name]; ok {
+				source = entry.Source
 			}
+			entries = append(entries, conflictEntry{
+				name:      d.name,
+				localDir:  d.localDir,
+				remoteDir: d.remoteDir,
+				source:    source,
+			})
 		}
-		fmt.Print(pullDivergenceFooter(hasSourced, !isTTY))
+		fmt.Print(conflictResolutionMessage(entries, !isTTY))
 	}
 
 	notifyResolvedSuggestions(client, syncState)
@@ -352,12 +382,15 @@ func runPull(cmd *cobra.Command, args []string) error {
 	}
 
 	telemetry.Capture("cli_pull", map[string]interface{}{
-		"pulled":    pulled,
-		"updated":   updated,
-		"diverged":  diverged,
-		"failed":    failed,
-		"missing":   len(missingWarnings),
-		"anonymous": false,
+		"pulled":        pulled,
+		"updated":       updated,
+		"diverged":      diverged,
+		"auto_resolved": autoResolved,
+		"force":         0,
+		"version":       0,
+		"failed":        failed,
+		"missing":       len(missingWarnings),
+		"anonymous":     false,
 	})
 
 	// Next-step hints for an agent. Skip when called from `sync` — sync
@@ -561,12 +594,22 @@ func decidePullActions(remoteSkills []apiSkill, localSkills map[string]string, s
 				continue
 			}
 
+			// Skip skills mid-transfer — handled by the transfer flow, not here.
+			if marker.Deleted || marker.MovedTo != "" {
+				continue
+			}
+
 			localFiles := readSkillFiles(localDir)
 			localHash := computeMerkleHash(localFiles)
 
-			if localHash == marker.ContentHash {
+			switch {
+			case localHash == remote.ContentHash:
+				// Auto-detect: local already matches remote bytes.
+				// Marker is stale from manual reconciliation — update silently.
+				actions = append(actions, pullEntry{skill: remote, reason: "auto-resolved", localDir: localDir, marker: marker})
+			case localHash == marker.ContentHash:
 				actions = append(actions, pullEntry{skill: remote, reason: "updated", localDir: localDir, marker: marker})
-			} else {
+			default:
 				actions = append(actions, pullEntry{skill: remote, reason: "diverged", localDir: localDir, marker: marker})
 			}
 			continue
@@ -580,4 +623,297 @@ func decidePullActions(remoteSkills []apiSkill, localSkills map[string]string, s
 	}
 
 	return actions, warnings
+}
+
+// runPullForce implements `airskills pull --force [skill...]`.
+// Downloads the remote version of diverged skills and overwrites local,
+// backing up current local files to ~/.airskills/undo/<ts>/<skill>/<agent>/ first.
+func runPullForce(cmd *cobra.Command, args []string) error {
+	if !isTTY {
+		return fmt.Errorf("pull --force requires confirmation. Run interactively or use 'airskills sync' after manual reconciliation.")
+	}
+
+	client, err := newAPIClientAuto()
+	if err != nil {
+		return fmt.Errorf("pull --force requires authentication: %w", err)
+	}
+
+	syncState := loadSyncState()
+	_, mirrorConflicts := mirrorLocalSkills(syncState)
+	mirrorConflictSet := map[string]bool{}
+	for _, c := range mirrorConflicts {
+		mirrorConflictSet[c.slug] = true
+	}
+
+	localSkills, err := scanSkillsFromAgents()
+	if err != nil {
+		return err
+	}
+
+	cfg, cfgErr := config.Load()
+	if cfgErr != nil {
+		return cfgErr
+	}
+	sendSlug, err := resolveSkillsetFlag(cfg, skillsetFlag, stdinReader(), stderrWriter())
+	if err != nil {
+		return err
+	}
+	remoteSkills, resolvedSlug, err := client.listPersonalSkillsInSkillset(sendSlug)
+	if err != nil {
+		return fmt.Errorf("fetching skills: %w", err)
+	}
+	rememberSkillsetAfterSuccess(cfg, resolvedSlug)
+
+	toPull, _ := decidePullActions(remoteSkills, localSkills, syncState)
+	divergedMap := map[string]pullEntry{}
+	for _, p := range toPull {
+		if p.reason == "diverged" {
+			divergedMap[p.skill.Name] = p
+		}
+	}
+
+	var targets []pullEntry
+	if len(args) > 0 {
+		for _, name := range args {
+			p, ok := divergedMap[name]
+			if !ok {
+				return fmt.Errorf("%s: not in conflict; nothing to force-pull. Use 'airskills sync' for normal updates.", name)
+			}
+			targets = append(targets, p)
+		}
+	} else {
+		for _, p := range divergedMap {
+			targets = append(targets, p)
+		}
+		if len(targets) == 0 {
+			fmt.Printf("  %s no diverged skills to force-pull\n", dim("·"))
+			return nil
+		}
+	}
+
+	// Block if any target has unresolved mirror conflicts
+	for _, p := range targets {
+		if mirrorConflictSet[p.skill.Name] {
+			return fmt.Errorf("%s: mirror conflict exists. Resolve mirror conflicts first, then retry.", p.skill.Name)
+		}
+	}
+
+	// Single confirmation prompt
+	names := make([]string, len(targets))
+	for i, p := range targets {
+		names[i] = p.skill.Name
+	}
+	fmt.Printf("Force-pull will overwrite local files for: %s\n", strings.Join(names, ", "))
+	fmt.Print("Previous local files will be backed up to ~/.airskills/undo/. Continue? [y/N] ")
+	reader := bufio.NewReader(os.Stdin)
+	answer, _ := reader.ReadString('\n')
+	if strings.TrimSpace(strings.ToLower(answer)) != "y" {
+		fmt.Println("Aborted.")
+		return nil
+	}
+
+	ts := time.Now().UTC().Format("20060102T150405Z")
+	var forcePulled int
+
+	for _, p := range targets {
+		skillName := p.skill.Name
+		if p.localDir != "" {
+			skillName = filepath.Base(p.localDir)
+		}
+
+		// Backup all local copies before overwriting
+		if _, err := backupSkillToUndo(skillName, ts); err != nil {
+			return fmt.Errorf("%s: %w. No files modified. Resolve and retry.", skillName, err)
+		}
+
+		// Download remote files
+		files, err := downloadSkillFiles(client, p.skill.ID)
+		if err != nil || len(files) == 0 {
+			fmt.Fprintf(os.Stderr, "  %s %s: download failed\n", yellow("!"), skillName)
+			continue
+		}
+
+		// Overwrite all agent dirs
+		if _, err := installSkillToAgents(skillName, files); err != nil {
+			fmt.Fprintf(os.Stderr, "  %s %s: install failed: %v\n", yellow("!"), skillName, err)
+			continue
+		}
+
+		// Update marker, preserving other fields (Source, etc.)
+		marker := syncState.Skills[skillName]
+		if marker == nil {
+			marker = &SyncEntry{Tool: "claude-code"}
+		}
+		marker.SkillID = p.skill.ID
+		marker.ContentHash = p.skill.ContentHash
+		marker.Version = p.skill.Version
+		syncState.Skills[skillName] = marker
+		forcePulled++
+		fmt.Printf("  %s %s\n", cyan("↓"), skillName)
+	}
+
+	saveSyncState(syncState)
+
+	if forcePulled > 0 {
+		fmt.Printf("\n%d pulled with --force. Backups in ~/.airskills/undo/%s/\n", forcePulled, ts)
+	}
+
+	telemetry.Capture("cli_pull", map[string]interface{}{
+		"pulled":        0,
+		"updated":       0,
+		"diverged":      0,
+		"auto_resolved": 0,
+		"force":         forcePulled,
+		"version":       0,
+		"failed":        0,
+		"anonymous":     false,
+	})
+
+	return nil
+}
+
+// runPullVersion implements `airskills pull --version <commit-hash> <skill>`.
+// Pulls a specific historical version of one skill, backing up local first.
+func runPullVersion(cmd *cobra.Command, args []string) error {
+	if len(args) != 1 {
+		return fmt.Errorf("pull --version requires exactly one skill name argument: airskills pull --version <commit-hash> <skill>")
+	}
+	skillName := args[0]
+	commitID := pullVersionFlag
+
+	if !isTTY {
+		return fmt.Errorf("pull --version requires confirmation. Run interactively.")
+	}
+
+	client, err := newAPIClientAuto()
+	if err != nil {
+		return fmt.Errorf("pull --version requires authentication: %w", err)
+	}
+
+	syncState := loadSyncState()
+	marker := syncState.Skills[skillName]
+	if marker == nil || marker.SkillID == "" {
+		return fmt.Errorf("%s: skill not tracked locally. Run 'airskills pull' first.", skillName)
+	}
+
+	// Shorten commit hash for display
+	displayCommit := commitID
+	if len(commitID) > 8 {
+		displayCommit = commitID[:8] + "..."
+	}
+	fmt.Printf("Pull version %s for skill %s? Previous local files will be backed up. Continue? [y/N] ", displayCommit, skillName)
+	reader := bufio.NewReader(os.Stdin)
+	answer, _ := reader.ReadString('\n')
+	if strings.TrimSpace(strings.ToLower(answer)) != "y" {
+		fmt.Println("Aborted.")
+		return nil
+	}
+
+	ts := time.Now().UTC().Format("20060102T150405Z")
+
+	// Backup
+	undoPath, err := backupSkillToUndo(skillName, ts)
+	if err != nil {
+		return fmt.Errorf("%s: %w. No files modified.", skillName, err)
+	}
+
+	// Download the specific commit via archive?commit=
+	files, err := client.getVersionContent(marker.SkillID, commitID)
+	if err != nil || len(files) == 0 {
+		if undoPath != "" {
+			os.RemoveAll(undoPath)
+		}
+		return fmt.Errorf("%s: failed to download version %s: %v", skillName, displayCommit, err)
+	}
+
+	// Overwrite all agent dirs
+	if _, err := installSkillToAgents(skillName, files); err != nil {
+		return fmt.Errorf("%s: install failed: %v", skillName, err)
+	}
+
+	// Update marker with the pulled commit's hash (computed from files)
+	marker.ContentHash = computeMerkleHash(files)
+	marker.Version = commitID
+	syncState.Skills[skillName] = marker
+	saveSyncState(syncState)
+
+	fmt.Printf("  %s %s (version %s)\n", cyan("↓"), skillName, displayCommit)
+	if undoPath != "" {
+		fmt.Printf("  Previous local saved to %s/\n  Restore: cp -r %s/%s/ ~/.claude/skills/%s/\n",
+			undoPath, undoPath, "claude-code", skillName)
+	}
+
+	telemetry.Capture("cli_pull", map[string]interface{}{
+		"pulled":        0,
+		"updated":       0,
+		"diverged":      0,
+		"auto_resolved": 0,
+		"force":         0,
+		"version":       1,
+		"failed":        0,
+		"anonymous":     false,
+	})
+
+	return nil
+}
+
+// backupSkillToUndo copies all installed copies of skillName to
+// ~/.airskills/undo/<timestamp>/<skillName>/<agentKey>/ before a force operation.
+// Returns the backup base path (or "" if the skill wasn't installed anywhere).
+// Returns an error if any backup copy fails — no partial backups are left on disk.
+func backupSkillToUndo(skillName, timestamp string) (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("backup to ~/.airskills/undo failed: %w", err)
+	}
+
+	detected := detectInstalledAgents()
+	if len(detected) == 0 {
+		detected = []agentDef{agents[0]}
+	}
+
+	undoBase := filepath.Join(home, ".airskills", "undo", timestamp, skillName)
+	var backedUp int
+
+	for _, a := range detected {
+		globalDir := resolveGlobalDir(home, a.GlobalDir)
+		skillDir := filepath.Join(globalDir, skillName)
+		if _, err := os.Stat(skillDir); err != nil {
+			continue // not installed in this agent
+		}
+
+		destDir := filepath.Join(undoBase, a.Key)
+		if err := copyDirRecursive(skillDir, destDir); err != nil {
+			os.RemoveAll(undoBase)
+			return "", fmt.Errorf("backup to ~/.airskills/undo/%s/%s/ failed: %w", timestamp, skillName, err)
+		}
+		backedUp++
+	}
+
+	if backedUp == 0 {
+		return "", nil
+	}
+	return undoBase, nil
+}
+
+// copyDirRecursive copies a directory tree from src to dst, preserving file modes.
+func copyDirRecursive(src, dst string) error {
+	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(src, path)
+		target := filepath.Join(dst, rel)
+		if info.IsDir() {
+			return os.MkdirAll(target, info.Mode())
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+			return err
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(target, data, info.Mode())
+	})
 }

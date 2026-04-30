@@ -42,52 +42,42 @@ func agentSuggestionInstructions(prompts []pendingSuggestionPrompt) string {
 	return b.String()
 }
 
-// pushConflictResolutionInstructions returns the per-conflict block shown
-// under the "--- Conflicts ---" header after a push reports a remote-content
-// change. TTY readers are told how to brief their agent; the non-TTY variant
-// addresses the agent directly since it's the one reading the output.
-func pushConflictResolutionInstructions(c conflictInfo, isAgent bool) string {
-	var b strings.Builder
-	if isAgent {
-		b.WriteString("\n  You are an agent. Merge the remote version with the local version,\n")
-		fmt.Fprintf(&b, "  keeping local changes where they conflict:\n")
-		fmt.Fprintf(&b, "    Remote: %s\n", c.remotePath)
-		fmt.Fprintf(&b, "    Local:  %s\n", c.localPath)
-		b.WriteString("  Show the user the diff before saving, and don't overwrite the\n")
-		b.WriteString("  local file until they've agreed.\n")
-	} else {
-		b.WriteString("\n  To resolve, tell your AI agent:\n")
-		fmt.Fprintf(&b, "  \"Merge %s (remote) with %s (my version),\n", c.remotePath, c.localPath)
-		b.WriteString("   keeping my local changes where possible. Show me the diff before saving.\"\n")
-	}
-	return b.String()
+// conflictEntry describes one skill in a conflict — used by conflictResolutionMessage.
+type conflictEntry struct {
+	name      string
+	localDir  string
+	remoteDir string
+	source    *skillSource
 }
 
-// pullDivergenceFooter returns the footer shown below the diverged-skills
-// list. When hasSourced is true it also explains the fork-specific options
-// (replace/merge/keep). The agent variant addresses the agent directly and
-// drops the "your agent can" framing that makes no sense when the agent is
-// the reader.
-func pullDivergenceFooter(hasSourced bool, isAgent bool) string {
+// conflictResolutionMessage renders the canonical three-outcome conflict
+// instructions used by both push and pull conflict paths. entries is the list
+// of skills currently in conflict; isAgent controls colour (off for
+// headless/agent surfaces, on for TTY). Both modes produce the same text
+// content — TTY mode adds ANSI colour where the existing helpers did.
+func conflictResolutionMessage(entries []conflictEntry, isAgent bool) string {
 	var b strings.Builder
-	if isAgent {
-		b.WriteString("\nYou are an agent. Merge the files shown above with the user, then\n")
-		b.WriteString("run 'airskills push --force' to resolve. Don't overwrite local\n")
-		b.WriteString("content until the user has reviewed the diff.\n")
-		if hasSourced {
-			b.WriteString("\nFor skills originally from another user, walk the user through\n")
-			b.WriteString("these options and let them choose:\n")
-			b.WriteString("  a) Replace their version with the owner's (accept the update)\n")
-			b.WriteString("  b) Merge the owner's changes into their version\n")
-			b.WriteString("  c) Keep their version as-is (skip)\n")
-		}
-	} else {
-		b.WriteString("\nMerge the files, then run 'airskills push --force' to resolve.\n")
-		if hasSourced {
-			b.WriteString("\nFor skills originally from another user, your agent can:\n")
-			b.WriteString("  a) Replace your version with the owner's (accept their update)\n")
-			b.WriteString("  b) Merge the owner's changes into your version\n")
-			b.WriteString("  c) Keep your version as-is (skip)\n")
+	for _, e := range entries {
+		fmt.Fprintf(&b, "\nConflict: %s has changed both locally and on the server.\n", e.name)
+		fmt.Fprintf(&b, "  Local:  %s\n", e.localDir)
+		fmt.Fprintf(&b, "  Remote: %s\n", e.remoteDir)
+		b.WriteString("\nPick ONE outcome, then run the matching command:\n\n")
+		fmt.Fprintf(&b, "  Keep your local version:            airskills push --force %s\n", e.name)
+		fmt.Fprintf(&b, "  Take remote, discard local:         airskills pull --force %s\n", e.name)
+		b.WriteString("  Custom merge (your edits + theirs): edit local, then airskills sync\n")
+		b.WriteString("                                      (auto-detect handles it if your\n")
+		b.WriteString("                                       local matches remote bytes; if not,\n")
+		fmt.Fprintf(&b, "                                       use airskills push --force %s)\n", e.name)
+		b.WriteString("\nRecovery:\n")
+		b.WriteString("  After push --force: previous remote kept in server-side version history\n")
+		fmt.Fprintf(&b, "                      → airskills pull --version <prev-commit> %s\n", e.name)
+		fmt.Fprintf(&b, "                      → list commits with: airskills log %s\n", e.name)
+		b.WriteString("  After pull --force: previous local saved to ~/.airskills/undo/<ts>/<skill>/<agent>/\n")
+		b.WriteString("                      → cp -r that back if needed (one subdir per agent)\n")
+		b.WriteString("\nNEVER edit airskills metadata (~/.config/airskills/sync.json) directly — the\n")
+		b.WriteString("CLI owns state. You can edit content files freely.\n")
+		if e.source != nil {
+			fmt.Fprintf(&b, "\n(This skill is sourced from %s/%s. Fork-aware behaviour — selective incorporation,\n suggestions back to upstream — is being designed in a separate spec. Today, push --force\n pushes to your namespace, not upstream.)\n", e.source.Owner, e.source.Slug)
 		}
 	}
 	return b.String()

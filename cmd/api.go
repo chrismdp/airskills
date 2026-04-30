@@ -485,11 +485,12 @@ func (c *apiClient) getSkill(id string) (*apiSkill, error) {
 
 // skillCommit represents a commit from the version history endpoint.
 type skillCommit struct {
-	ID        string   `json:"id"`
-	ParentIDs []string `json:"parent_ids"`
-	Message   string   `json:"message"`
-	CreatedAt string   `json:"created_at"`
-	PushedBy  *string  `json:"pushed_by"`
+	ID          string   `json:"id"`
+	ParentIDs   []string `json:"parent_ids"`
+	ContentHash string   `json:"content_hash,omitempty"`
+	Message     string   `json:"message"`
+	CreatedAt   string   `json:"created_at"`
+	PushedBy    *string  `json:"pushed_by"`
 }
 
 // getVersionHistory fetches the commit history for a skill.
@@ -505,6 +506,16 @@ func (c *apiClient) getVersionHistory(skillID string) ([]skillCommit, error) {
 		return nil, err
 	}
 	return result.Versions, nil
+}
+
+// getVersionContent downloads a skill's files as of a specific commit.
+// Uses GET /api/v1/skills/:id/archive?commit=<commitID>.
+func (c *apiClient) getVersionContent(skillID, commitID string) (map[string][]byte, error) {
+	archiveBody, err := c.get(fmt.Sprintf("/api/v1/skills/%s/archive?commit=%s", skillID, commitID))
+	if err != nil {
+		return nil, err
+	}
+	return extractTarGzToMap(bytes.NewReader(archiveBody))
 }
 
 // createSkill creates a skill metadata shell (files uploaded separately via archive).

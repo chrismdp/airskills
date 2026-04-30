@@ -56,69 +56,84 @@ func TestAgentSuggestionInstructionsEmpty(t *testing.T) {
 	}
 }
 
-// TestPushConflictInstructionsAgentVariant verifies that the per-conflict
-// block switches from "tell your AI agent" (TTY) to a direct imperative
-// addressing the agent when non-TTY, while still naming both file paths.
-func TestPushConflictInstructionsAgentVariant(t *testing.T) {
-	c := conflictInfo{
-		name:       "foo",
-		localPath:  "/tmp/local/SKILL.md",
-		remotePath: "/tmp/remote/SKILL.md",
+// TestConflictResolutionMessageFormat verifies the new three-outcome message
+// includes all required sections: three commands, two recovery paths, and the
+// "NEVER edit metadata" warning.
+func TestConflictResolutionMessageFormat(t *testing.T) {
+	entries := []conflictEntry{
+		{
+			name:      "my-skill",
+			localDir:  "/home/user/.claude/skills/my-skill",
+			remoteDir: "/tmp/airskills-conflicts/abc/my-skill",
+			source:    nil,
+		},
 	}
 
-	human := pushConflictResolutionInstructions(c, false)
-	agent := pushConflictResolutionInstructions(c, true)
+	msg := conflictResolutionMessage(entries, false)
 
-	if !strings.Contains(human, "tell your AI agent") {
-		t.Errorf("human variant should say 'tell your AI agent', got:\n%s", human)
-	}
-	if strings.Contains(agent, "tell your AI agent") {
-		t.Errorf("agent variant should not delegate back to the user's agent, got:\n%s", agent)
-	}
-	if !strings.Contains(strings.ToLower(agent), "you are an agent") {
-		t.Errorf("agent variant should open with 'You are an agent', got:\n%s", agent)
-	}
-	for _, want := range []string{c.localPath, c.remotePath} {
-		if !strings.Contains(human, want) {
-			t.Errorf("human variant missing %q", want)
+	for _, want := range []string{
+		"my-skill",
+		"push --force my-skill",
+		"pull --force my-skill",
+		"airskills sync",
+		"After push --force",
+		"After pull --force",
+		"NEVER edit airskills metadata",
+		"~/.config/airskills/sync.json",
+	} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("conflict message missing %q in:\n%s", want, msg)
 		}
-		if !strings.Contains(agent, want) {
-			t.Errorf("agent variant missing %q", want)
-		}
+	}
+
+	// Path display should show skill directories, not SKILL.md paths.
+	if strings.HasSuffix(strings.TrimSpace(msg), "SKILL.md") {
+		t.Errorf("conflict message should show directory paths, not SKILL.md file paths")
 	}
 }
 
-// TestPullDivergenceFooterAgentVariant verifies the footer under the
-// diverged-skills list swaps tone based on TTY and keeps the --force hint
-// and the sourced-skill options in both variants.
-func TestPullDivergenceFooterAgentVariant(t *testing.T) {
-	human := pullDivergenceFooter(true, false)
-	agent := pullDivergenceFooter(true, true)
+// TestConflictResolutionMessageSourcedCaveat verifies the sourced-skill caveat
+// is present when Source is non-nil and absent when it is nil.
+func TestConflictResolutionMessageSourcedCaveat(t *testing.T) {
+	base := conflictEntry{
+		name:      "borrowed",
+		localDir:  "/home/user/.claude/skills/borrowed",
+		remoteDir: "/tmp/conflict/borrowed",
+	}
 
-	for _, want := range []string{"push --force"} {
-		if !strings.Contains(human, want) {
-			t.Errorf("human footer missing %q", want)
+	withoutSource := conflictResolutionMessage([]conflictEntry{base}, false)
+	if strings.Contains(withoutSource, "sourced from") {
+		t.Errorf("message without Source should not include sourced caveat, got:\n%s", withoutSource)
+	}
+
+	withSource := base
+	withSource.source = &skillSource{Owner: "alice", Slug: "borrowed-original"}
+	withMsg := conflictResolutionMessage([]conflictEntry{withSource}, false)
+	if !strings.Contains(withMsg, "alice/borrowed-original") {
+		t.Errorf("message with Source should include owner/slug, got:\n%s", withMsg)
+	}
+	if !strings.Contains(withMsg, "sourced from") {
+		t.Errorf("message with Source should mention 'sourced from', got:\n%s", withMsg)
+	}
+}
+
+// TestConflictResolutionMessageTTYVsHeadless verifies both modes produce the
+// same text content (colour aside).
+func TestConflictResolutionMessageTTYVsHeadless(t *testing.T) {
+	entries := []conflictEntry{
+		{name: "foo", localDir: "/local/foo", remoteDir: "/remote/foo"},
+	}
+	tty := conflictResolutionMessage(entries, false)
+	headless := conflictResolutionMessage(entries, true)
+
+	// Both should contain the three outcomes
+	for _, want := range []string{"push --force foo", "pull --force foo", "airskills sync"} {
+		if !strings.Contains(tty, want) {
+			t.Errorf("TTY message missing %q", want)
 		}
-		if !strings.Contains(agent, want) {
-			t.Errorf("agent footer missing %q", want)
+		if !strings.Contains(headless, want) {
+			t.Errorf("headless message missing %q", want)
 		}
-	}
-
-	if !strings.Contains(human, "your agent can") {
-		t.Errorf("human footer should say 'your agent can', got:\n%s", human)
-	}
-	if strings.Contains(agent, "your agent can") {
-		t.Errorf("agent footer should not say 'your agent can' — it IS the agent, got:\n%s", agent)
-	}
-	if !strings.Contains(strings.ToLower(agent), "you are an agent") {
-		t.Errorf("agent footer should open with 'You are an agent', got:\n%s", agent)
-	}
-
-	// When hasSourced is false, the sourced-skill options block should be
-	// absent from both variants.
-	agentNoSource := pullDivergenceFooter(false, true)
-	if strings.Contains(agentNoSource, "a)") || strings.Contains(agentNoSource, "owner") {
-		t.Errorf("agent footer without hasSourced should not include fork options, got:\n%s", agentNoSource)
 	}
 }
 

@@ -152,3 +152,128 @@ func TestPullDetectsDiverged(t *testing.T) {
 		t.Errorf("expected reason 'diverged', got %q", actions[0].reason)
 	}
 }
+
+// TestPullAutoDetectClassification verifies that a tracked skill whose local
+// bytes already match the remote (stale marker from manual reconciliation) is
+// queued as 'auto-resolved', not 'diverged' or 'updated'.
+func TestPullAutoDetectClassification(t *testing.T) {
+	dir := t.TempDir()
+	skillDir := filepath.Join(dir, "tracked-skill")
+	os.MkdirAll(skillDir, 0755)
+	content := []byte("# reconciled content")
+	os.WriteFile(filepath.Join(skillDir, "SKILL.md"), content, 0644)
+
+	localFiles := readSkillFiles(skillDir)
+	localHash := computeMerkleHash(localFiles)
+
+	state := &SyncState{
+		Version: 1,
+		Skills: map[string]*SyncEntry{
+			"tracked-skill": {
+				SkillID:     "skill-1",
+				Version:     "1.0.0",
+				ContentHash: "stale-marker-hash", // different from both local and remote
+				Tool:        "claude-code",
+			},
+		},
+	}
+	// Remote hash now matches local (user reconciled manually)
+	remote := []apiSkill{
+		{ID: "skill-1", Name: "tracked-skill", Version: "1.1.0", ContentHash: localHash},
+	}
+	local := map[string]string{"tracked-skill": skillDir}
+
+	actions, warnings := decidePullActions(remote, local, state)
+	if len(warnings) != 0 {
+		t.Errorf("expected no warnings, got: %v", warnings)
+	}
+	if len(actions) != 1 {
+		t.Fatalf("expected 1 action, got %d: %+v", len(actions), actions)
+	}
+	if actions[0].reason != "auto-resolved" {
+		t.Errorf("expected reason 'auto-resolved', got %q", actions[0].reason)
+	}
+}
+
+// TestPullAutoDetectUpdatesMarker verifies that the auto-resolved reason
+// correctly updates the marker's ContentHash and Version to match remote.
+func TestPullAutoDetectUpdatesMarker(t *testing.T) {
+	dir := t.TempDir()
+	skillDir := filepath.Join(dir, "tracked-skill")
+	os.MkdirAll(skillDir, 0755)
+	content := []byte("# reconciled content")
+	os.WriteFile(filepath.Join(skillDir, "SKILL.md"), content, 0644)
+
+	localFiles := readSkillFiles(skillDir)
+	localHash := computeMerkleHash(localFiles)
+
+	marker := &SyncEntry{
+		SkillID:     "skill-1",
+		Version:     "1.0.0",
+		ContentHash: "stale-marker-hash",
+		Tool:        "claude-code",
+	}
+	state := &SyncState{
+		Version: 1,
+		Skills:  map[string]*SyncEntry{"tracked-skill": marker},
+	}
+	remote := []apiSkill{
+		{ID: "skill-1", Name: "tracked-skill", Version: "1.1.0", ContentHash: localHash},
+	}
+	local := map[string]string{"tracked-skill": skillDir}
+
+	actions, _ := decidePullActions(remote, local, state)
+	if len(actions) != 1 || actions[0].reason != "auto-resolved" {
+		t.Fatalf("expected one auto-resolved action, got %+v", actions)
+	}
+
+	// Simulate what the pull executor does for auto-resolved
+	p := actions[0]
+	if p.marker != nil {
+		p.marker.ContentHash = p.skill.ContentHash
+		p.marker.Version = p.skill.Version
+	}
+
+	if marker.ContentHash != localHash {
+		t.Errorf("marker ContentHash should be updated to remote hash %q, got %q", localHash, marker.ContentHash)
+	}
+	if marker.Version != "1.1.0" {
+		t.Errorf("marker Version should be updated to %q, got %q", "1.1.0", marker.Version)
+	}
+}
+
+// TestPullAutoDetectSkipsTransferredSkills verifies that skills with
+// Deleted=true are skipped by the auto-detect logic (handled by transfer flow).
+func TestPullAutoDetectSkipsTransferredSkills(t *testing.T) {
+	dir := t.TempDir()
+	skillDir := filepath.Join(dir, "tracked-skill")
+	os.MkdirAll(skillDir, 0755)
+	content := []byte("# some content")
+	os.WriteFile(filepath.Join(skillDir, "SKILL.md"), content, 0644)
+
+	localFiles := readSkillFiles(skillDir)
+	localHash := computeMerkleHash(localFiles)
+
+	state := &SyncState{
+		Version: 1,
+		Skills: map[string]*SyncEntry{
+			"tracked-skill": {
+				SkillID:     "skill-1",
+				Version:     "1.0.0",
+				ContentHash: "stale-marker-hash",
+				Deleted:     true, // mid-transfer
+				Tool:        "claude-code",
+			},
+		},
+	}
+	remote := []apiSkill{
+		{ID: "skill-1", Name: "tracked-skill", Version: "1.1.0", ContentHash: localHash},
+	}
+	local := map[string]string{"tracked-skill": skillDir}
+
+	actions, _ := decidePullActions(remote, local, state)
+	// Should be skipped (Deleted=true), so no action
+	if len(actions) != 0 {
+		t.Errorf("expected 0 actions for Deleted skill, got %d: %+v", len(actions), actions)
+	}
+}
