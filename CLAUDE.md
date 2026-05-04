@@ -88,3 +88,19 @@ GoReleaser builds cross-platform binaries on `v*` tag push. GitHub Actions workf
 E2e tests live in the platform repo. Run them with `CLI_REPO` pointing here to avoid re-cloning. Unit tests: `go test ./...`.
 
 **Write a failing test first, then fix the bug.** All behaviour changes and bug fixes must start with a test that demonstrates the problem, then make it pass.
+
+### Validation before declaring done
+
+Unit tests passing is not "done". Three steps before flipping a ticket from `doing` to `done`:
+
+1. **Read every doc the ticket links — all of them, in full.** If the ticket body says "Read those first — they're the contract this change implements" and lists four `[name](/path)` links, read all four. Inline summaries are summaries; the linked docs often spell out exact wording, exact column layouts, or sample output that the implementation is expected to match. Skipping any of them risks shipping behaviour-correct, contract-wrong code (right state machine, wrong user-facing strings).
+
+2. **Smoke-test the new behaviour by actually running the binary.** Build it, point it at an empty `HOME` if needed, and run every new or changed command:
+   ```bash
+   go build -o /tmp/airskills-test . && \
+     /tmp/airskills-test <new-command> --help && \
+     HOME=$(mktemp -d) /tmp/airskills-test <new-command>
+   ```
+   This catches the things `go test` doesn't: stale `Long` help text from a previous schema, missing flag wiring, output formatting that diverges from the contract docs' samples, panic on empty-state input. If the change touches the conflict UX or any output path, watch the actual output and compare it line-by-line to the cli-reference.mdx / docs samples.
+
+3. **If you can't run it locally, say so explicitly.** Don't ship while the only validation is unit tests + green CI. Either set up a local reproduction, or flag the gap in the commit message and the ticket Notes so the next engineer knows what wasn't validated.

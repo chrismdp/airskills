@@ -17,10 +17,11 @@ func init() {
 
 var listCmd = &cobra.Command{
 	Use:   "list",
-	Short: "Show skills in your skillset with descriptions and install status",
+	Short: "Show skills in your skillset with descriptions and sync state",
 	Long: `Lists skills in your airskills skillset, including the ones you
-have added from other people. Shows the description, version, and whether
-each skill is currently installed on this machine.
+have added from other people. Shows the description, version, and the
+sync state of each skill on this machine: synced, modified, modified*
+(sourced + customised + original moved), untracked, or — (server-only).
 
 Use --scope org to filter to org skills only.
 Use --deleted to show soft-deleted skills.`,
