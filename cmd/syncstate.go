@@ -20,6 +20,12 @@ type SyncEntry struct {
 	OwnerKind       string       `json:"owner_kind,omitempty"` // "user" or "org"
 	OwnerSlug       string       `json:"owner_slug,omitempty"` // e.g. "chrismdp" or "cherrypick"
 	Source          *skillSource `json:"source,omitempty"`
+	// ResolvedHash records the upstream content hash the user last
+	// reviewed against via `airskills resolve`. Only meaningful for
+	// sourced skills (Source != nil). Empty for owned skills, and for
+	// sourced skills the user has never resolved against — in that
+	// case the classifier treats any divergence as modified-pending.
+	ResolvedHash    string       `json:"resolved_hash,omitempty"`
 	SuggestionID    string       `json:"suggestion_id,omitempty"`
 	SuggestDeclined bool         `json:"suggest_declined,omitempty"`
 	// Deleted is set when the skill was transferred away and local edits
