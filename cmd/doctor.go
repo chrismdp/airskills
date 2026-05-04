@@ -3,12 +3,15 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 
+	"github.com/chrismdp/airskills/config"
 	"github.com/spf13/cobra"
 )
 
@@ -35,6 +38,15 @@ type refIssue struct {
 }
 
 func runDoctor(cmd *cobra.Command, args []string) error {
+	// Sync state: classify every known skill and surface any that are
+	// in a non-trivial state (modified, modified-pending, untracked,
+	// linked, untracked-conflict, not-local). Informational only —
+	// exit code stays gated on broken refs.
+	if states, err := gatherSyncState(); err == nil {
+		renderSyncStateReport(os.Stdout, states)
+		fmt.Println()
+	}
+
 	issues, err := walkBrokenRefs()
 	if err != nil {
 		return err
@@ -44,6 +56,75 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 		os.Exit(1)
 	}
 	return nil
+}
+
+// gatherSyncState assembles the inputs the classifier needs and returns
+// the cross-state of every skill on the machine. Best-effort: returns
+// an error only when local scanning fails. Server fetch failures
+// (offline, not logged in) yield local-only classification.
+func gatherSyncState() ([]SkillStateInfo, error) {
+	localSkills, err := scanSkillsFromAgents()
+	if err != nil {
+		return nil, err
+	}
+	syncState := loadSyncState()
+
+	var remote []apiSkill
+	if client, clientErr := newAPIClientAuto(); clientErr == nil {
+		if cfg, cfgErr := config.Load(); cfgErr == nil {
+			if r, _, fetchErr := client.listPersonalSkillsInSkillset(""); fetchErr == nil {
+				remote = r
+			}
+			_ = cfg
+		}
+	}
+
+	hashLocal := func(path string) string {
+		return computeMerkleHash(readSkillFiles(path))
+	}
+	return classifySkills(remote, localSkills, syncState, hashLocal), nil
+}
+
+// renderSyncStateReport writes the doctor "Sync state" section. Notable
+// states get one line each; synced skills get a single-line summary so
+// the output stays scannable.
+func renderSyncStateReport(w io.Writer, states []SkillStateInfo) {
+	fmt.Fprintln(w, "Sync state:")
+	if len(states) == 0 {
+		fmt.Fprintf(w, "  %s no skills tracked.\n", dim("·"))
+		return
+	}
+
+	sorted := make([]SkillStateInfo, len(states))
+	copy(sorted, states)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
+
+	syncedCount := 0
+	for _, s := range sorted {
+		if s.State == StateSynced {
+			syncedCount++
+			continue
+		}
+		switch s.State {
+		case StateModified:
+			fmt.Fprintf(w, "  %s %s — modified locally (sync to publish)\n", yellow("M"), s.Name)
+		case StateModifiedPending:
+			fmt.Fprintf(w, "  %s %s — modified, original has moved → 'airskills resolve %s' or 'airskills pull --force %s'\n",
+				yellow("M*"), s.Name, s.Name, s.Name)
+		case StateUntracked:
+			fmt.Fprintf(w, "  %s %s — untracked locally (no marker; arrived outside airskills?)\n", yellow("?"), s.Name)
+		case StateLinked:
+			fmt.Fprintf(w, "  %s %s — bytes match server; next sync will link silently\n", green("·"), s.Name)
+		case StateUntrackedConflict:
+			fmt.Fprintf(w, "  %s %s — server has a same-named skill with different bytes; next sync will surface a conflict\n",
+				red("!"), s.Name)
+		case StateNotLocal:
+			fmt.Fprintf(w, "  %s %s — on server, not installed here ('airskills sync' or 'airskills add')\n", dim("—"), s.Name)
+		}
+	}
+	if syncedCount > 0 {
+		fmt.Fprintf(w, "  %s %d synced.\n", green("✓"), syncedCount)
+	}
 }
 
 // walkBrokenRefs scans all locally installed skills for broken /ref references

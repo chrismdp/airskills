@@ -3,6 +3,7 @@ package cmd
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -166,5 +167,51 @@ func TestWalkBrokenRefsDetectsUnknown(t *testing.T) {
 	}
 	if issues[0].status != "unknown" {
 		t.Errorf("expected status=unknown, got %q", issues[0].status)
+	}
+}
+
+func TestRenderSyncStateReportSummarisesSynced(t *testing.T) {
+	var buf strings.Builder
+	renderSyncStateReport(&buf, []SkillStateInfo{
+		{Name: "a", State: StateSynced},
+		{Name: "b", State: StateSynced},
+	})
+	out := buf.String()
+	if !strings.Contains(out, "2 synced") {
+		t.Errorf("expected '2 synced' summary, got: %q", out)
+	}
+}
+
+func TestRenderSyncStateReportSurfacesNotableStates(t *testing.T) {
+	var buf strings.Builder
+	renderSyncStateReport(&buf, []SkillStateInfo{
+		{Name: "owned-edited", State: StateModified},
+		{Name: "sourced-pending", State: StateModifiedPending},
+		{Name: "drive-by", State: StateUntracked},
+		{Name: "matches-server", State: StateLinked},
+		{Name: "name-collides", State: StateUntrackedConflict},
+		{Name: "elsewhere", State: StateNotLocal},
+	})
+	out := buf.String()
+	for _, want := range []string{
+		"owned-edited", "modified locally",
+		"sourced-pending", "airskills resolve sourced-pending",
+		"drive-by", "untracked",
+		"matches-server", "link silently",
+		"name-collides", "conflict",
+		"elsewhere", "not installed",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("expected output to mention %q, got:\n%s", want, out)
+		}
+	}
+}
+
+func TestRenderSyncStateReportEmpty(t *testing.T) {
+	var buf strings.Builder
+	renderSyncStateReport(&buf, nil)
+	out := buf.String()
+	if !strings.Contains(out, "no skills tracked") {
+		t.Errorf("expected empty-state message, got: %q", out)
 	}
 }
