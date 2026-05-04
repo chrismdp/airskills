@@ -69,19 +69,44 @@ Use --deleted to show soft-deleted skills.`,
 		}
 
 		localNames, _ := scanSkillsFromAgents()
+		syncState := loadSyncState()
+		hashLocal := func(p string) string { return computeMerkleHash(readSkillFiles(p)) }
+		states := classifySkills(skills, localNames, syncState, hashLocal)
+		stateByName := map[string]SkillState{}
+		for _, st := range states {
+			stateByName[st.Name] = st.State
+		}
 
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(w, "NAME\tDESCRIPTION\tVERSION\tINSTALLED")
+		fmt.Fprintln(w, "NAME\tDESCRIPTION\tVERSION\tSTATE")
 		for _, s := range skills {
-			installed := "no"
-			if _, exists := localNames[s.Name]; exists {
-				installed = "yes"
-			}
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", s.Name, truncateDescription(s.Description, 60), s.Version, installed)
+			state := stateByName[s.Name]
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", s.Name, truncateDescription(s.Description, 60), s.Version, listStateLabel(state))
 		}
 		w.Flush()
 		return nil
 	},
+}
+
+// listStateLabel maps a classifier SkillState to the short label that
+// appears in `airskills list`'s STATE column. It compresses transient
+// pull-time states (linked, untracked-conflict) back into "untracked"
+// because — from the perspective of a user reading list — those are
+// just untracked dirs the next sync will resolve.
+func listStateLabel(s SkillState) string {
+	switch s {
+	case StateSynced:
+		return "synced"
+	case StateModified:
+		return "modified"
+	case StateModifiedPending:
+		return "modified*"
+	case StateUntracked, StateLinked, StateUntrackedConflict:
+		return "untracked"
+	case StateNotLocal:
+		return "—"
+	}
+	return "—"
 }
 
 // truncateDescription shortens a description for the list table, collapsing
