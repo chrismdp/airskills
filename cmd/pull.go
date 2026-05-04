@@ -47,7 +47,7 @@ type updateDetail struct {
 
 type pullEntry struct {
 	skill    apiSkill
-	reason   string // "new", "updated", or "diverged"
+	reason   string // "new", "updated", "diverged", "transferred", "auto-resolved", "linked", "untracked-conflict"
 	localDir string
 	marker   *SyncEntry
 }
@@ -182,6 +182,25 @@ func runPull(cmd *cobra.Command, args []string) error {
 			continue
 		}
 
+		// Linked: an untracked local dir whose bytes match the server's
+		// copy. Write the marker silently — no download, no install. The
+		// classifier on the next sync will see this as plain "synced".
+		if p.reason == "linked" {
+			dirName := filepath.Base(p.localDir)
+			syncState.Skills[dirName] = &SyncEntry{
+				SkillID:     p.skill.ID,
+				Version:     p.skill.Version,
+				ContentHash: p.skill.ContentHash,
+				Tool:        "claude-code",
+			}
+			autoResolved++
+			fmt.Printf("  %s %s %s\n", green("·"), p.skill.Name, dim("linked (bytes match server, no download)"))
+			lines[i].status = "linked"
+			lines[i].pct = 1
+			renderProgress(lines)
+			continue
+		}
+
 		lines[i].status = "downloading"
 		lines[i].pct = 0.5
 		renderProgress(lines)
@@ -194,12 +213,16 @@ func runPull(cmd *cobra.Command, args []string) error {
 			continue
 		}
 
-		if p.reason == "diverged" {
+		if p.reason == "diverged" || p.reason == "untracked-conflict" {
 			conflictDir := filepath.Join(conflictBase, p.skill.Name)
 			os.MkdirAll(conflictDir, 0755)
 			_ = writeFilesToDir(conflictDir, files)
 
-			lines[i].status = "DIVERGED"
+			if p.reason == "untracked-conflict" {
+				lines[i].status = "UNTRACKED-CONFLICT"
+			} else {
+				lines[i].status = "DIVERGED"
+			}
 			lines[i].pct = 1
 			renderProgress(lines)
 			diverged++
@@ -548,7 +571,8 @@ func notifyResolvedSuggestions(client *apiClient, syncState *SyncState) {
 //   - tracked + local missing: warn and skip (treat as intentional removal —
 //     user should run 'airskills rm <name>' to delete server-side, or
 //     'airskills pull <name>' to restore)
-//   - untracked + local with same name: skip (don't clobber unrelated dirs)
+//   - untracked + local with same name + bytes match: "linked" (silent claim)
+//   - untracked + local with same name + bytes differ: "untracked-conflict"
 //   - untracked + no local: "new"
 func decidePullActions(remoteSkills []apiSkill, localSkills map[string]string, syncState *SyncState) ([]pullEntry, []string) {
 	skillIdToName := map[string]string{}
@@ -615,7 +639,22 @@ func decidePullActions(remoteSkills []apiSkill, localSkills map[string]string, s
 			continue
 		}
 
-		if _, exists := localSkills[remote.Name]; exists {
+		if localDir, exists := localSkills[remote.Name]; exists {
+			// Untracked local dir whose name matches a server skill. The
+			// classifier vocabulary calls this either "linked" (bytes
+			// match → silent claim on next sync) or "untracked-conflict"
+			// (bytes differ → surface via existing conflict UX).
+			localFiles := readSkillFiles(localDir)
+			localHash := computeMerkleHash(localFiles)
+			if remote.ContentHash != "" && localHash == remote.ContentHash {
+				actions = append(actions, pullEntry{
+					skill: remote, reason: "linked", localDir: localDir,
+				})
+			} else {
+				actions = append(actions, pullEntry{
+					skill: remote, reason: "untracked-conflict", localDir: localDir,
+				})
+			}
 			continue
 		}
 

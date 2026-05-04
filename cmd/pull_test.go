@@ -68,18 +68,62 @@ func TestPullDownloadsNewRemote(t *testing.T) {
 	}
 }
 
-// TestPullSkipsUntrackedLocalConflict verifies that when a remote skill has the
-// same name as an untracked local dir, pull leaves the local dir alone.
-func TestPullSkipsUntrackedLocalConflict(t *testing.T) {
+// TestPullDecidesLinkedForMatchingBytes verifies that when a remote skill
+// shares its name with an untracked local dir AND the bytes match exactly,
+// pull queues a "linked" action — the marker gets claimed silently on the
+// next sync, no download, no conflict.
+//
+// Replaces the older TestPullSkipsUntrackedLocalConflict, which asserted
+// the silent-skip behaviour we are deliberately reversing as part of
+// doc/changes/cli-untracked-collision-and-resolve.md.
+func TestPullDecidesLinkedForMatchingBytes(t *testing.T) {
+	dir := t.TempDir()
+	skillDir := filepath.Join(dir, "my-skill")
+	os.MkdirAll(skillDir, 0755)
+	os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("# shared content"), 0644)
+	localFiles := readSkillFiles(skillDir)
+	matchingHash := computeMerkleHash(localFiles)
+
 	state := &SyncState{Version: 1, Skills: map[string]*SyncEntry{}}
 	remote := []apiSkill{
-		{ID: "skill-1", Name: "my-skill", Version: "1.0.0", ContentHash: "h1"},
+		{ID: "skill-1", Name: "my-skill", Version: "1.0.0", ContentHash: matchingHash},
 	}
-	local := map[string]string{"my-skill": "/tmp/fake"}
+	local := map[string]string{"my-skill": skillDir}
 
 	actions, _ := decidePullActions(remote, local, state)
-	if len(actions) != 0 {
-		t.Errorf("expected 0 actions (untracked local with same name), got %d", len(actions))
+	if len(actions) != 1 {
+		t.Fatalf("expected 1 action (linked), got %d: %+v", len(actions), actions)
+	}
+	if actions[0].reason != "linked" {
+		t.Errorf("expected reason 'linked', got %q", actions[0].reason)
+	}
+}
+
+// TestPullDecidesUntrackedConflictForDifferingBytes verifies that when a
+// remote skill shares its name with an untracked local dir BUT the bytes
+// differ, pull queues an "untracked-conflict" action — surfaced via the
+// existing conflict UX so the user can merge or pick a side.
+func TestPullDecidesUntrackedConflictForDifferingBytes(t *testing.T) {
+	dir := t.TempDir()
+	skillDir := filepath.Join(dir, "my-skill")
+	os.MkdirAll(skillDir, 0755)
+	os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("# my local copy"), 0644)
+
+	state := &SyncState{Version: 1, Skills: map[string]*SyncEntry{}}
+	remote := []apiSkill{
+		{ID: "skill-1", Name: "my-skill", Version: "1.0.0", ContentHash: "different-server-hash"},
+	}
+	local := map[string]string{"my-skill": skillDir}
+
+	actions, _ := decidePullActions(remote, local, state)
+	if len(actions) != 1 {
+		t.Fatalf("expected 1 action (untracked-conflict), got %d", len(actions))
+	}
+	if actions[0].reason != "untracked-conflict" {
+		t.Errorf("expected reason 'untracked-conflict', got %q", actions[0].reason)
+	}
+	if actions[0].localDir != skillDir {
+		t.Errorf("expected localDir=%q, got %q", skillDir, actions[0].localDir)
 	}
 }
 
