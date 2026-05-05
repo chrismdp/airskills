@@ -3,9 +3,12 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
+	"sort"
 	"strings"
+	"text/tabwriter"
 
 	"github.com/spf13/cobra"
 )
@@ -14,15 +17,89 @@ import (
 
 var orgCmd = &cobra.Command{
 	Use:   "org",
-	Short: "Organisation-scoped commands (members, skillsets)",
+	Short: "Organisation-scoped commands (list, members, skillsets)",
 	Long: `Commands that operate on orgs you're a member of.
 
 Example:
+  airskills org list                              # show every org you belong to
   airskills org member skillsets alice            # list alice's skillsets
   airskills org member skillsets alice --set a,b  # replace alice's set
   airskills org member skillsets alice --add foo  # add one
   airskills org member skillsets alice --remove foo
 `,
+}
+
+// --- airskills org list ---
+
+var orgListCmd = &cobra.Command{
+	Use:   "list",
+	Short: "Show every org you belong to",
+	Long: `Lists the organisations you're a member of, with your role and the
+member count. Hits GET /api/v1/organizations.
+
+Org creation, deletion, and settings live in the dashboard; this command
+is read-only.`,
+	Args: cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		client, err := newAPIClientAuto()
+		if err != nil {
+			return err
+		}
+		orgs, err := listCallerOrgs(client)
+		if err != nil {
+			return err
+		}
+		renderOrgList(os.Stdout, orgs)
+		return nil
+	},
+}
+
+type apiOrg struct {
+	ID          string `json:"id"`
+	Slug        string `json:"slug"`
+	Name        string `json:"name"`
+	Role        string `json:"role"`
+	MemberCount int    `json:"member_count"`
+}
+
+func listCallerOrgs(c *apiClient) ([]apiOrg, error) {
+	body, err := c.get("/api/v1/organizations")
+	if err != nil {
+		return nil, fmt.Errorf("looking up your organizations: %w", err)
+	}
+	var resp struct {
+		Organizations []apiOrg `json:"organizations"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, fmt.Errorf("invalid organizations response: %w", err)
+	}
+	return resp.Organizations, nil
+}
+
+func renderOrgList(w io.Writer, orgs []apiOrg) {
+	if len(orgs) == 0 {
+		fmt.Fprintln(w, "(no organizations — visit https://airskills.ai/dashboard/organizations/new to create one)")
+		return
+	}
+	sorted := make([]apiOrg, len(orgs))
+	copy(sorted, orgs)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		return sorted[i].Slug < sorted[j].Slug
+	})
+	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, "SLUG\tROLE\tMEMBERS\tNAME")
+	for _, o := range sorted {
+		role := o.Role
+		if role == "" {
+			role = "—"
+		}
+		name := o.Name
+		if name == "" {
+			name = "—"
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%d\t%s\n", o.Slug, role, o.MemberCount, name)
+	}
+	tw.Flush()
 }
 
 var orgMemberCmd = &cobra.Command{
@@ -317,6 +394,7 @@ func init() {
 	orgMemberSkillsetsCmd.Flags().StringVar(&orgMemberOrgFlag, "org", "", "Org slug to target (required if you belong to multiple orgs)")
 
 	orgMemberCmd.AddCommand(orgMemberSkillsetsCmd)
+	orgCmd.AddCommand(orgListCmd)
 	orgCmd.AddCommand(orgMemberCmd)
 	rootCmd.AddCommand(orgCmd)
 }

@@ -156,20 +156,11 @@ func findSkillByName(c *apiClient, name string) (*apiSkill, error) {
 // member of that org. Uses /api/v1/organizations (multi-org endpoint) so users
 // who belong to multiple orgs can target any of them.
 func lookupCallerOrgID(c *apiClient, slug string) (string, error) {
-	body, err := c.get("/api/v1/organizations")
+	orgs, err := listCallerOrgs(c)
 	if err != nil {
-		return "", fmt.Errorf("looking up your organizations: %w", err)
+		return "", err
 	}
-	var resp struct {
-		Organizations []struct {
-			ID   string `json:"id"`
-			Slug string `json:"slug"`
-		} `json:"organizations"`
-	}
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return "", fmt.Errorf("invalid organizations response: %w", err)
-	}
-	for _, org := range resp.Organizations {
+	for _, org := range orgs {
 		if org.Slug == slug {
 			return org.ID, nil
 		}

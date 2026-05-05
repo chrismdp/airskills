@@ -1,10 +1,69 @@
 package cmd
 
 import (
+	"bytes"
 	"reflect"
 	"strings"
 	"testing"
 )
+
+func TestRenderOrgListEmpty(t *testing.T) {
+	var buf bytes.Buffer
+	renderOrgList(&buf, nil)
+	got := buf.String()
+	if !strings.Contains(got, "no organizations") {
+		t.Errorf("empty render should mention 'no organizations', got: %q", got)
+	}
+	if !strings.Contains(got, "dashboard/organizations/new") {
+		t.Errorf("empty render should point to the dashboard create URL, got: %q", got)
+	}
+}
+
+func TestRenderOrgListSortsBySlug(t *testing.T) {
+	orgs := []apiOrg{
+		{Slug: "zeta", Name: "Zeta Corp", Role: "member", MemberCount: 3},
+		{Slug: "alpha", Name: "Alpha Co", Role: "admin", MemberCount: 7},
+		{Slug: "mu", Name: "Mu Ltd", Role: "member", MemberCount: 1},
+	}
+	var buf bytes.Buffer
+	renderOrgList(&buf, orgs)
+	out := buf.String()
+
+	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+	if len(lines) < 4 {
+		t.Fatalf("expected header + 3 rows, got %d lines: %q", len(lines), out)
+	}
+	if !strings.HasPrefix(lines[0], "SLUG") {
+		t.Errorf("first line should be the header, got: %q", lines[0])
+	}
+	idxAlpha := strings.Index(out, "alpha")
+	idxMu := strings.Index(out, "mu")
+	idxZeta := strings.Index(out, "zeta")
+	if !(idxAlpha < idxMu && idxMu < idxZeta) {
+		t.Errorf("rows should be alphabetical by slug, got order: alpha=%d mu=%d zeta=%d\n%s",
+			idxAlpha, idxMu, idxZeta, out)
+	}
+	if !strings.Contains(out, "admin") || !strings.Contains(out, "Alpha Co") {
+		t.Errorf("output should include role + name fields, got: %q", out)
+	}
+}
+
+func TestRenderOrgListMissingFieldsFallBackToDash(t *testing.T) {
+	orgs := []apiOrg{{Slug: "bare", MemberCount: 1}}
+	var buf bytes.Buffer
+	renderOrgList(&buf, orgs)
+	out := buf.String()
+	// Both role and name fall back to "—" when the server response
+	// doesn't carry them. The literal em-dash character must appear in
+	// the row, not elsewhere.
+	rows := strings.Split(strings.TrimRight(out, "\n"), "\n")
+	if len(rows) < 2 {
+		t.Fatalf("expected header + 1 row, got: %q", out)
+	}
+	if !strings.Contains(rows[1], "—") {
+		t.Errorf("missing-field row should render em-dash placeholders, got: %q", rows[1])
+	}
+}
 
 func TestSplitCSV(t *testing.T) {
 	cases := []struct {
