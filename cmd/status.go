@@ -83,58 +83,13 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	hr := <-healthCh
 	pendingSuggestions := <-suggCh
 
-	skillIdToName := map[string]string{}
-	for name, entry := range syncState.Skills {
-		if entry.SkillID != "" {
-			skillIdToName[entry.SkillID] = name
-		}
-	}
-
-	var toPush, toPull, toUpdate, upstream []string
-
-	remoteByName := map[string]bool{}
-	for _, remote := range sr.skills {
-		remoteByName[remote.Name] = true
-
-		if remote.HasUpstreamUpdate() {
-			upstream = append(upstream, remote.Name)
-		}
-
-		trackedName := ""
-		if name, ok := skillIdToName[remote.ID]; ok {
-			trackedName = name
-		}
-
-		if trackedName != "" {
-			if _, exists := localSkills[trackedName]; !exists {
-				continue
-			}
-			marker := syncState.Skills[trackedName]
-			if marker.ContentHash != "" && remote.ContentHash != "" && marker.ContentHash != remote.ContentHash {
-				toUpdate = append(toUpdate, trackedName)
-			}
-			continue
-		}
-
-		if _, exists := localSkills[remote.Name]; !exists {
-			toPull = append(toPull, remote.Name)
-		}
-	}
-
-	for name := range localSkills {
-		if !remoteByName[name] {
-			toPush = append(toPush, name)
-		}
-	}
-
-	sort.Strings(toPush)
-	sort.Strings(toPull)
-	sort.Strings(toUpdate)
-	sort.Strings(upstream)
+	buckets := classifyForStatus(sr.skills, localSkills, syncState)
+	toPush, toPull, toUpdate, upstream, untracked := buckets.toPush, buckets.toPull, buckets.toUpdate, buckets.upstream, buckets.untracked
 
 	needPush := len(toPush)
 	needPull := len(toPull)
 	needUpdate := len(toUpdate)
+	needUntracked := len(untracked)
 	upstreamUpdates := len(upstream)
 
 	// Skip capture on the shell-prompt hot path (quiet mode is used by
@@ -146,12 +101,13 @@ func runStatus(cmd *cobra.Command, args []string) error {
 			"need_push":           needPush,
 			"need_pull":           needPull,
 			"need_update":         needUpdate,
+			"need_untracked":      needUntracked,
 			"upstream_updates":    upstreamUpdates,
 			"pending_suggestions": pendingSuggestions,
 		})
 	}
 
-	if needPush == 0 && needPull == 0 && needUpdate == 0 && upstreamUpdates == 0 && pendingSuggestions == 0 && hr.latestCLI == "" {
+	if needPush == 0 && needPull == 0 && needUpdate == 0 && needUntracked == 0 && upstreamUpdates == 0 && pendingSuggestions == 0 && hr.latestCLI == "" {
 		if !quiet {
 			fmt.Fprintf(os.Stderr, "[airskills] %s\n", green("✓ in sync"))
 			printAgentNextSteps(os.Stderr, []agentNextStep{
@@ -175,6 +131,9 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	if upstreamUpdates > 0 {
 		parts = append(parts, cyan(fmt.Sprintf("⬆ %d upstream", upstreamUpdates)))
 	}
+	if needUntracked > 0 {
+		parts = append(parts, yellow(fmt.Sprintf("? %d untracked", needUntracked)))
+	}
 	if pendingSuggestions > 0 {
 		parts = append(parts, cyan(fmt.Sprintf("? %d suggestions", pendingSuggestions)))
 	}
@@ -182,7 +141,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	// Pick the most relevant hint for the one-line command: suggestions
 	// trumps sync because review is a separate workflow.
 	hint := "airskills sync"
-	if pendingSuggestions > 0 && needPush == 0 && needPull == 0 && needUpdate == 0 && upstreamUpdates == 0 {
+	if pendingSuggestions > 0 && needPush == 0 && needPull == 0 && needUpdate == 0 && needUntracked == 0 && upstreamUpdates == 0 {
 		hint = "airskills review"
 	}
 	fmt.Fprintf(os.Stderr, "[airskills] %s — run '%s'\n", strings.Join(parts, ", "), hint)
@@ -196,6 +155,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		printStatusGroup("to pull", toPull, cyan)
 		printStatusGroup("changed", toUpdate, yellow)
 		printStatusGroup("upstream", upstream, cyan)
+		printStatusGroup("untracked", untracked, yellow)
 	}
 
 	if hr.latestCLI != "" {
@@ -214,6 +174,9 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		if needPush > 0 {
 			steps = append(steps, agentNextStep{Cmd: "airskills push", Why: "upload local changes"})
 		}
+		if needUntracked > 0 {
+			steps = append(steps, agentNextStep{Cmd: "airskills sync", Why: "reconcile untracked skills (server has same name, no local marker)"})
+		}
 		if pendingSuggestions > 0 {
 			steps = append(steps, agentNextStep{Cmd: "airskills review", Why: "review incoming suggestions"})
 		}
@@ -221,6 +184,77 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
+}
+
+// statusBuckets is the cross-state of skills for the status command.
+// untracked: a remote-known skill exists locally with no marker — next
+// sync would surface a conflict (silent in this command before).
+type statusBuckets struct {
+	toPush, toPull, toUpdate, upstream, untracked []string
+}
+
+// classifyForStatus is pure — no I/O — so it's unit-testable. The status
+// command needs five buckets:
+//
+//   - toPush:    local skill, no remote
+//   - toPull:    remote skill, no local
+//   - toUpdate:  tracked, marker hash differs from remote hash
+//   - upstream:  remote has an upstream update available (sourced)
+//   - untracked: remote skill, local exists, no marker — needs reconciling
+func classifyForStatus(remoteSkills []apiSkill, localSkills map[string]string, syncState *SyncState) statusBuckets {
+	skillIdToName := map[string]string{}
+	if syncState != nil {
+		for name, entry := range syncState.Skills {
+			if entry != nil && entry.SkillID != "" {
+				skillIdToName[entry.SkillID] = name
+			}
+		}
+	}
+
+	var b statusBuckets
+	remoteByName := map[string]bool{}
+	for _, remote := range remoteSkills {
+		remoteByName[remote.Name] = true
+
+		if remote.HasUpstreamUpdate() {
+			b.upstream = append(b.upstream, remote.Name)
+		}
+
+		trackedName := skillIdToName[remote.ID]
+
+		if trackedName != "" {
+			if _, exists := localSkills[trackedName]; !exists {
+				continue
+			}
+			marker := syncState.Skills[trackedName]
+			if marker != nil && marker.ContentHash != "" && remote.ContentHash != "" && marker.ContentHash != remote.ContentHash {
+				b.toUpdate = append(b.toUpdate, trackedName)
+			}
+			continue
+		}
+
+		// No marker. If local dir exists with the same name, the next
+		// sync will surface a conflict — flag it now rather than going
+		// silent like the previous implementation did.
+		if _, exists := localSkills[remote.Name]; exists {
+			b.untracked = append(b.untracked, remote.Name)
+		} else {
+			b.toPull = append(b.toPull, remote.Name)
+		}
+	}
+
+	for name := range localSkills {
+		if !remoteByName[name] {
+			b.toPush = append(b.toPush, name)
+		}
+	}
+
+	sort.Strings(b.toPush)
+	sort.Strings(b.toPull)
+	sort.Strings(b.toUpdate)
+	sort.Strings(b.upstream)
+	sort.Strings(b.untracked)
+	return b
 }
 
 // printStatusGroup prints a detail block for one action category, e.g.
