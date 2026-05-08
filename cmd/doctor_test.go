@@ -22,6 +22,48 @@ func agentForDir(t *testing.T, dir string) agentDef {
 	return agentDef{Name: "test", GlobalDir: rel}
 }
 
+// TestExtractRefSlugsRejectsFalsePositives verifies that filesystem paths,
+// URL path components, and built-in Claude Code slash commands are not
+// reported as broken skill references. Caught in the wild on a real install
+// where doctor surfaced 28 false positives across 21 skills (e.g. /tmp,
+// /dev, /clear, /rename, /v3, /v4, /broadcasts, /webinar).
+func TestExtractRefSlugsRejectsFalsePositives(t *testing.T) {
+	cases := []struct {
+		name string
+		text string
+	}{
+		{"filesystem paths", "Write to /tmp/scratch.txt and read /dev/null. Path /var/log/x.log."},
+		{"placeholder /path", "Replace /path/to/file with the real path."},
+		{"built-in CC commands", "Look for /clear or /rename noise; ignore /init and /help."},
+		{"trailing slash on URLs", "Visit /webinar/ and /assets/img/foo.jpg."},
+		{"URL path with another segment", `Hit "https://api.kit.com/v4/broadcasts" with curl.`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			slugs := extractRefSlugs(tc.text)
+			if len(slugs) > 0 {
+				t.Errorf("expected no slugs from %q, got %v", tc.text, slugs)
+			}
+		})
+	}
+}
+
+// TestExtractRefSlugsKeepsRealRefsAlongsideFalsePositives verifies the
+// tightened regex still catches legitimate references mixed with noise.
+func TestExtractRefSlugsKeepsRealRefsAlongsideFalsePositives(t *testing.T) {
+	text := `Write to /tmp/x then call /heartbeat. Use /clear to clear, then run /retro.`
+	slugs := extractRefSlugs(text)
+	want := map[string]bool{"heartbeat": true, "retro": true}
+	if len(slugs) != len(want) {
+		t.Fatalf("expected %d real refs, got %d: %v", len(want), len(slugs), slugs)
+	}
+	for _, s := range slugs {
+		if !want[s] {
+			t.Errorf("unexpected slug: %q", s)
+		}
+	}
+}
+
 // TestExtractRefSlugsBasic verifies that /slug tokens in SKILL.md body are extracted.
 func TestExtractRefSlugsBasic(t *testing.T) {
 	text := `---

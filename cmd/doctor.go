@@ -226,8 +226,34 @@ func resolveRefs(client *apiClient, skillID string, refs []string) ([]resolveRef
 	return resp.Results, nil
 }
 
-// extractRefSlugs extracts /slug references from SKILL.md text, stripping frontmatter.
-// Mirrors the platform's extractDependencySlugs logic.
+// refSlugDenylist filters out tokens that match the regex but are never
+// skill references: filesystem mount points, URL path placeholders, and
+// built-in Claude Code slash commands. Without this filter, doctor floods
+// with false positives like /tmp/foo (filesystem) or /clear (CC built-in).
+var refSlugDenylist = map[string]bool{
+	// Filesystem mount points and common path placeholders.
+	"tmp": true, "dev": true, "var": true, "etc": true, "usr": true,
+	"home": true, "opt": true, "sys": true, "proc": true, "run": true,
+	"mnt": true, "media": true, "bin": true, "sbin": true, "lib": true,
+	"path": true,
+	// Built-in Claude Code slash commands. A user-defined skill with one of
+	// these names would collide with a built-in anyway; not worth chasing.
+	"add-dir": true, "agents": true, "bug": true, "clear": true,
+	"compact": true, "config": true, "cost": true, "doctor": true,
+	"exit": true, "export": true, "feedback": true, "help": true,
+	"hooks": true, "ide": true, "init": true, "login": true,
+	"logout": true, "mcp": true, "memory": true, "migrate-installer": true,
+	"model": true, "output-style": true, "permissions": true,
+	"pr-comments": true, "release-notes": true, "rename": true,
+	"resume": true, "review": true, "status": true, "terminal-setup": true,
+	"theme": true, "upgrade": true, "vim": true,
+}
+
+// extractRefSlugs extracts /slug references from SKILL.md text, stripping
+// frontmatter. Mirrors the platform's extractDependencySlugs logic and adds
+// two filters: tokens immediately followed by '/' are paths, not refs
+// (e.g. /tmp/foo, /v4/broadcasts), and tokens in refSlugDenylist are
+// known false positives.
 func extractRefSlugs(text string) []string {
 	body := text
 	if strings.HasPrefix(text, "---\n") {
@@ -238,10 +264,19 @@ func extractRefSlugs(text string) []string {
 	pattern := regexp.MustCompile(`(?:^|[\s("'])\/([a-z0-9][a-z0-9-]*)`)
 	seen := map[string]bool{}
 	var slugs []string
-	for _, match := range pattern.FindAllStringSubmatch(body, -1) {
-		if len(match) >= 2 && !seen[match[1]] {
-			seen[match[1]] = true
-			slugs = append(slugs, match[1])
+	for _, m := range pattern.FindAllStringSubmatchIndex(body, -1) {
+		slug := body[m[2]:m[3]]
+		// Skip if the matched slug is immediately followed by '/' — that
+		// makes it a path component (filesystem or URL), not a skill ref.
+		if m[3] < len(body) && body[m[3]] == '/' {
+			continue
+		}
+		if refSlugDenylist[slug] {
+			continue
+		}
+		if !seen[slug] {
+			seen[slug] = true
+			slugs = append(slugs, slug)
 		}
 	}
 	return slugs
