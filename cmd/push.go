@@ -309,22 +309,19 @@ var pushCmd = &cobra.Command{
 					return
 				}
 
-				isNew := s.marker == nil || s.marker.SkillID == ""
-				if isNew {
-					// Check for rename using the pre-name-fix hash so that orphan
-					// entries (stored with their original hash) are correctly matched
-					// even after the SKILL.md name field has been rewritten.
+				// Detect rename via orphan-hash BEFORE classifying isNew. If a
+				// marker's stored hash matches this dir's pre-name-fix hash, it's
+				// the same skill under a new name. PATCH the server, re-key the
+				// marker, then proceed straight to upload — skipping the new-skill
+				// branch below which would otherwise call createSkill and 409 on
+				// slug_conflict (the server already has the renamed skill).
+				if s.marker == nil || s.marker.SkillID == "" {
 					mu.Lock()
 					oldName, found := orphanHashToName[rawContentHash]
 					if found {
 						oldEntry := syncState.Skills[oldName]
 						mu.Unlock()
 
-						// Tell the server about the rename BEFORE pushing the
-						// auto-fixed content. Without this PATCH, the server
-						// would still have the old slug and the upload below
-						// would fail with name_slug_mismatch because SKILL.md
-						// `name:` was rewritten to the new name during auto-fix.
 						body, status, perr := client.put(
 							fmt.Sprintf("/api/v1/skills/%s", oldEntry.SkillID),
 							map[string]interface{}{"name": s.name},
@@ -350,20 +347,21 @@ var pushCmd = &cobra.Command{
 							Tool:        oldEntry.Tool,
 							Source:      oldEntry.Source,
 						}
-						isNew = false
 						delete(syncState.Skills, oldName)
 						delete(orphanHashToName, rawContentHash)
 						syncState.Skills[s.name] = s.marker
 						mu.Unlock()
 						fmt.Fprintf(os.Stderr, "\n  %s → %s (renamed)\n", oldName, s.name)
 						atomic.AddInt64(&renamed, 1)
-						// Fall through to the normal upload path so the
-						// auto-fixed SKILL.md content (now matching the new
-						// slug) is pushed to the server.
+						// Fall through to upload with the now-tracked marker.
 					} else {
 						mu.Unlock()
 					}
+				}
 
+				// Recompute after possible rename above.
+				isNew := s.marker == nil || s.marker.SkillID == ""
+				if isNew {
 					// Check if skill already exists on server
 					if remote, found := remoteByName[s.name]; found {
 						s.marker = &SyncEntry{
