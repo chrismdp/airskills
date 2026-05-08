@@ -702,7 +702,7 @@ func runPullForce(cmd *cobra.Command, args []string) error {
 	toPull, _ := decidePullActions(remoteSkills, localSkills, syncState)
 	divergedMap := map[string]pullEntry{}
 	for _, p := range toPull {
-		if p.reason == "diverged" {
+		if p.reason == "diverged" || p.reason == "untracked-conflict" {
 			divergedMap[p.skill.Name] = p
 		}
 	}
