@@ -87,6 +87,14 @@ var pushCmd = &cobra.Command{
 
 		syncState := loadSyncState()
 
+		// Resolve partial renames BEFORE mirror. A manual `mv` in one
+		// agent dir leaves the same skill living under two names; if we
+		// let mirrorLocalSkills run first, it cross-pollinates both names
+		// across every agent and the rename signal is lost.
+		if scanned, scanErr := scanSkillsFromAgents(); scanErr == nil {
+			propagatePartialRenames(scanned, syncState)
+		}
+
 		// Propagate any local edit across every detected agent dir before we
 		// scan, so push sees a consistent view. Slugs whose copies can't be
 		// safely reconciled are reported and skipped below.
@@ -818,4 +826,37 @@ func readSkillFiles(dir string) map[string][]byte {
 		return nil
 	})
 	return files
+}
+
+// propagatePartialRenames detects skills whose dir was manually renamed in
+// some agents but not others (so the same skill exists under two names),
+// and propagates the rename to every agent that still has the old name.
+// Mutates `localSkills` in place — the renamed-away old name is dropped so
+// downstream rename detection treats it as an orphan and reuses the marker.
+//
+// Without this, a `mv ~/.claude/skills/X ~/.claude/skills/Y` while
+// `~/.cursor/skills/X` still exists would silently push Y as a brand-new
+// skill on the server, leaving the original X skill orphaned.
+func propagatePartialRenames(localSkills map[string]string, syncState *SyncState) {
+	for newName, dir := range localSkills {
+		if _, tracked := syncState.Skills[newName]; tracked {
+			continue
+		}
+		rawHash := computeMerkleHash(readSkillFiles(dir))
+		for oldName, marker := range syncState.Skills {
+			if oldName == newName || marker.ContentHash == "" || marker.ContentHash != rawHash {
+				continue
+			}
+			if _, oldStillThere := localSkills[oldName]; !oldStillThere {
+				continue // already a clean orphan; the existing detector will handle it
+			}
+			if err := renameSkillDirAcrossAgents(oldName, newName); err != nil {
+				fmt.Fprintf(os.Stderr, "  ! could not propagate rename %s → %s across agents: %v\n", oldName, newName, err)
+				break
+			}
+			delete(localSkills, oldName)
+			fmt.Printf("  %s detected partial rename: %s → %s, propagated across all agent dirs\n", green("✓"), oldName, newName)
+			break
+		}
+	}
 }
