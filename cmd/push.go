@@ -318,6 +318,31 @@ var pushCmd = &cobra.Command{
 					oldName, found := orphanHashToName[rawContentHash]
 					if found {
 						oldEntry := syncState.Skills[oldName]
+						mu.Unlock()
+
+						// Tell the server about the rename BEFORE pushing the
+						// auto-fixed content. Without this PATCH, the server
+						// would still have the old slug and the upload below
+						// would fail with name_slug_mismatch because SKILL.md
+						// `name:` was rewritten to the new name during auto-fix.
+						body, status, perr := client.put(
+							fmt.Sprintf("/api/v1/skills/%s", oldEntry.SkillID),
+							map[string]interface{}{"name": s.name},
+						)
+						if perr != nil || status >= 400 {
+							lines[i].status = "failed"
+							renderProgress(lines)
+							mu.Lock()
+							warnings = append(warnings, fmt.Sprintf(
+								"%s: server rename failed (%s → %s, status %d): %s",
+								s.name, oldName, s.name, status, strings.TrimSpace(string(body)),
+							))
+							mu.Unlock()
+							atomic.AddInt64(&failed, 1)
+							return
+						}
+
+						mu.Lock()
 						s.marker = &SyncEntry{
 							SkillID:     oldEntry.SkillID,
 							Version:     oldEntry.Version,
@@ -331,13 +356,13 @@ var pushCmd = &cobra.Command{
 						syncState.Skills[s.name] = s.marker
 						mu.Unlock()
 						fmt.Fprintf(os.Stderr, "\n  %s → %s (renamed)\n", oldName, s.name)
-						lines[i].status = "renamed"
-						lines[i].pct = 1
-						renderProgress(lines)
 						atomic.AddInt64(&renamed, 1)
-						return
+						// Fall through to the normal upload path so the
+						// auto-fixed SKILL.md content (now matching the new
+						// slug) is pushed to the server.
+					} else {
+						mu.Unlock()
 					}
-					mu.Unlock()
 
 					// Check if skill already exists on server
 					if remote, found := remoteByName[s.name]; found {

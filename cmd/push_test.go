@@ -214,6 +214,45 @@ func TestPropagatePartialRenames(t *testing.T) {
 	}
 }
 
+// TestRenameLocalSkillRewritesNameField verifies that `airskills mv` not
+// only moves the directory but also rewrites the `name:` field inside
+// SKILL.md. Without this rewrite, the next content edit + push fails
+// server-side with name_slug_mismatch.
+func TestRenameLocalSkillRewritesNameField(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	claudeDir := filepath.Join(home, ".claude/skills/old-name")
+	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	skillMd := []byte("---\nname: old-name\ndescription: x\n---\n\nbody\n")
+	if err := os.WriteFile(filepath.Join(claudeDir, "SKILL.md"), skillMd, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	moves, err := renameLocalSkill("old-name", "new-name")
+	if err != nil {
+		t.Fatalf("rename failed: %v", err)
+	}
+	if len(moves) == 0 {
+		t.Fatal("expected at least one move")
+	}
+
+	newPath := filepath.Join(home, ".claude/skills/new-name/SKILL.md")
+	got, err := os.ReadFile(newPath)
+	if err != nil {
+		t.Fatalf("reading post-rename SKILL.md: %v", err)
+	}
+	if !bytes.Contains(got, []byte("name: new-name")) {
+		t.Errorf("SKILL.md `name:` field not rewritten; got: %s", got)
+	}
+	if bytes.Contains(got, []byte("name: old-name")) {
+		t.Errorf("SKILL.md still has old name field; got: %s", got)
+	}
+}
+
 // TestPropagatePartialRenames_FullOrphan covers the case where the marker
 // has no surviving dirs anywhere. The function should leave it alone (the
 // existing orphan-hash detector in push handles those).

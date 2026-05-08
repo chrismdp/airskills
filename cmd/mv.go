@@ -137,6 +137,16 @@ func renameLocalSkill(oldName, newName string) ([]localMove, error) {
 			}
 			return nil, fmt.Errorf("renaming %s → %s: %w", p.from, p.to, err)
 		}
+		// Rewrite SKILL.md `name:` field to match the new directory.
+		// Otherwise the next push will fail server-side name_slug_mismatch
+		// validation. Best-effort — a missing or unparsable SKILL.md doesn't
+		// abort the rename (push will surface it later if it matters).
+		skillMd := filepath.Join(p.to, "SKILL.md")
+		if content, err := os.ReadFile(skillMd); err == nil {
+			if fixed, changed := fixSkillNameInContent(newName, content); changed {
+				_ = os.WriteFile(skillMd, fixed, 0o644)
+			}
+		}
 		done = append(done, localMove{from: p.from, to: p.to})
 	}
 
