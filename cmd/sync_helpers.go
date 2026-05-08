@@ -5,22 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
-
-	"github.com/spf13/cobra"
 )
-
-func init() {
-	rootCmd.AddCommand(installCmd)
-}
-
-// install is an alias for sync
-var installCmd = &cobra.Command{
-	Use:   "install",
-	Short: "Alias for sync — push local changes and pull remote skills",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		return syncCmd.RunE(cmd, args)
-	},
-}
 
 // Shared helpers used by push, pull, sync, status
 

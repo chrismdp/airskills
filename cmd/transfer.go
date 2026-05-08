@@ -25,8 +25,12 @@ Examples:
   airskills transfer deploy-check --to-org cherrypick
   airskills transfer deploy-check --to-user
 
-A redirect from the old slug is left behind so existing /<old-owner>/<slug>
-links keep resolving.`,
+Transfer is a deliberate, consumer-visible move — soft-delete + create.
+The old <old-owner>/<slug> is archived; requests to it return 410 Gone
+(no redirect). Anyone who installed the skill via 'airskills add' sees
+"upstream archived" on their next pull and keeps their local copy.
+
+To restore the old slug, run 'airskills restore <old-slug>'.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		skillName := args[0]

@@ -28,7 +28,14 @@ func init() {
 var pullCmd = &cobra.Command{
 	Use:   "pull",
 	Short: "Download remote skills not on this machine, and update changed ones",
-	Long:  "Pulls skills from your airskills.ai account that aren't installed locally or have been updated remotely. If both local and remote changed, saves the remote version for merge.",
+	Long: `Pulls skills from your airskills.ai account that aren't installed locally or have been updated remotely. If both local and remote changed, saves the remote version for merge.
+
+--force tells the CLI "remote wins, overwrite my local" for diverged skills
+(your local copy is backed up first). Use it after you've reviewed the
+divergence and decided the remote copy is the truth. The mirror flag is
+'push --force', which means "my local wins, take it as-is". Both flags
+express the same intent — "I'm about to overwrite the other side, do it
+anyway" — pointed in opposite directions.`,
 	RunE:  runPull,
 }
 

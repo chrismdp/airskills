@@ -54,7 +54,14 @@ var pushOrg string
 var pushCmd = &cobra.Command{
 	Use:   "push",
 	Short: "Push local skill changes to airskills.ai",
-	Long:  "Scans local skills, detects changes, and pushes updates (including all files) to the server.",
+	Long: `Scans local skills, detects changes, and pushes updates (including all files) to the server.
+
+--force tells the server "my local wins, take it as-is" by skipping the
+content-hash conflict check. Use it after you've reviewed a conflict and
+decided your local copy is the truth. The mirror flag is 'pull --force',
+which means "remote wins, overwrite my local". Both flags express the same
+intent — "I'm about to overwrite the other side, do it anyway" — pointed
+in opposite directions.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := newAPIClientAuto()
 		if err != nil {

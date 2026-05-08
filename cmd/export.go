@@ -29,11 +29,14 @@ Formats:
   dir   A directory with skill files — the Claude Code plugin structure.
         Copy into ~/.claude/skills/ or a project's .claude/skills/.
 
+Pass either a skill name or --all, not both.
+
 Examples:
   airskills export code-review                    # → code-review.zip
   airskills export code-review -f dir             # → code-review/SKILL.md
   airskills export code-review -o ~/Downloads/    # → ~/Downloads/code-review.zip
-  airskills export --all                          # → exports all skills as zips`,
+  airskills export --all                          # → exports all skills as zips
+  airskills export --all -o ~/Downloads/          # → all into a target dir`,
 	RunE: runExport,
 }
 
@@ -41,6 +44,9 @@ func runExport(cmd *cobra.Command, args []string) error {
 	exportAll, _ := cmd.Flags().GetBool("all")
 	if !exportAll && len(args) == 0 {
 		return fmt.Errorf("specify a skill name or use --all")
+	}
+	if exportAll && len(args) > 0 {
+		return fmt.Errorf("--all exports every skill — drop the name argument or drop --all")
 	}
 
 	client, err := newAPIClientAuto()

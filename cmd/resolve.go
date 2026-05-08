@@ -67,7 +67,18 @@ func runResolve(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("%s: not tracked. Try 'airskills list' to see installed skills", name)
 	}
 	if entry.Source == nil {
-		return fmt.Errorf("%s: owned skill — resolve is only meaningful for sourced skills (installed via 'airskills add')", name)
+		fmt.Printf("  %s %s is a skill you own — resolve is a no-op.\n", dim("·"), name)
+		fmt.Println()
+		fmt.Println("    'resolve' acknowledges that you've reviewed an upstream change to a")
+		fmt.Println("    skill you SOURCED from someone else (installed via 'airskills add').")
+		fmt.Println("    For skills you own, there's no upstream to resolve against — you ARE")
+		fmt.Println("    the upstream.")
+		fmt.Println()
+		fmt.Println("    Looking for something else?")
+		fmt.Printf("      airskills push                      publish local changes you've made to %s\n", name)
+		fmt.Printf("      airskills review %s              see suggestions others have made\n", name)
+		fmt.Println("      airskills review accept <id>        close out a suggestion you've merged")
+		return nil
 	}
 
 	upstreamHash, err := fetchUpstreamHash(entry)

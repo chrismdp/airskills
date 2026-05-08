@@ -65,7 +65,7 @@ Use --deleted to show soft-deleted skills.`,
 		}
 
 		if len(skills) == 0 {
-			fmt.Println("No skills found. Run 'airskills install' to get started.")
+			fmt.Println("No skills found. Run 'airskills sync' to get started.")
 			return nil
 		}
 
