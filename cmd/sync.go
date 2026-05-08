@@ -145,6 +145,12 @@ var syncCmd = &cobra.Command{
 			return err
 		}
 
+		// Surface sourced skills whose upstream has moved past the
+		// user's last resolved point. Terse for TTY humans; verbose for
+		// agents (no-TTY) and explicit --verbose runs, with "don't
+		// guess — ask the user" affordance.
+		printPendingReviewSummary(verboseEnabled(syncVerbose))
+
 		telemetry.Capture("cli_sync", map[string]interface{}{
 			"pushed": canPush,
 		})
