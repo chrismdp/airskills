@@ -668,10 +668,6 @@ func decidePullActions(remoteSkills []apiSkill, localSkills map[string]string, s
 // Downloads the remote version of diverged skills and overwrites local,
 // backing up current local files to ~/.airskills/undo/<ts>/<skill>/<agent>/ first.
 func runPullForce(cmd *cobra.Command, args []string) error {
-	if !isTTY {
-		return fmt.Errorf("pull --force requires confirmation. Run interactively or use 'airskills sync' after manual reconciliation.")
-	}
-
 	client, err := newAPIClientAuto()
 	if err != nil {
 		return fmt.Errorf("pull --force requires authentication: %w", err)
