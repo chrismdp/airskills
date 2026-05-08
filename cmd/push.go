@@ -811,7 +811,9 @@ func readSkillFiles(dir string) map[string][]byte {
 		}
 		data, err := os.ReadFile(path)
 		if err == nil {
-			files[rel] = data
+			// Normalise to forward-slash so the merkle hash is identical
+			// on Windows and Unix for the same skill content.
+			files[filepath.ToSlash(rel)] = data
 		}
 		return nil
 	})
