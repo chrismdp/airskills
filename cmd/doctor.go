@@ -249,11 +249,16 @@ var refSlugDenylist = map[string]bool{
 	"theme": true, "upgrade": true, "vim": true,
 }
 
+// fencedCodeBlock matches triple-backtick fenced code blocks. Content
+// inside is strip before slug-scanning so documentation samples (Jekyll
+// frontmatter, shell commands, etc.) don't get flagged as broken refs.
+var fencedCodeBlock = regexp.MustCompile("(?ms)^```[^\n]*\n.*?\n```$")
+
 // extractRefSlugs extracts /slug references from SKILL.md text, stripping
-// frontmatter. Mirrors the platform's extractDependencySlugs logic and adds
-// two filters: tokens immediately followed by '/' are paths, not refs
-// (e.g. /tmp/foo, /v4/broadcasts), and tokens in refSlugDenylist are
-// known false positives.
+// frontmatter and fenced code blocks. Mirrors the platform's
+// extractDependencySlugs logic and adds three filters: content inside
+// ```...``` blocks (samples, not refs), tokens immediately followed by '/'
+// (paths, e.g. /tmp/foo, /v4/broadcasts), and tokens in refSlugDenylist.
 func extractRefSlugs(text string) []string {
 	body := text
 	if strings.HasPrefix(text, "---\n") {
@@ -261,6 +266,7 @@ func extractRefSlugs(text string) []string {
 			body = text[4+idx+4:]
 		}
 	}
+	body = fencedCodeBlock.ReplaceAllString(body, "")
 	pattern := regexp.MustCompile(`(?:^|[\s("'])\/([a-z0-9][a-z0-9-]*)`)
 	seen := map[string]bool{}
 	var slugs []string

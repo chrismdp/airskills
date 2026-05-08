@@ -48,6 +48,46 @@ func TestExtractRefSlugsRejectsFalsePositives(t *testing.T) {
 	}
 }
 
+// TestExtractRefSlugsStripsFencedCodeBlocks verifies that ```...``` blocks
+// are excluded from scanning. Caught in the wild: webinar-management/SKILL.md
+// has a ```yaml block teaching Jekyll frontmatter that contains
+// "redirect_from: /webinar" — that's a URL sample, not a skill reference,
+// and shouldn't trigger a broken-ref report.
+func TestExtractRefSlugsStripsFencedCodeBlocks(t *testing.T) {
+	text := "Use /heartbeat normally.\n\n" +
+		"```yaml\nredirect_from: /webinar\nredirect_from: /webinar/\n```\n\n" +
+		"And then /retro.\n"
+	slugs := extractRefSlugs(text)
+	want := map[string]bool{"heartbeat": true, "retro": true}
+	if len(slugs) != len(want) {
+		t.Fatalf("expected %d slugs, got %d: %v", len(want), len(slugs), slugs)
+	}
+	for _, s := range slugs {
+		if !want[s] {
+			t.Errorf("unexpected slug: %q", s)
+		}
+	}
+}
+
+// TestExtractRefSlugsHandlesMultipleFencedBlocks verifies multiple code
+// blocks in the same document are all stripped.
+func TestExtractRefSlugsHandlesMultipleFencedBlocks(t *testing.T) {
+	text := "Real ref: /first.\n\n" +
+		"```bash\necho /not-a-ref\n```\n\n" +
+		"Another real ref: /second.\n\n" +
+		"```\n/also-not-a-ref\n```\n"
+	slugs := extractRefSlugs(text)
+	want := map[string]bool{"first": true, "second": true}
+	if len(slugs) != len(want) {
+		t.Fatalf("expected %d slugs, got %d: %v", len(want), len(slugs), slugs)
+	}
+	for _, s := range slugs {
+		if !want[s] {
+			t.Errorf("unexpected slug: %q", s)
+		}
+	}
+}
+
 // TestExtractRefSlugsKeepsRealRefsAlongsideFalsePositives verifies the
 // tightened regex still catches legitimate references mixed with noise.
 func TestExtractRefSlugsKeepsRealRefsAlongsideFalsePositives(t *testing.T) {
