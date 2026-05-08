@@ -746,13 +746,20 @@ func createTarGz(dir string) ([]byte, error) {
 			return nil
 		}
 
+		rel, _ := filepath.Rel(dir, path)
+		if rel != "." && shouldIgnoreFile(rel) {
+			if info.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
 		header, err := tar.FileInfoHeader(info, "")
 		if err != nil {
 			return err
 		}
 
 		// Use relative path inside the archive (always forward slashes for tar)
-		rel, _ := filepath.Rel(dir, path)
 		header.Name = filepath.ToSlash(filepath.Join(base, rel))
 
 		if err := tw.WriteHeader(header); err != nil {
@@ -781,14 +788,27 @@ func createTarGz(dir string) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// readSkillFiles reads all files in a skill directory (excluding .airskills marker).
+// readSkillFiles reads all files in a skill directory (excluding .airskills
+// marker and universal dev noise — see shouldIgnoreFile).
 func readSkillFiles(dir string) map[string][]byte {
 	files := map[string][]byte{}
 	filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() || info.Name() == ".airskills" {
+		if err != nil {
+			return nil
+		}
+		if info.Name() == ".airskills" {
 			return nil
 		}
 		rel, _ := filepath.Rel(dir, path)
+		if rel != "." && shouldIgnoreFile(rel) {
+			if info.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if info.IsDir() {
+			return nil
+		}
 		data, err := os.ReadFile(path)
 		if err == nil {
 			files[rel] = data

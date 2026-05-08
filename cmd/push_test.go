@@ -22,6 +22,11 @@ func TestCreateTarGz(t *testing.T) {
 	// Marker should be excluded
 	os.WriteFile(filepath.Join(skillDir, ".airskills"), []byte(`{"skill_id":"x"}`), 0644)
 
+	// Universal noise should be excluded
+	os.MkdirAll(filepath.Join(skillDir, "scripts", "__pycache__"), 0755)
+	os.WriteFile(filepath.Join(skillDir, "scripts", "__pycache__", "run.cpython-312.pyc"), []byte("noise"), 0644)
+	os.WriteFile(filepath.Join(skillDir, ".DS_Store"), []byte("noise"), 0644)
+
 	data, err := createTarGz(skillDir)
 	if err != nil {
 		t.Fatalf("createTarGz failed: %v", err)
@@ -61,6 +66,40 @@ func TestCreateTarGz(t *testing.T) {
 	}
 	if files["test-skill/.airskills"] {
 		t.Error(".airskills marker should be excluded from archive")
+	}
+	if files["test-skill/scripts/__pycache__/run.cpython-312.pyc"] {
+		t.Error("__pycache__ contents should be excluded from archive")
+	}
+	if files["test-skill/.DS_Store"] {
+		t.Error(".DS_Store should be excluded from archive")
+	}
+}
+
+func TestReadSkillFilesIgnoresNoise(t *testing.T) {
+	dir := t.TempDir()
+	skillDir := filepath.Join(dir, "noisy-skill")
+	os.MkdirAll(skillDir, 0755)
+	os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("# x"), 0644)
+	os.MkdirAll(filepath.Join(skillDir, "scripts", "__pycache__"), 0755)
+	os.WriteFile(filepath.Join(skillDir, "scripts", "__pycache__", "run.cpython-312.pyc"), []byte("noise"), 0644)
+	os.WriteFile(filepath.Join(skillDir, "scripts", "run.py"), []byte("print('hi')"), 0644)
+	os.WriteFile(filepath.Join(skillDir, ".DS_Store"), []byte("noise"), 0644)
+
+	got := readSkillFiles(skillDir)
+
+	if _, ok := got["SKILL.md"]; !ok {
+		t.Error("SKILL.md missing")
+	}
+	if _, ok := got["scripts/run.py"]; !ok {
+		t.Error("scripts/run.py missing")
+	}
+	for k := range got {
+		if filepath.Ext(k) == ".pyc" {
+			t.Errorf("expected .pyc to be ignored, got %q", k)
+		}
+		if filepath.Base(k) == ".DS_Store" {
+			t.Errorf("expected .DS_Store to be ignored, got %q", k)
+		}
 	}
 }
 
