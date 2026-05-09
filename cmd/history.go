@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/chrismdp/airskills/internal/apitypes"
 	"github.com/spf13/cobra"
 )
 
@@ -39,7 +40,7 @@ var historyCmd = &cobra.Command{
 		// Fetch version history for all skills in parallel
 		type entry struct {
 			skillName string
-			commit    skillCommit
+			commit    apitypes.SkillCommit
 		}
 
 		var mu sync.Mutex
@@ -74,7 +75,7 @@ var historyCmd = &cobra.Command{
 
 		// Sort by created_at descending
 		sort.Slice(all, func(i, j int) bool {
-			return all[i].commit.CreatedAt > all[j].commit.CreatedAt
+			return all[i].commit.CreatedAt.After(all[j].commit.CreatedAt)
 		})
 
 		if len(all) > limit {
@@ -82,9 +83,8 @@ var historyCmd = &cobra.Command{
 		}
 
 		for _, e := range all {
-			ts, _ := time.Parse(time.RFC3339Nano, e.commit.CreatedAt)
-			age := formatAge(ts)
-			msg := e.commit.Message
+			age := formatAge(e.commit.CreatedAt)
+			msg := strDeref(e.commit.Message)
 			if msg == "" {
 				msg = dim("(no message)")
 			}

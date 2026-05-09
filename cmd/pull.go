@@ -349,8 +349,8 @@ func runPull(cmd *cobra.Command, args []string) error {
 			commits, err := client.getVersionHistory(p.skill.Id.String())
 			if err == nil {
 				for _, c := range commits {
-					if c.Message != "" {
-						detail.messages = append(detail.messages, c.Message)
+					if msg := strDeref(c.Message); msg != "" {
+						detail.messages = append(detail.messages, msg)
 					}
 				}
 			}

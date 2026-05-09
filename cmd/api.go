@@ -507,24 +507,14 @@ func (c *apiClient) getSkill(id string) (*apiSkill, error) {
 	return &skill, nil
 }
 
-// skillCommit represents a commit from the version history endpoint.
-type skillCommit struct {
-	ID          string   `json:"id"`
-	ParentIDs   []string `json:"parent_ids"`
-	ContentHash string   `json:"content_hash,omitempty"`
-	Message     string   `json:"message"`
-	CreatedAt   string   `json:"created_at"`
-	PushedBy    *string  `json:"pushed_by"`
-}
-
 // getVersionHistory fetches the commit history for a skill.
-func (c *apiClient) getVersionHistory(skillID string) ([]skillCommit, error) {
+func (c *apiClient) getVersionHistory(skillID string) ([]apitypes.SkillCommit, error) {
 	body, err := c.get(fmt.Sprintf("/api/v1/skills/%s/versions", skillID))
 	if err != nil {
 		return nil, err
 	}
 	var result struct {
-		Versions []skillCommit `json:"versions"`
+		Versions []apitypes.SkillCommit `json:"versions"`
 	}
 	if err := json.Unmarshal(body, &result); err != nil {
 		return nil, err
