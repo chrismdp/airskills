@@ -135,7 +135,7 @@ var loginCmd = &cobra.Command{
 			}
 			fmt.Println("ok")
 			logInfo("Logged in successfully!")
-			telemetry.Identify(profile.ID, profile.Username)
+			telemetry.Identify(profile.Id.String(), profile.Username)
 			telemetry.Capture("cli_login", nil)
 			fmt.Println()
 			// Show status so user sees their skills immediately
@@ -176,7 +176,7 @@ var whoamiCmd = &cobra.Command{
 			return err
 		}
 
-		name := profile.DisplayName
+		name := strDeref(profile.DisplayName)
 		if name == "" {
 			name = profile.Username
 		}

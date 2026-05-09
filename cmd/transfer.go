@@ -69,7 +69,7 @@ To restore the old slug, run 'airskills restore <old-slug>'.`,
 			if err != nil {
 				return fmt.Errorf("fetching profile: %w", err)
 			}
-			to = map[string]string{"kind": "user", "id": profile.ID}
+			to = map[string]string{"kind": "user", "id": profile.Id.String()}
 		}
 
 		if !transferYes {

@@ -125,12 +125,9 @@ func (c *apiClient) pullUpstream(skillID string) (*apiSkill, error) {
 	return &skill, nil
 }
 
-// apiProfile represents the current user's profile from /api/v1/me.
-type apiProfile struct {
-	ID          string `json:"id"`
-	Username    string `json:"username"`
-	DisplayName string `json:"display_name"`
-}
+// Profile shape comes from apitypes.Profile (full /me row). Phase A.5
+// aligned both GET /me and PATCH /me on the same shape — the slimmer
+// User schema was dropped.
 
 // listSkillsets fetches the caller's personal skillsets. Used by
 // `airskills skillset list`, by `skillset use` for validation, and by
@@ -183,12 +180,12 @@ func (c *apiClient) deletePersonalSkillset(slug string) error {
 }
 
 // getMe fetches the current user's profile.
-func (c *apiClient) getMe() (*apiProfile, error) {
+func (c *apiClient) getMe() (*apitypes.Profile, error) {
 	body, err := c.get("/api/v1/me")
 	if err != nil {
 		return nil, err
 	}
-	var profile apiProfile
+	var profile apitypes.Profile
 	if err := json.Unmarshal(body, &profile); err != nil {
 		return nil, err
 	}
