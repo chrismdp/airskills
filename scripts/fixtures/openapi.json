@@ -1,0 +1,4594 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "airskills HTTP API",
+    "version": "0.5.x-unstable+fixture",
+    "description": "**Unstable — pre-v1. Shapes will change.**\n\nThis is the HTTP protocol the airskills CLI speaks to airskills.ai. The CLI\nis open source ([github.com/chrismdp/airskills](https://github.com/chrismdp/airskills))\nand nothing stops you from pointing it at your own server — the endpoints\nbelow are the full contract you need to implement.\n\n## No lock-in\n\nairskills.ai is the reference implementation of this protocol, not the only\none. If you want to run your own server (for compliance, for fun, because\nyou already have a filesystem-backed skill store you'd rather keep), the\ncontract is right here. Until v1 lands you'll need to keep your implementation\nin step with whatever breaks, but the surface is small.\n\n## Auth\n\nMost endpoints require a bearer token obtained via the `airskills login`\nflow or a direct Supabase Auth exchange. The CLI stores refresh tokens in\n`~/.config/airskills/`.\n\nPublic endpoints (no auth) are tagged `public`. Auth-optional endpoints\ndeclare `security: [{ bearerAuth: [] }, {}]` — anonymous callers get\nthe public-visibility subset, authenticated callers see what RLS allows.\n\n## Content hashing\n\nPush uses a Merkle-style content hash computed over the skill's file set.\nThe client sends its expected hash in `X-Expected-Hash` (or its preferred\n`X-Expected-Commit`) on archive PUT so the server can detect concurrent\nwrites. Both sides must use the same algorithm (sorted by path in byte order,\n`path:sha256hex` lines joined with `\\n`, then SHA-256 over the manifest).\nSee `cmd/hash.go:computeMerkleHash` in the CLI repo for the reference\nimplementation.\n\n## Generation\n\nThis document is generated from the Zod schemas the route handlers\nthemselves use to validate input. A drift guard in CI walks\n`app/api/v1/` and asserts every `(method, path)` pair appears in the\nspec — adding a route without a corresponding registry entry breaks\nthe build.",
+    "license": {
+      "name": "MIT (CLI) — platform spec open",
+      "url": "https://github.com/chrismdp/airskills/blob/main/LICENSE"
+    }
+  },
+  "servers": [
+    {
+      "url": "https://airskills.ai",
+      "description": "Reference implementation (hosted)."
+    },
+    {
+      "url": "http://localhost:3000",
+      "description": "Local dev / your own server."
+    }
+  ],
+  "tags": [
+    {
+      "name": "public",
+      "description": "No auth required."
+    },
+    {
+      "name": "user",
+      "description": "Per-user profile and tokens."
+    },
+    {
+      "name": "skills",
+      "description": "CRUD, archives, versions, sharing, transfer."
+    },
+    {
+      "name": "skillsets",
+      "description": "Installable packages of skills."
+    },
+    {
+      "name": "organizations",
+      "description": "Shared accounts for teams."
+    },
+    {
+      "name": "suggestions",
+      "description": "Propose changes back to a skill owner."
+    },
+    {
+      "name": "sync",
+      "description": "Bulk sync primitives."
+    }
+  ],
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Supabase-issued JWT. Obtained via `airskills login` or /api/v1/auth/refresh."
+      }
+    },
+    "schemas": {
+      "Health": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "ok"
+            ]
+          },
+          "version": {
+            "type": "string"
+          },
+          "commit": {
+            "type": "string"
+          },
+          "latest_cli": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "version",
+          "commit",
+          "latest_cli"
+        ]
+      },
+      "Profile": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "username": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "admin",
+              "member"
+            ],
+            "description": "Global role. Distinct from per-org membership role. CHECK constraint on profiles.role pins the values."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "cli_logged_in_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "First time the user generated a CLI session token. Write-once."
+          },
+          "mcp_connected_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "First time the user made an authenticated MCP request. Write-once."
+          }
+        },
+        "required": [
+          "id",
+          "username",
+          "display_name",
+          "role",
+          "created_at",
+          "updated_at",
+          "cli_logged_in_at",
+          "mcp_connected_at"
+        ]
+      },
+      "TokenPair": {
+        "type": "object",
+        "properties": {
+          "access_token": {
+            "type": "string"
+          },
+          "refresh_token": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "integer",
+            "description": "Unix seconds."
+          }
+        },
+        "required": [
+          "access_token",
+          "refresh_token",
+          "expires_at"
+        ]
+      },
+      "RefreshTokenRequest": {
+        "type": "object",
+        "properties": {
+          "refresh_token": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "refresh_token"
+        ]
+      },
+      "Skill": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "owner_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "null on org-owned skills (XOR with org_id)."
+          },
+          "org_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "version": {
+            "type": "string",
+            "description": "Semver-ish label — not authoritative; use content_hash."
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "private",
+              "unlisted",
+              "public"
+            ]
+          },
+          "content_hash": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Merkle hash of the skill's file set. null until first push."
+          },
+          "head_commit_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "tool_formats": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "e.g. ['claude-code']"
+          },
+          "archive_size": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "forked_from": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "pinned_archive_path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "upstream_content_hash": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Live content_hash of the parent skill (forks only). null when no parent or unreadable."
+          },
+          "dependency_count": {
+            "type": "integer",
+            "description": "Number of resolved dependency rows."
+          },
+          "deleted_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Soft-delete timestamp. null on live skills; set on the deleted-skills view."
+          },
+          "deletion_reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why the skill was soft-deleted (e.g. 'user_deleted', 'transferred'). null on live skills."
+          }
+        },
+        "required": [
+          "id",
+          "owner_id",
+          "org_id",
+          "slug",
+          "name",
+          "description",
+          "version",
+          "visibility",
+          "content_hash",
+          "head_commit_id",
+          "tool_formats",
+          "archive_size",
+          "forked_from",
+          "pinned_archive_path",
+          "created_at",
+          "updated_at",
+          "upstream_content_hash",
+          "dependency_count",
+          "deleted_at",
+          "deletion_reason"
+        ]
+      },
+      "SkillsListResponse": {
+        "type": "object",
+        "properties": {
+          "skills": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Skill"
+            }
+          },
+          "skillset": {
+            "type": "object",
+            "properties": {
+              "slug": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "slug",
+              "name"
+            ],
+            "description": "Present when scope=personal and a skillset filter resolved."
+          }
+        },
+        "required": [
+          "skills"
+        ]
+      },
+      "SkillDetail": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Skill"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "files": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/SkillFile"
+                }
+              },
+              "dependencies": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/SkillDependencyEdge"
+                }
+              },
+              "owner": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "properties": {
+                  "username": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "username"
+                ],
+                "description": "Joined from profiles. null on org-owned skills."
+              },
+              "org": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "properties": {
+                  "slug": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "slug",
+                  "name"
+                ],
+                "description": "Joined from orgs. null on personally-owned skills."
+              }
+            },
+            "required": [
+              "files",
+              "dependencies",
+              "owner",
+              "org"
+            ]
+          }
+        ]
+      },
+      "SkillFile": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "size": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "path",
+          "size"
+        ]
+      },
+      "SkillDependencyEdge": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "visibility": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "private",
+              "unlisted",
+              "public",
+              null
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "slug",
+          "name",
+          "visibility"
+        ]
+      },
+      "UpdateSkillResponse": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Skill"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "private_dependencies": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "slug": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "slug",
+                    "name"
+                  ]
+                },
+                "description": "Returned when changing visibility to public WITHOUT make_deps_public:true and private dependencies exist. The skill is still updated; the caller decides whether to make them public."
+              }
+            }
+          }
+        ]
+      },
+      "DeleteSkillResponse": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "deleted"
+            ]
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "ArchivePutResponse": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/CommitResult"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "current_owner": {
+                "$ref": "#/components/schemas/OwnerNamespace"
+              },
+              "warning": {
+                "type": "string",
+                "description": "Soft-limit warnings, e.g. storage usage above 80%."
+              },
+              "unresolved_dependencies": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "OwnerNamespace": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "user",
+              "org"
+            ]
+          },
+          "slug": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "slug"
+        ],
+        "description": "Resolved namespace at write time. CLI uses this to detect out-of-band transfers. Key absent when owner is unchanged."
+      },
+      "CommitResult": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          },
+          "content_hash": {
+            "type": "string"
+          },
+          "head_commit_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "id",
+          "slug",
+          "name",
+          "version",
+          "content_hash",
+          "head_commit_id"
+        ]
+      },
+      "ArchiveConflictResponse": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string",
+            "enum": [
+              "conflict"
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "remote_commit_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "remote_content_hash": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "error",
+          "message",
+          "remote_commit_id",
+          "remote_content_hash"
+        ]
+      },
+      "SkillCommitsListResponse": {
+        "type": "object",
+        "properties": {
+          "versions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SkillCommit"
+            }
+          }
+        },
+        "required": [
+          "versions"
+        ]
+      },
+      "SkillCommit": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "parent_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "content_hash": {
+            "type": "string"
+          },
+          "archive_path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "message": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "pushed_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "parent_ids",
+          "content_hash",
+          "archive_path",
+          "message",
+          "pushed_by",
+          "created_at"
+        ]
+      },
+      "SuggestionsListResponse": {
+        "type": "object",
+        "properties": {
+          "suggestions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EnrichedSuggestion"
+            }
+          }
+        },
+        "required": [
+          "suggestions"
+        ]
+      },
+      "EnrichedSuggestion": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Suggestion"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "suggester_username": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "suggester_skill_name": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "owner_skill_name": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "owner_skill_slug": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "suggester_username",
+              "suggester_skill_name",
+              "owner_skill_name",
+              "owner_skill_slug"
+            ]
+          }
+        ]
+      },
+      "Suggestion": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "suggester_skill_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "owner_skill_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "suggester_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "owner_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "base_content_hash": {
+            "type": "string"
+          },
+          "message": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "accepted",
+              "declined"
+            ]
+          },
+          "response_message": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reviewed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "suggester_skill_id",
+          "owner_skill_id",
+          "suggester_id",
+          "owner_id",
+          "base_content_hash",
+          "message",
+          "status",
+          "response_message",
+          "reviewed_at",
+          "created_at",
+          "updated_at"
+        ]
+      },
+      "SuggestionsCountResponse": {
+        "type": "object",
+        "properties": {
+          "count": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "count"
+        ]
+      },
+      "SyncResponse": {
+        "type": "object",
+        "properties": {
+          "since": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Echo of the `since` query parameter (ISO timestamp)."
+          },
+          "skillset": {
+            "type": "object",
+            "properties": {
+              "slug": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "slug",
+              "name"
+            ]
+          },
+          "updated_count": {
+            "type": "integer"
+          },
+          "skills": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SyncSkill"
+            }
+          }
+        },
+        "required": [
+          "since",
+          "skillset",
+          "updated_count",
+          "skills"
+        ]
+      },
+      "SyncSkill": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          },
+          "content_hash": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "head_commit_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "slug",
+          "version",
+          "content_hash",
+          "head_commit_id",
+          "updated_at"
+        ]
+      },
+      "PublicSkillsListResponse": {
+        "type": "object",
+        "properties": {
+          "skills": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublicSkill"
+            }
+          }
+        },
+        "required": [
+          "skills"
+        ]
+      },
+      "PublicSkill": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "slug": {
+            "type": "string",
+            "description": "Namespaced as `<owner-username>/<slug>`."
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "version": {
+            "type": "string"
+          },
+          "tool_formats": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "slug",
+          "name",
+          "description",
+          "version",
+          "tool_formats",
+          "created_at",
+          "updated_at"
+        ]
+      },
+      "ResolvedSkillResponse": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Skill"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "skill"
+                ]
+              },
+              "current_owner": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/OwnerNamespace"
+                  },
+                  {
+                    "type": [
+                      "object",
+                      "null"
+                    ],
+                    "description": "Resolved namespace; differs from the URL slug if the skill was transferred. `null` when no owner is resolvable."
+                  }
+                ]
+              }
+            },
+            "required": [
+              "type",
+              "current_owner"
+            ]
+          }
+        ]
+      },
+      "ResolvedBundleResponse": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "bundle"
+            ]
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "private",
+              "unlisted",
+              "public"
+            ]
+          },
+          "bundle_skills": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "skill_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "skills": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Skill"
+                    },
+                    {
+                      "type": [
+                        "object",
+                        "null"
+                      ]
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "skill_id",
+                "skills"
+              ]
+            },
+            "description": "Joined skill rows; deprecated — bundles are being phased out for skillsets."
+          }
+        },
+        "required": [
+          "type",
+          "id",
+          "name",
+          "slug",
+          "description",
+          "visibility",
+          "bundle_skills"
+        ]
+      },
+      "SkillsetListItem": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Skillset"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "skill_count": {
+                "type": "integer",
+                "description": "Number of skills currently in the skillset."
+              }
+            },
+            "required": [
+              "skill_count"
+            ]
+          }
+        ]
+      },
+      "Skillset": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "is_default": {
+            "type": "boolean"
+          },
+          "auto_absorb_new_skills": {
+            "type": "boolean"
+          },
+          "owner_user_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "owner_org_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "slug",
+          "description",
+          "is_default",
+          "auto_absorb_new_skills",
+          "owner_user_id",
+          "owner_org_id",
+          "created_at",
+          "updated_at"
+        ]
+      },
+      "ActiveSkillsetsResponse": {
+        "type": "object",
+        "properties": {
+          "active": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Skillset"
+              },
+              {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "description": "Caller's resolved active skillset (default if any, else first owned)."
+              }
+            ]
+          },
+          "org_assigned": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Skillset"
+            },
+            "description": "Skillsets the caller has been assigned via org membership."
+          }
+        },
+        "required": [
+          "active",
+          "org_assigned"
+        ]
+      },
+      "SkillsetWithSkills": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Skillset"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "skills": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "slug": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "description": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "owner_id": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "format": "uuid"
+                    },
+                    "org_id": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "format": "uuid"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "slug",
+                    "name",
+                    "description",
+                    "owner_id",
+                    "org_id"
+                  ]
+                },
+                "description": "Resolved skill rows currently in the skillset (minimal projection)."
+              }
+            },
+            "required": [
+              "skills"
+            ]
+          }
+        ]
+      },
+      "OrgsListResponse": {
+        "type": "object",
+        "properties": {
+          "organizations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OrgWithMembership"
+            }
+          }
+        },
+        "required": [
+          "organizations"
+        ]
+      },
+      "OrgWithMembership": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Org"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "role": {
+                "type": "string",
+                "enum": [
+                  "owner",
+                  "admin",
+                  "member"
+                ]
+              },
+              "member_since": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "member_count": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "role",
+              "member_since",
+              "member_count"
+            ]
+          }
+        ]
+      },
+      "Org": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "domain": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "slug",
+          "domain",
+          "created_at",
+          "updated_at"
+        ]
+      },
+      "OrgEnvelope": {
+        "type": "object",
+        "properties": {
+          "org": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Org"
+              },
+              {
+                "type": [
+                  "object",
+                  "null"
+                ]
+              }
+            ]
+          },
+          "member_count": {
+            "type": "integer",
+            "description": "Member count of the resolved org. Omitted on the {org: null} short-circuit (no membership / not found)."
+          }
+        },
+        "required": [
+          "org"
+        ]
+      },
+      "OrgDeleteResponse": {
+        "type": "object",
+        "properties": {
+          "deleted": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "slug": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "deleted",
+          "slug"
+        ]
+      },
+      "OrgDeleteBlocked": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string",
+            "enum": [
+              "org_owns_skills"
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "skill_count": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "error",
+          "message",
+          "skill_count"
+        ]
+      },
+      "OrgInviteResponse": {
+        "type": "object",
+        "properties": {
+          "invite": {
+            "$ref": "#/components/schemas/OrgInviteRecord"
+          },
+          "pricing_notice": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Set when org has hit the free-tier member limit; null otherwise."
+          }
+        },
+        "required": [
+          "invite",
+          "pricing_notice"
+        ]
+      },
+      "OrgInviteRecord": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "org_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "email": {
+            "type": "string",
+            "format": "email"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "owner",
+              "admin",
+              "member"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "org_id",
+          "email",
+          "role"
+        ]
+      },
+      "OrgInviteAcceptResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "org_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "ok",
+          "org_id"
+        ]
+      },
+      "OrgMembersListResponse": {
+        "type": "object",
+        "properties": {
+          "members": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OrgMember"
+            }
+          }
+        },
+        "required": [
+          "members"
+        ]
+      },
+      "OrgMember": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "username": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "owner",
+              "admin",
+              "member"
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "username",
+          "display_name",
+          "role",
+          "created_at"
+        ]
+      },
+      "MemberSkillsetAssignmentsResponse": {
+        "type": "object",
+        "properties": {
+          "skillsets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MemberSkillsetAssignment"
+            }
+          }
+        },
+        "required": [
+          "skillsets"
+        ]
+      },
+      "MemberSkillsetAssignment": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "is_default": {
+            "type": "boolean"
+          },
+          "is_assigned": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "slug",
+          "name",
+          "is_default",
+          "is_assigned"
+        ]
+      },
+      "ShareRecord": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "skill_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "shared_with_email": {
+            "type": "string",
+            "format": "email"
+          },
+          "shared_by": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "skill_id",
+          "shared_with_email",
+          "shared_by",
+          "created_at"
+        ]
+      },
+      "ShareRevokedResponse": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "revoked"
+            ]
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "SkillsetMembershipItem": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "is_default": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "slug",
+          "is_default"
+        ]
+      },
+      "FileListingResponse": {
+        "type": "object",
+        "properties": {
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SkillFile"
+            }
+          }
+        },
+        "required": [
+          "files"
+        ]
+      },
+      "RefResolveResponse": {
+        "type": "object",
+        "properties": {
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RefResolveResult"
+            }
+          }
+        },
+        "required": [
+          "results"
+        ]
+      },
+      "RefResolveResult": {
+        "type": "object",
+        "properties": {
+          "ref": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "moved",
+              "deleted",
+              "unknown"
+            ]
+          },
+          "new_slug": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ref",
+          "status"
+        ]
+      }
+    },
+    "parameters": {}
+  },
+  "paths": {
+    "/api/v1/health": {
+      "get": {
+        "summary": "Health and latest CLI version",
+        "description": "Public liveness probe. Reports the platform's version, commit, and the latest released CLI tag.",
+        "tags": [
+          "public"
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "ok",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Health"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/me": {
+      "get": {
+        "summary": "Current user profile",
+        "tags": [
+          "user"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "User profile",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Profile"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          }
+        }
+      },
+      "patch": {
+        "summary": "Update the caller's profile",
+        "description": "Allowlisted fields: username, display_name. Username must match `^[a-z0-9][a-z0-9-]*[a-z0-9]$` (min 2 chars) and must not be a reserved word. Handler currently does ad-hoc validation — UpdateMeSchema documents the wire shape.",
+        "tags": [
+          "user"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "username": {
+                    "type": "string",
+                    "minLength": 2,
+                    "pattern": "^[a-z0-9][a-z0-9-]*[a-z0-9]$"
+                  },
+                  "display_name": {
+                    "type": "string",
+                    "maxLength": 128
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated profile",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Profile"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Username invalid or reserved, or DB error."
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "409": {
+            "description": "Username already taken."
+          }
+        }
+      }
+    },
+    "/api/v1/auth/refresh": {
+      "post": {
+        "summary": "Refresh an expired access token",
+        "description": "Exchanges a refresh token for a fresh access token. The CLI calls this transparently when it sees a 401.",
+        "tags": [
+          "user"
+        ],
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RefreshTokenRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "New token pair",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenPair"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "refresh_token missing or malformed"
+          },
+          "401": {
+            "description": "Refresh token invalid or revoked"
+          }
+        }
+      }
+    },
+    "/api/v1/skills": {
+      "post": {
+        "summary": "Create a skill",
+        "description": "Creates an empty skill record. Use PUT /skills/{id}/archive to upload the file set.",
+        "tags": [
+          "skills"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[a-zA-Z0-9 _-]+$"
+                  },
+                  "description": {
+                    "type": "string",
+                    "maxLength": 2048
+                  },
+                  "content": {
+                    "type": "string",
+                    "maxLength": 10000000
+                  },
+                  "version": {
+                    "type": "string",
+                    "pattern": "^\\d+\\.\\d+\\.\\d+$"
+                  },
+                  "org_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "visibility": {
+                    "type": "string",
+                    "enum": [
+                      "private",
+                      "public"
+                    ]
+                  },
+                  "tool_formats": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "maxLength": 64
+                    },
+                    "maxItems": 32
+                  },
+                  "forked_from": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "github_url": {
+                    "type": "string",
+                    "maxLength": 512,
+                    "format": "uri"
+                  },
+                  "github_skill": {
+                    "type": "string",
+                    "maxLength": 256
+                  }
+                },
+                "required": [
+                  "name"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Skill"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "403": {
+            "description": "Creating an org-owned skill requires admin or owner role on that org."
+          },
+          "409": {
+            "description": "Slug collision in caller's namespace"
+          },
+          "500": {
+            "description": "Storage hash mismatch or commit RPC failure."
+          }
+        }
+      },
+      "get": {
+        "summary": "List the caller's skills",
+        "description": "Returns skills the caller can see (owned, org-member, shared). Skillset filter applies in personal scope.",
+        "tags": [
+          "skills"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "personal",
+                "org"
+              ],
+              "description": "`personal` filters to caller-owned skills; `org` to skills in any of the caller's orgs. Default: all accessible."
+            },
+            "required": false,
+            "description": "`personal` filters to caller-owned skills; `org` to skills in any of the caller's orgs. Default: all accessible.",
+            "name": "scope",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Filter to skills within a specific skillset (slug). Only applies when scope is unset or 'personal'."
+            },
+            "required": false,
+            "description": "Filter to skills within a specific skillset (slug). Only applies when scope is unset or 'personal'.",
+            "name": "skillset",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ],
+              "description": "`true` returns the caller's recently-deleted skills (personal namespace only)."
+            },
+            "required": false,
+            "description": "`true` returns the caller's recently-deleted skills (personal namespace only).",
+            "name": "deleted",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Skills array",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillsListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Database error"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "404": {
+            "description": "Requested skillset not found"
+          }
+        }
+      }
+    },
+    "/api/v1/skills/{id}": {
+      "get": {
+        "summary": "Get a single skill",
+        "description": "Auth-optional. With a Bearer token RLS surfaces owned, org-member, and shared skills; without one, only public skills are visible. Response includes the skill's file listing and resolved dependencies.",
+        "tags": [
+          "skills"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {}
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Skill UUID."
+            },
+            "required": true,
+            "description": "Skill UUID.",
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Skill detail (with files, dependencies, joined owner/org)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillDetail"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      },
+      "put": {
+        "summary": "Update skill metadata",
+        "description": "Metadata only. The handler does ad-hoc allowlist validation (name, description, visibility, plus the operational toggles pull_upstream/confirm_public/make_deps_public); the Zod schema below documents the wire shape but is not yet enforced at runtime — see the comment on UpdateSkillSchema in lib/schemas.ts. Renames record a slug redirect so old links keep working. Setting visibility to 'public' requires confirm_public: true; if private dependencies exist they appear in the 200 response unless make_deps_public: true is also set.",
+        "tags": [
+          "skills"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Skill UUID."
+            },
+            "required": true,
+            "description": "Skill UUID.",
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[a-zA-Z0-9 _-]+$"
+                  },
+                  "description": {
+                    "type": "string",
+                    "maxLength": 2048
+                  },
+                  "visibility": {
+                    "type": "string",
+                    "enum": [
+                      "private",
+                      "unlisted",
+                      "public"
+                    ]
+                  },
+                  "pull_upstream": {
+                    "type": "boolean",
+                    "description": "If true, advance this fork's pin to the parent's latest version. All other fields ignored."
+                  },
+                  "confirm_public": {
+                    "type": "boolean",
+                    "description": "Required when changing visibility to 'public'. The server returns 400 without it."
+                  },
+                  "make_deps_public": {
+                    "type": "boolean",
+                    "description": "When making a skill public, also publicise any private dependencies in one atomic update."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated skill",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdateSkillResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed, no fields to update, missing confirm_public on a public flip, or upstream not present for pull_upstream."
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "409": {
+            "description": "Slug collision after rename"
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete a skill (soft delete)",
+        "description": "Soft-deletes the skill. Restorable via POST /skills/{id}/restore until cleanup.",
+        "tags": [
+          "skills"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Skill UUID."
+            },
+            "required": true,
+            "description": "Skill UUID.",
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeleteSkillResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Database error"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    },
+    "/api/v1/skills/{id}/archive": {
+      "put": {
+        "summary": "Push a new skill archive",
+        "description": "Uploads a tar.gz of the skill's file set. Conflict detection prefers X-Expected-Commit, falls back to X-Expected-Hash. On 409 the CLI pulls the remote so the user's agent can read both versions and merge — no auto-merge.",
+        "tags": [
+          "skills"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Skill UUID."
+            },
+            "required": true,
+            "description": "Skill UUID.",
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Commit ID the client believes is HEAD. Preferred over X-Expected-Hash."
+            },
+            "required": false,
+            "description": "Commit ID the client believes is HEAD. Preferred over X-Expected-Hash.",
+            "name": "X-Expected-Commit",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Merkle content hash fallback when the client doesn't track commit IDs. The server skips this check when the skill has never been pushed (content_hash is null)."
+            },
+            "required": false,
+            "description": "Merkle content hash fallback when the client doesn't track commit IDs. The server skips this check when the skill has never been pushed (content_hash is null).",
+            "name": "X-Expected-Hash",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Client-computed Merkle hash of the upload. Server cross-checks."
+            },
+            "required": false,
+            "description": "Client-computed Merkle hash of the upload. Server cross-checks.",
+            "name": "X-Content-Hash",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "X-Commit-Message",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "New display name applied alongside the push. For org-owned skills this must equal the (org-prefixed) slug."
+            },
+            "required": false,
+            "description": "New display name applied alongside the push. For org-owned skills this must equal the (org-prefixed) slug.",
+            "name": "X-Name",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "X-Description",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "private",
+                "unlisted",
+                "public"
+              ]
+            },
+            "required": false,
+            "name": "X-Visibility",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/gzip": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Archive accepted; response includes the new commit ID and content hash.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArchivePutResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Empty archive, hash mismatch, or SKILL.md name/slug mismatch."
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "403": {
+            "description": "Skill is not yours and you are not a member of its org."
+          },
+          "404": {
+            "description": "Skill not found"
+          },
+          "409": {
+            "description": "Expected commit/hash did not match — caller should pull and re-merge.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArchiveConflictResponse"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Skill was soft-deleted."
+          },
+          "413": {
+            "description": "Archive would exceed the per-namespace storage limit."
+          },
+          "429": {
+            "description": "Rate limit exceeded."
+          },
+          "500": {
+            "description": "Storage hash mismatch or commit RPC failure."
+          }
+        }
+      },
+      "get": {
+        "summary": "Download the skill as a tar.gz archive",
+        "description": "Auth-optional. Returns the live HEAD by default; pass ?commit=<uuid> to pin to a specific commit's immutable archive.",
+        "tags": [
+          "skills"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {}
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Skill UUID."
+            },
+            "required": true,
+            "description": "Skill UUID.",
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Pin to a specific commit's archive instead of live HEAD."
+            },
+            "required": false,
+            "description": "Pin to a specific commit's archive instead of live HEAD.",
+            "name": "commit",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Binary tar.gz archive",
+            "content": {
+              "application/gzip": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Skill or commit not found, or no files uploaded yet."
+          }
+        }
+      }
+    },
+    "/api/v1/skills/{id}/raw": {
+      "get": {
+        "summary": "Fetch the skill's SKILL.md body",
+        "tags": [
+          "skills"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Skill UUID."
+            },
+            "required": true,
+            "description": "Skill UUID.",
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Raw SKILL.md contents",
+            "content": {
+              "text/markdown": {
+                "schema": {
+                  "type": "string",
+                  "description": "UTF-8 markdown body."
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "404": {
+            "description": "Skill or SKILL.md not found"
+          }
+        }
+      }
+    },
+    "/api/v1/skills/{id}/versions": {
+      "get": {
+        "summary": "List commits for a skill",
+        "description": "Returns the commit DAG ordered newest-first. Each commit links to its parents. RLS scopes the result; a non-existent or unreachable skill returns an empty array, not 404.",
+        "tags": [
+          "skills"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Skill UUID."
+            },
+            "required": true,
+            "description": "Skill UUID.",
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Commit history",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillCommitsListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Database error"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          }
+        }
+      },
+      "post": {
+        "summary": "Roll back to a commit",
+        "description": "Restores files from the target commit and creates a merge commit (current HEAD + target as parents). Returns the bare commit-result; archive PUT's `current_owner`/`warning`/`unresolved_dependencies` extras are NOT added on rollback.",
+        "tags": [
+          "skills"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Skill UUID."
+            },
+            "required": true,
+            "description": "Skill UUID.",
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "commit_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "version_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "New HEAD commit created from the target.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommitResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed or commit has no archived files."
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "403": {
+            "description": "Not your skill"
+          },
+          "404": {
+            "description": "Commit not found"
+          },
+          "500": {
+            "description": "Commit RPC failure."
+          }
+        }
+      }
+    },
+    "/api/v1/skills/{id}/restore": {
+      "post": {
+        "summary": "Restore a soft-deleted skill",
+        "description": "Optionally pass a new slug to rename on restore when the original is now taken in the same namespace.",
+        "tags": [
+          "skills"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Skill UUID."
+            },
+            "required": true,
+            "description": "Skill UUID.",
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "slug": {
+                    "type": "string",
+                    "maxLength": 128
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Restored skill",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Skill"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Skill is not deleted, or invalid org-prefixed slug."
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "403": {
+            "description": "Not your skill / not an org admin"
+          },
+          "404": {
+            "description": "Skill not found"
+          },
+          "409": {
+            "description": "Slug collision — pass slug to rename on restore."
+          },
+          "500": {
+            "description": "Database error during restore."
+          }
+        }
+      }
+    },
+    "/api/v1/suggestions": {
+      "get": {
+        "summary": "List suggestions",
+        "description": "Returns suggestions visible to the caller (as suggester or owner). Used by the CLI to render review queues.",
+        "tags": [
+          "suggestions"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "owner",
+                "suggester"
+              ],
+              "description": "Filter to suggestions where the caller is the named party. Default: both."
+            },
+            "required": false,
+            "description": "Filter to suggestions where the caller is the named party. Default: both.",
+            "name": "role",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "pending",
+                "accepted",
+                "declined"
+              ],
+              "description": "Filter by lifecycle state."
+            },
+            "required": false,
+            "description": "Filter by lifecycle state.",
+            "name": "status",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Narrow to suggestions targeting a specific skill (owner_skill_id)."
+            },
+            "required": false,
+            "description": "Narrow to suggestions targeting a specific skill (owner_skill_id).",
+            "name": "skill_id",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "1"
+              ],
+              "description": "DEPRECATED — kept for one CLI release. Returns {count} instead of the list. Prefer GET /api/v1/suggestions/count, which has a clean response type for codegen."
+            },
+            "required": false,
+            "description": "DEPRECATED — kept for one CLI release. Returns {count} instead of the list. Prefer GET /api/v1/suggestions/count, which has a clean response type for codegen.",
+            "name": "count",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Enriched suggestions list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuggestionsListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Database error"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          }
+        }
+      },
+      "post": {
+        "summary": "Create a suggestion",
+        "description": "Offers the owner of a public skill a proposed change based on the caller's forked copy. The caller must own the suggester skill; suggestions against private skills are rejected to prevent drive-by disclosure.",
+        "tags": [
+          "suggestions"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "suggester_skill_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "owner_skill_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "base_content_hash": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  },
+                  "message": {
+                    "type": "string",
+                    "maxLength": 4096
+                  }
+                },
+                "required": [
+                  "suggester_skill_id",
+                  "owner_skill_id",
+                  "base_content_hash"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Suggestion"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed, target is the caller's own skill, or DB error."
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "403": {
+            "description": "suggester_skill_id is not owned by the caller, or owner_skill is not public."
+          },
+          "404": {
+            "description": "owner_skill_id not found"
+          }
+        }
+      }
+    },
+    "/api/v1/suggestions/count": {
+      "get": {
+        "summary": "Count suggestions (head-only)",
+        "description": "Hot-path count for `airskills status`. Same query-param semantics as the list endpoint, but skips the SELECT + enrichment fan-out and returns just {count}. Replaces the legacy `GET /suggestions?count=1` polymorphic-response form.",
+        "tags": [
+          "suggestions"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "owner",
+                "suggester"
+              ],
+              "description": "Filter to suggestions where the caller is the named party. Default: both."
+            },
+            "required": false,
+            "description": "Filter to suggestions where the caller is the named party. Default: both.",
+            "name": "role",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "pending",
+                "accepted",
+                "declined"
+              ],
+              "description": "Filter by lifecycle state."
+            },
+            "required": false,
+            "description": "Filter by lifecycle state.",
+            "name": "status",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Narrow to suggestions targeting a specific skill (owner_skill_id)."
+            },
+            "required": false,
+            "description": "Narrow to suggestions targeting a specific skill (owner_skill_id).",
+            "name": "skill_id",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Suggestion count",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuggestionsCountResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Database error"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          }
+        }
+      }
+    },
+    "/api/v1/suggestions/{id}": {
+      "get": {
+        "summary": "Get a single suggestion",
+        "tags": [
+          "suggestions"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Suggestion UUID."
+            },
+            "required": true,
+            "description": "Suggestion UUID.",
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Suggestion",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Suggestion"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "404": {
+            "description": "Not found, or not visible to the caller via RLS."
+          }
+        }
+      },
+      "put": {
+        "summary": "Resolve a suggestion (accept / decline)",
+        "description": "Owner-only. Setting status auto-stamps reviewed_at. Accepting a suggestion does NOT change the skill — the owner reviews, edits locally if desired, pushes, then marks resolved.",
+        "tags": [
+          "suggestions"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Suggestion UUID."
+            },
+            "required": true,
+            "description": "Suggestion UUID.",
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "accepted",
+                      "declined"
+                    ]
+                  },
+                  "response_message": {
+                    "type": "string",
+                    "maxLength": 4096
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated suggestion",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Suggestion"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed, no fields to update, or DB error."
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "404": {
+            "description": "Not found, or not visible to the caller via RLS."
+          }
+        }
+      }
+    },
+    "/api/v1/sync": {
+      "get": {
+        "summary": "List skills updated since a timestamp",
+        "description": "Used by `airskills pull` to detect remote changes efficiently. Scoped to the caller's resolved skillset (default skillset unless `?skillset=` is passed).",
+        "tags": [
+          "sync"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "date-time",
+              "description": "ISO timestamp — only skills updated after this are returned. Required."
+            },
+            "required": true,
+            "description": "ISO timestamp — only skills updated after this are returned. Required.",
+            "name": "since",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Skillset slug to scope the query. Defaults to the caller's default skillset."
+            },
+            "required": false,
+            "description": "Skillset slug to scope the query. Defaults to the caller's default skillset.",
+            "name": "skillset",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Sync delta",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyncResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`since` parameter missing, or DB error."
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "404": {
+            "description": "Requested skillset not found, or caller has no default skillset."
+          }
+        }
+      }
+    },
+    "/api/v1/public/skills": {
+      "get": {
+        "summary": "List public skills",
+        "description": "Public, anonymous-readable. Returns skills with their owner namespace baked into the slug (`<username>/<slug>`) so the CLI can pass the result to `airskills add` directly.",
+        "tags": [
+          "public"
+        ],
+        "security": [],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Search term over name/description (ILIKE)."
+            },
+            "required": false,
+            "description": "Search term over name/description (ILIKE).",
+            "name": "q",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "description": "Max results. Default 50, hard cap 200."
+            },
+            "required": false,
+            "description": "Max results. Default 50, hard cap 200.",
+            "name": "limit",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Array of public skills",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicSkillsListResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error."
+          }
+        }
+      }
+    },
+    "/api/v1/resolve/{username}/{slug}": {
+      "get": {
+        "summary": "Resolve a skill or bundle by namespace/slug",
+        "description": "Used by `airskills add` before any login happens. Auth-optional: a Bearer token surfaces shared and org skills; without one, only public skills are resolvable. The first segment can be a username OR an org slug — the response's `current_owner` is the canonical namespace at resolve time. The `bundle` variant is kept for backwards compatibility; bundles are deprecated in favour of skillsets.",
+        "tags": [
+          "public"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {}
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Username or org slug — they share a namespace."
+            },
+            "required": true,
+            "description": "Username or org slug — they share a namespace.",
+            "name": "username",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "slug",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Resolved skill or bundle, discriminated by `type`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ResolvedSkillResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ResolvedBundleResponse"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Username/org not found, or no skill/bundle at that slug."
+          }
+        }
+      }
+    },
+    "/api/v1/skillsets": {
+      "get": {
+        "summary": "List the caller's skillsets",
+        "description": "Returns user-owned skillsets only (org skillsets surface via /skillsets/active and the assigned-by-org membership). Each item carries a skill_count enrichment.",
+        "tags": [
+          "skillsets"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Array of skillsets with skill_count enrichment",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SkillsetListItem"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Database error"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          }
+        }
+      },
+      "post": {
+        "summary": "Create a skillset",
+        "description": "Creates a user-owned skillset. Setting set_default: true unsets any existing default in one operation.",
+        "tags": [
+          "skillsets"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  },
+                  "slug": {
+                    "type": "string",
+                    "maxLength": 128
+                  },
+                  "description": {
+                    "type": "string",
+                    "maxLength": 2048
+                  },
+                  "set_default": {
+                    "type": "boolean"
+                  },
+                  "auto_absorb": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "name"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Skillset"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed, invalid slug, or DB error."
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          }
+        }
+      }
+    },
+    "/api/v1/skillsets/active": {
+      "get": {
+        "summary": "Resolve the caller's active and org-assigned skillsets",
+        "description": "Returns the caller's currently-active skillset (`is_default` if set, else first owned) plus any skillsets assigned to them via org membership. Used by the CLI on every sync to decide which skill set to pull.",
+        "tags": [
+          "skillsets"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Active + org-assigned skillsets",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActiveSkillsetsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          }
+        }
+      }
+    },
+    "/api/v1/skillsets/{owner}/{slug}": {
+      "get": {
+        "summary": "Get a skillset by owner/slug",
+        "description": "Resolves the owner segment as a username OR an org slug (shared namespace) then fetches the skillset and its current skills.",
+        "tags": [
+          "skillsets"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Username or org slug — they share a namespace."
+            },
+            "required": true,
+            "description": "Username or org slug — they share a namespace.",
+            "name": "owner",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "slug",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Skillset with member skills",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillsetWithSkills"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "404": {
+            "description": "Owner not found, or no skillset at that slug."
+          }
+        }
+      },
+      "patch": {
+        "summary": "Update a skillset",
+        "description": "Allowlisted fields only (name, description, auto_absorb_new_skills). Setting set_default: true unsets the previous default in the same namespace as a side-effect.",
+        "tags": [
+          "skillsets"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Username or org slug — they share a namespace."
+            },
+            "required": true,
+            "description": "Username or org slug — they share a namespace.",
+            "name": "owner",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "slug",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  },
+                  "description": {
+                    "type": "string",
+                    "maxLength": 2048
+                  },
+                  "auto_absorb_new_skills": {
+                    "type": "boolean"
+                  },
+                  "set_default": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated skillset",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Skillset"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed or DB error."
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "404": {
+            "description": "Owner or skillset not found."
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete a skillset",
+        "description": "Refuses to delete the default skillset while other skillsets exist in the same namespace — promote another to default first.",
+        "tags": [
+          "skillsets"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Username or org slug — they share a namespace."
+            },
+            "required": true,
+            "description": "Username or org slug — they share a namespace.",
+            "name": "owner",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "slug",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted (no body)."
+          },
+          "400": {
+            "description": "Cannot delete the default skillset while others exist, or DB error."
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "404": {
+            "description": "Owner or skillset not found."
+          }
+        }
+      }
+    },
+    "/api/v1/skillsets/{owner}/{slug}/skills/{skill_owner}/{skill_slug}": {
+      "put": {
+        "summary": "Add a skill to a skillset (idempotent)",
+        "description": "Resolves skillset and skill independently (each may live under a user or org namespace). Idempotent: re-adding a skill is a no-op (24bytes squashes the unique-violation).",
+        "tags": [
+          "skillsets"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Skillset owner — username or org slug."
+            },
+            "required": true,
+            "description": "Skillset owner — username or org slug.",
+            "name": "owner",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Skillset slug."
+            },
+            "required": true,
+            "description": "Skillset slug.",
+            "name": "slug",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Skill owner — username or org slug."
+            },
+            "required": true,
+            "description": "Skill owner — username or org slug.",
+            "name": "skill_owner",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Skill slug."
+            },
+            "required": true,
+            "description": "Skill slug.",
+            "name": "skill_slug",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Added (or already present, idempotent)."
+          },
+          "400": {
+            "description": "Database error."
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "404": {
+            "description": "Skillset owner, skillset, skill owner, or skill not found."
+          }
+        }
+      },
+      "delete": {
+        "summary": "Remove a skill from a skillset",
+        "tags": [
+          "skillsets"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Skillset owner — username or org slug."
+            },
+            "required": true,
+            "description": "Skillset owner — username or org slug.",
+            "name": "owner",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Skillset slug."
+            },
+            "required": true,
+            "description": "Skillset slug.",
+            "name": "slug",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Skill owner — username or org slug."
+            },
+            "required": true,
+            "description": "Skill owner — username or org slug.",
+            "name": "skill_owner",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Skill slug."
+            },
+            "required": true,
+            "description": "Skill slug.",
+            "name": "skill_slug",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Removed."
+          },
+          "400": {
+            "description": "Database error."
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "404": {
+            "description": "Skillset owner, skillset, skill owner, or skill not found."
+          }
+        }
+      }
+    },
+    "/api/v1/organizations": {
+      "get": {
+        "summary": "List the caller's orgs",
+        "description": "Returns every org the caller is a member of, with role, join date, and member count.",
+        "tags": [
+          "organizations"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Org memberships array",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrgsListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Database error."
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          }
+        }
+      }
+    },
+    "/api/v1/organization": {
+      "get": {
+        "summary": "Get a single org (caller's primary, or by slug/id)",
+        "description": "Without query params returns the caller's oldest membership org. Pass `?slug=` or `?id=` to fetch a specific org the caller belongs to. Returns `{org: null}` on no membership.",
+        "tags": [
+          "organizations"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "slug",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": false,
+            "name": "id",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Org envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrgEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Database error."
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "403": {
+            "description": "Caller is not a member of the requested org."
+          }
+        }
+      },
+      "post": {
+        "summary": "Create an org",
+        "description": "Creates an org and inserts the caller as owner. The slug is reserved atomically against usernames + reserved routes; the caller is also promoted to global admin role.",
+        "tags": [
+          "organizations"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  },
+                  "slug": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[a-z0-9][a-z0-9-]*[a-z0-9]$"
+                  },
+                  "domain": {
+                    "type": "string",
+                    "maxLength": 256
+                  }
+                },
+                "required": [
+                  "name",
+                  "slug"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created org",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Org"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed, slug reserved, or DB error."
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "409": {
+            "description": "Slug already taken (org-vs-org or org-vs-user)."
+          }
+        }
+      }
+    },
+    "/api/v1/organization/{slug}": {
+      "patch": {
+        "summary": "Update org metadata",
+        "description": "Owner or admin only. Setting domain to '' clears it.",
+        "tags": [
+          "organizations"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Org slug."
+            },
+            "required": true,
+            "description": "Org slug.",
+            "name": "slug",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  },
+                  "slug": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[a-z0-9][a-z0-9-]*[a-z0-9]$"
+                  },
+                  "domain": {
+                    "type": "string",
+                    "maxLength": 256
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated org",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Org"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed, reserved slug, slug collision, or DB error."
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "403": {
+            "description": "Caller is not owner or admin."
+          },
+          "404": {
+            "description": "Org not found, or caller is not a member (cross-tenant boundary)."
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete an org",
+        "description": "Owner only. Requires confirm_slug to equal the org slug. Refuses (409) if the org still owns skills — transfer them away first.",
+        "tags": [
+          "organizations"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Org slug."
+            },
+            "required": true,
+            "description": "Org slug.",
+            "name": "slug",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "confirm_slug": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  }
+                },
+                "required": [
+                  "confirm_slug"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrgDeleteResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed, confirm_slug mismatch, or DB error."
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "403": {
+            "description": "Caller is not the owner."
+          },
+          "404": {
+            "description": "Org not found, or caller is not a member."
+          },
+          "409": {
+            "description": "Org still owns skills — transfer them first.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrgDeleteBlocked"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/organization/invite": {
+      "post": {
+        "summary": "Invite an email to join the caller's org",
+        "description": "Caller must be owner or admin in some org. The invite is upserted (re-inviting refreshes invited_by/created_at). Sends the invite email; email failure does NOT fail the request.",
+        "tags": [
+          "organizations"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "email": {
+                    "type": "string",
+                    "maxLength": 320,
+                    "format": "email"
+                  },
+                  "role": {
+                    "type": "string",
+                    "enum": [
+                      "admin",
+                      "member"
+                    ]
+                  }
+                },
+                "required": [
+                  "email"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Invite created (or refreshed). pricing_notice is set when org is over the free-tier member limit.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrgInviteResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed or DB error."
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "403": {
+            "description": "Caller is not an owner or admin in any org."
+          }
+        }
+      }
+    },
+    "/api/v1/organization/invite/{id}/accept": {
+      "post": {
+        "summary": "Accept an org invite",
+        "description": "The invite's email must match the caller's authenticated email. Existing memberships are not overwritten — accepting a member-role invite does not demote a prior owner.",
+        "tags": [
+          "organizations"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Invite UUID."
+            },
+            "required": true,
+            "description": "Invite UUID.",
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrgInviteAcceptResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No email on the caller's account, or DB error."
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "403": {
+            "description": "Invite is for a different email address."
+          },
+          "404": {
+            "description": "Invite not found."
+          },
+          "410": {
+            "description": "Invite is no longer pending (already accepted/declined)."
+          }
+        }
+      }
+    },
+    "/api/v1/organization/members": {
+      "get": {
+        "summary": "List members of an org",
+        "description": "Pass `?slug=<org>` to choose the org; otherwise defaults to the caller's oldest membership.",
+        "tags": [
+          "organizations"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "slug",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Members array",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrgMembersListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Database error."
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "403": {
+            "description": "Caller is not a member of the requested org."
+          }
+        }
+      }
+    },
+    "/api/v1/organization/members/{user_id}/skillsets": {
+      "get": {
+        "summary": "List a member's skillset assignments",
+        "description": "Returns ALL skillsets in the org with `is_assigned` and `is_default` flags. Org admins see anyone's; plain members only see their own. `?org=<slug>` disambiguates when the caller has multiple memberships.",
+        "tags": [
+          "organizations"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Target member's user UUID."
+            },
+            "required": true,
+            "description": "Target member's user UUID.",
+            "name": "user_id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "org",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Skillset assignments",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemberSkillsetAssignmentsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "403": {
+            "description": "Plain member trying to read another member's skillsets."
+          },
+          "404": {
+            "description": "Caller or target user is not a member of the resolved org (cross-tenant boundary)."
+          }
+        }
+      },
+      "put": {
+        "summary": "Replace a member's skillset assignments",
+        "description": "Owner/admin only. Body is the full new set of skillset_ids; the default skillset is implicit and dropped from storage. Replaces atomically (delete + insert; failure mid-way leaves the member with no assignments).",
+        "tags": [
+          "organizations"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Target member's user UUID."
+            },
+            "required": true,
+            "description": "Target member's user UUID.",
+            "name": "user_id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "org",
+            "in": "query"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "skillset_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "maxItems": 64
+                  }
+                },
+                "required": [
+                  "skillset_ids"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Post-update assignments",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemberSkillsetAssignmentsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed, skillset id is not in the org, or DB error."
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "403": {
+            "description": "Caller is not owner or admin."
+          },
+          "404": {
+            "description": "Caller or target user is not a member of the resolved org."
+          }
+        }
+      }
+    },
+    "/api/v1/skills/{id}/share": {
+      "post": {
+        "summary": "Share a skill with an email address",
+        "description": "Inserts a share row. The recipient sees the skill via the shares table when they sign in with the matching email.",
+        "tags": [
+          "skills"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Skill UUID."
+            },
+            "required": true,
+            "description": "Skill UUID.",
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "email": {
+                    "type": "string",
+                    "maxLength": 320,
+                    "format": "email"
+                  }
+                },
+                "required": [
+                  "email"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Share created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShareRecord"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          }
+        }
+      },
+      "delete": {
+        "summary": "Revoke a skill share",
+        "description": "Removes the share row matching email + skill + shared_by.",
+        "tags": [
+          "skills"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Skill UUID."
+            },
+            "required": true,
+            "description": "Skill UUID.",
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "email",
+              "description": "Email address whose share to revoke."
+            },
+            "required": true,
+            "description": "Email address whose share to revoke.",
+            "name": "email",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Share revoked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShareRevokedResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "email param missing or DB error."
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          }
+        }
+      }
+    },
+    "/api/v1/skills/{id}/transfer": {
+      "post": {
+        "summary": "Transfer ownership between user and org",
+        "description": "Soft-deletes the source skill and creates a new skill row at the target with a new skill_id. The new skill inherits the commit DAG (parent_ids remapped) and gets a fresh HEAD commit recording the SKILL.md name rewrite. Old skill_id returns 410 on subsequent reads. Permissions: user→org requires caller is current owner AND admin/owner of target org; org→user requires caller is org owner AND target is themselves.",
+        "tags": [
+          "skills"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Skill UUID."
+            },
+            "required": true,
+            "description": "Skill UUID.",
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "to": {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "user",
+                          "org"
+                        ]
+                      },
+                      "id": {
+                        "type": "string",
+                        "format": "uuid"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "id"
+                    ]
+                  },
+                  "slug": {
+                    "type": "string",
+                    "maxLength": 128
+                  }
+                },
+                "required": [
+                  "to"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Transferred skill (new skill row)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Skill"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed, skill is org-owned but missing org context, or skill has no files."
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "403": {
+            "description": "Caller is not the current owner, lacks the required org role, or is transferring out to someone other than themselves."
+          },
+          "404": {
+            "description": "Skill or target org not found."
+          },
+          "409": {
+            "description": "Slug already exists in the target namespace — pass slug to rename."
+          },
+          "410": {
+            "description": "Source skill is already deleted."
+          },
+          "500": {
+            "description": "RPC failure during the transfer transaction or storage hash mismatch."
+          }
+        }
+      }
+    },
+    "/api/v1/skills/{id}/skillsets": {
+      "get": {
+        "summary": "List the caller's skillsets that contain this skill",
+        "description": "Personal skillsets only (org skillsets are not surfaced here today). The response is a bare array, not enveloped.",
+        "tags": [
+          "skills"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Skill UUID."
+            },
+            "required": true,
+            "description": "Skill UUID.",
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Skillsets containing this skill",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SkillsetMembershipItem"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          }
+        }
+      }
+    },
+    "/api/v1/skills/{id}/files/{path}": {
+      "get": {
+        "summary": "Read a file from a skill, or list its files",
+        "description": "Auth-optional; public skills are readable anonymously. Pass an empty path segment array to get a JSON file listing; pass a path to get raw bytes (text/markdown for .md, text/plain otherwise).",
+        "tags": [
+          "skills"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {}
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Skill UUID."
+            },
+            "required": true,
+            "description": "Skill UUID.",
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "File path segments. Empty array returns the file listing instead of raw content."
+            },
+            "required": true,
+            "description": "File path segments. Empty array returns the file listing instead of raw content.",
+            "name": "path",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Raw file bytes (text/markdown for .md, text/plain otherwise), or a JSON file listing when no path is provided.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileListingResponse"
+                }
+              },
+              "text/markdown": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Skill or file not found."
+          }
+        }
+      }
+    },
+    "/api/v1/refs/resolve": {
+      "get": {
+        "summary": "Classify /slug references against a skill's namespace",
+        "description": "Used by `airskills doctor` to flag moved (renamed/redirected), deleted, or unknown slug references. Caller must own the skill (personal) or share its namespace (org membership).",
+        "tags": [
+          "skills"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Skill UUID whose namespace the refs are classified against."
+            },
+            "required": true,
+            "description": "Skill UUID whose namespace the refs are classified against.",
+            "name": "skill",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Comma-separated list of slug refs (max 50)."
+            },
+            "required": true,
+            "description": "Comma-separated list of slug refs (max 50).",
+            "name": "refs",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Resolution results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefResolveResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing param, too many refs (>50), or DB error."
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "403": {
+            "description": "Caller does not own / share the skill's namespace."
+          },
+          "404": {
+            "description": "Skill not found."
+          }
+        }
+      }
+    }
+  },
+  "webhooks": {}
+}

@@ -1,0 +1,12 @@
+# oapi-codegen config — pinned alongside a pinned tool version in
+# tools/tools.go. Both must be committed for reproducibility.
+package: apitypes
+generate:
+  models: true
+  embedded-spec: false
+output: internal/apitypes/types.gen.go
+output-options:
+  skip-prune: true
+  skip-fmt: false
+compatibility:
+  always-prefix-enum-values: false

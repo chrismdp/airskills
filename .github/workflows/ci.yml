@@ -29,6 +29,25 @@ jobs:
       - name: Vet
         run: go vet ./...
 
+  # Regen-drift gate: re-runs scripts/codegen.sh against the committed
+  # fixture and fails if internal/apitypes/types.gen.go drifts. Forces
+  # a fixture refresh on every spec change.
+  codegen-drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Run codegen
+        run: bash scripts/codegen.sh
+
+      - name: Assert internal/apitypes/ is unchanged
+        run: git diff --exit-status internal/apitypes/
+
   windows-install:
     runs-on: windows-latest
     steps:
@@ -66,7 +85,7 @@ jobs:
 
   notify-failure:
     runs-on: ubuntu-latest
-    needs: [test, windows-install]
+    needs: [test, codegen-drift, windows-install]
     if: failure()
     steps:
       - name: Send Telegram notification
