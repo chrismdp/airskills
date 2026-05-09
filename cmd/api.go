@@ -132,28 +132,18 @@ type apiProfile struct {
 	DisplayName string `json:"display_name"`
 }
 
-// apiSkillset represents a personal skillset from GET /api/v1/skillsets.
-// skill_count is added by the server from a count-map join on
-// skillset_skills — see app/api/v1/skillsets/route.ts.
-type apiSkillset struct {
-	ID                  string `json:"id"`
-	Name                string `json:"name"`
-	Slug                string `json:"slug"`
-	Description         string `json:"description"`
-	IsDefault           bool   `json:"is_default"`
-	AutoAbsorbNewSkills bool   `json:"auto_absorb_new_skills"`
-	SkillCount          int    `json:"skill_count"`
-}
-
 // listSkillsets fetches the caller's personal skillsets. Used by
 // `airskills skillset list`, by `skillset use` for validation, and by
-// `skillset delete` to resolve the id.
-func (c *apiClient) listSkillsets() ([]apiSkillset, error) {
+// `skillset delete` to resolve the id. Returns
+// apitypes.SkillsetListItem because the server enriches each row with
+// skill_count from the skillset_skills join — the bare Skillset type
+// lacks that field.
+func (c *apiClient) listSkillsets() ([]apitypes.SkillsetListItem, error) {
 	body, err := c.get("/api/v1/skillsets")
 	if err != nil {
 		return nil, err
 	}
-	var skillsets []apiSkillset
+	var skillsets []apitypes.SkillsetListItem
 	if err := json.Unmarshal(body, &skillsets); err != nil {
 		return nil, err
 	}
@@ -162,8 +152,9 @@ func (c *apiClient) listSkillsets() ([]apiSkillset, error) {
 
 // createSkillset creates a personal skillset. Server-side: the POST
 // handler in app/api/v1/skillsets/route.ts owns slug defaulting and
-// the (owner_user_id, slug) uniqueness enforcement.
-func (c *apiClient) createSkillset(slug, name, description string) (*apiSkillset, error) {
+// the (owner_user_id, slug) uniqueness enforcement. Returns the bare
+// apitypes.Skillset (the create response has no skill_count yet).
+func (c *apiClient) createSkillset(slug, name, description string) (*apitypes.Skillset, error) {
 	payload := map[string]string{
 		"slug":        slug,
 		"name":        name,
@@ -173,7 +164,7 @@ func (c *apiClient) createSkillset(slug, name, description string) (*apiSkillset
 	if err != nil {
 		return nil, err
 	}
-	var ss apiSkillset
+	var ss apitypes.Skillset
 	if err := json.Unmarshal(body, &ss); err != nil {
 		return nil, err
 	}

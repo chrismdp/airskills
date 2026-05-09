@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/chrismdp/airskills/config"
+	"github.com/chrismdp/airskills/internal/apitypes"
 )
 
 // withTempHome points config.Dir() at a fresh temp directory for the
@@ -218,7 +219,7 @@ func TestValidSkillsetSlug_Rejects(t *testing.T) {
 }
 
 func TestRenderSkillsetList_MarksSelected(t *testing.T) {
-	skillsets := []apiSkillset{
+	skillsets := []apitypes.SkillsetListItem{
 		{Slug: "default", SkillCount: 12, IsDefault: true},
 		{Slug: "writing", SkillCount: 3},
 		{Slug: "minimal", SkillCount: 5},
@@ -241,7 +242,7 @@ func TestRenderSkillsetList_MarksSelected(t *testing.T) {
 func TestRenderSkillsetList_FallsBackToIsDefault(t *testing.T) {
 	// When no local preference is set, the is_default row should still
 	// show an asterisk so the user knows what they're on.
-	skillsets := []apiSkillset{
+	skillsets := []apitypes.SkillsetListItem{
 		{Slug: "default", SkillCount: 1, IsDefault: true},
 		{Slug: "other", SkillCount: 0},
 	}

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/chrismdp/airskills/config"
+	"github.com/chrismdp/airskills/internal/apitypes"
 	"github.com/spf13/cobra"
 )
 
@@ -149,7 +150,7 @@ var skillsetListCmd = &cobra.Command{
 // currently-selected slug marked by a leading '*'. Falls back to
 // marking is_default when no slug is remembered locally, so the
 // output is never asterisk-free for a user who has never switched.
-func renderSkillsetList(w io.Writer, skillsets []apiSkillset, selected string) {
+func renderSkillsetList(w io.Writer, skillsets []apitypes.SkillsetListItem, selected string) {
 	if len(skillsets) == 0 {
 		fmt.Fprintln(w, "No skillsets.")
 		return
@@ -193,7 +194,7 @@ var skillsetCreateCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		fmt.Printf("Created skillset %q (id %s)\n", ss.Slug, ss.ID)
+		fmt.Printf("Created skillset %q (id %s)\n", ss.Slug, ss.Id)
 		printAgentNextSteps(os.Stdout, []agentNextStep{
 			{Cmd: "airskills skillset use " + ss.Slug, Why: "make this the default for future sync/push/pull"},
 			{Cmd: "airskills skillset list", Why: "confirm the new skillset shows up"},
