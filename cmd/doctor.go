@@ -38,6 +38,12 @@ type refIssue struct {
 }
 
 func runDoctor(cmd *cobra.Command, args []string) error {
+	// Environment overrides users have set. Only printed when a flag is
+	// active so unset-default doctor output stays uncluttered. The value
+	// here is "is auto-update on?" — useful when something looks stuck
+	// at an old version.
+	renderEnvOverrides(os.Stdout)
+
 	// Sync state: classify every known skill and surface any that are
 	// in a non-trivial state (modified, modified-pending, untracked,
 	// linked, untracked-conflict, not-local). Informational only —
@@ -56,6 +62,26 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 		os.Exit(1)
 	}
 	return nil
+}
+
+// renderEnvOverrides prints any active CLI environment overrides. No
+// output when nothing is set — keeps the common-case doctor run clean.
+func renderEnvOverrides(w io.Writer) {
+	var lines []string
+	if os.Getenv("AIRSKILLS_NO_AUTO_UPDATE") == "1" {
+		lines = append(lines, "  AIRSKILLS_NO_AUTO_UPDATE=1 — per-command auto-update is OFF")
+	}
+	if os.Getenv("AIRSKILLS_NO_TELEMETRY") == "1" {
+		lines = append(lines, "  AIRSKILLS_NO_TELEMETRY=1 — anonymous usage telemetry is OFF")
+	}
+	if len(lines) == 0 {
+		return
+	}
+	fmt.Fprintln(w, "Environment overrides:")
+	for _, line := range lines {
+		fmt.Fprintln(w, line)
+	}
+	fmt.Fprintln(w)
 }
 
 // gatherSyncState assembles the inputs the classifier needs and returns
