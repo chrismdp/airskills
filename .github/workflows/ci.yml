@@ -46,7 +46,12 @@ jobs:
         run: bash scripts/codegen.sh
 
       - name: Assert internal/apitypes/ is unchanged
-        run: git diff --exit-status internal/apitypes/
+        run: |
+          if [ -n "$(git status --porcelain internal/apitypes/)" ]; then
+            echo "::error::internal/apitypes/ drifted after running scripts/codegen.sh — refresh the fixture and commit the new types.gen.go." >&2
+            git --no-pager diff internal/apitypes/ | head -200
+            exit 1
+          fi
 
   windows-install:
     runs-on: windows-latest
