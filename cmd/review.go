@@ -93,20 +93,20 @@ func runReviewList(cmd *cobra.Command, args []string) error {
 		fmt.Printf("  %s %s\n\n", green("✓"), label)
 	} else {
 		for i, s := range suggestions {
-			who := s.SuggesterUsername
+			who := strDeref(s.SuggesterUsername)
 			if who == "" {
 				who = "someone"
 			}
-			skillName := s.OwnerSkillName
+			skillName := strDeref(s.OwnerSkillName)
 			if skillName == "" {
-				skillName = s.OwnerSkillID
+				skillName = s.OwnerSkillId.String()
 			}
 			fmt.Printf("  %d. %s suggested changes to %q (%s)\n",
-				i+1, who, skillName, suggestionAge(s.CreatedAt))
-			if s.Message != "" {
-				fmt.Printf("     \"%s\"\n", s.Message)
+				i+1, who, skillName, suggestionAge(s.CreatedAt.Format(time.RFC3339)))
+			if msg := strDeref(s.Message); msg != "" {
+				fmt.Printf("     \"%s\"\n", msg)
 			}
-			fmt.Printf("     Suggestion ID: %s\n", s.ID)
+			fmt.Printf("     Suggestion ID: %s\n", s.Id)
 			fmt.Printf("     Based on your version hash: %s\n", shortHash(s.BaseContentHash))
 			fmt.Println()
 		}
@@ -134,7 +134,7 @@ func runReviewDownload(cmd *cobra.Command, args []string) error {
 	}
 
 	// RLS grants owner access to the suggester's skill while pending.
-	files, err := downloadSkillFiles(client, s.SuggesterSkillID)
+	files, err := downloadSkillFiles(client, s.SuggesterSkillId.String())
 	if err != nil {
 		return fmt.Errorf("downloading suggestion files: %w", err)
 	}
@@ -152,8 +152,8 @@ func runReviewDownload(cmd *cobra.Command, args []string) error {
 
 	fmt.Printf("Downloaded suggestion to:\n  %s\n\n", tmpDir)
 	fmt.Printf("Based on your version hash: %s\n", shortHash(s.BaseContentHash))
-	if s.Message != "" {
-		fmt.Printf("Message from suggester: %q\n", s.Message)
+	if msg := strDeref(s.Message); msg != "" {
+		fmt.Printf("Message from suggester: %q\n", msg)
 	}
 	fmt.Println()
 	fmt.Println("Read the files, merge what you want into your local skill, push,")
@@ -184,9 +184,10 @@ func runReviewResolve(id, status, message string) error {
 		symbol = yellow("✗")
 	}
 	fmt.Printf("%s Suggestion %s marked as %s\n", symbol, id, status)
-	if s.OwnerSkillName != "" {
-		fmt.Printf("  %s\n", s.OwnerSkillName)
-	}
+	// updateSuggestion returns apitypes.Suggestion (not Enriched), so the
+	// owner_skill_name is not on the wire — show the bare ID instead, which
+	// the user can correlate with `airskills review list` if they need it.
+	_ = s // suggestion read above; nothing else to surface from the bare shape.
 	if message != "" {
 		fmt.Printf("  Reason sent to contributor: %q\n", message)
 	}

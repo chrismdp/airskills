@@ -663,7 +663,7 @@ in opposite directions.`,
 				}
 				fmt.Printf("  %s suggestion sent to %s/%s\n", green("✓"), p.source.Owner, p.source.Slug)
 				if entry, ok := syncState.Skills[p.name]; ok {
-					entry.SuggestionID = suggestion.ID
+					entry.SuggestionID = suggestion.Id.String()
 				}
 			}
 		}

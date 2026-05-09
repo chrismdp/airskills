@@ -660,26 +660,11 @@ func parseJSON(data []byte, v interface{}) error {
 	return json.Unmarshal(data, v)
 }
 
-type apiSuggestion struct {
-	ID                 string  `json:"id"`
-	SuggesterSkillID   string  `json:"suggester_skill_id"`
-	OwnerSkillID       string  `json:"owner_skill_id"`
-	SuggesterID        string  `json:"suggester_id"`
-	OwnerID            string  `json:"owner_id"`
-	BaseContentHash    string  `json:"base_content_hash"`
-	Message            string  `json:"message"`
-	Status             string  `json:"status"`
-	ResponseMessage    string  `json:"response_message"`
-	ReviewedAt         *string `json:"reviewed_at"`
-	CreatedAt          string  `json:"created_at"`
-	UpdatedAt          string  `json:"updated_at"`
-	SuggesterUsername  string  `json:"suggester_username,omitempty"`
-	SuggesterSkillName string  `json:"suggester_skill_name,omitempty"`
-	OwnerSkillName     string  `json:"owner_skill_name,omitempty"`
-	OwnerSkillSlug     string  `json:"owner_skill_slug,omitempty"`
-}
+// Suggestion types come from apitypes:
+//   - apitypes.Suggestion        — bare row (POST /suggestions, GET /suggestions/{id}, PUT /suggestions/{id})
+//   - apitypes.EnrichedSuggestion — list response with joined username + skill name/slug
 
-func (c *apiClient) createSuggestion(suggesterSkillID, ownerSkillID, baseContentHash, message string) (*apiSuggestion, error) {
+func (c *apiClient) createSuggestion(suggesterSkillID, ownerSkillID, baseContentHash, message string) (*apitypes.Suggestion, error) {
 	payload := map[string]string{
 		"suggester_skill_id": suggesterSkillID,
 		"owner_skill_id":     ownerSkillID,
@@ -690,20 +675,20 @@ func (c *apiClient) createSuggestion(suggesterSkillID, ownerSkillID, baseContent
 	if err != nil {
 		return nil, err
 	}
-	var s apiSuggestion
+	var s apitypes.Suggestion
 	if err := json.Unmarshal(body, &s); err != nil {
 		return nil, err
 	}
 	return &s, nil
 }
 
-func (c *apiClient) listSuggestions(role, status, skillID string) ([]apiSuggestion, error) {
+func (c *apiClient) listSuggestions(role, status, skillID string) ([]apitypes.EnrichedSuggestion, error) {
 	body, err := c.get(suggestionsPath(role, status, skillID, false))
 	if err != nil {
 		return nil, err
 	}
 	var resp struct {
-		Suggestions []apiSuggestion `json:"suggestions"`
+		Suggestions []apitypes.EnrichedSuggestion `json:"suggestions"`
 	}
 	if err := json.Unmarshal(body, &resp); err != nil {
 		return nil, err
@@ -799,12 +784,12 @@ func suggestionsCountPath(role, status, skillID string) string {
 	return "/api/v1/suggestions/count?" + strings.Join(params, "&")
 }
 
-func (c *apiClient) getSuggestion(id string) (*apiSuggestion, error) {
+func (c *apiClient) getSuggestion(id string) (*apitypes.Suggestion, error) {
 	body, err := c.get(fmt.Sprintf("/api/v1/suggestions/%s", id))
 	if err != nil {
 		return nil, err
 	}
-	var s apiSuggestion
+	var s apitypes.Suggestion
 	if err := json.Unmarshal(body, &s); err != nil {
 		return nil, err
 	}
@@ -812,7 +797,7 @@ func (c *apiClient) getSuggestion(id string) (*apiSuggestion, error) {
 }
 
 // Server RLS enforces that only the owner of the referenced skill can update.
-func (c *apiClient) updateSuggestion(id, status, responseMessage string) (*apiSuggestion, error) {
+func (c *apiClient) updateSuggestion(id, status, responseMessage string) (*apitypes.Suggestion, error) {
 	payload := map[string]string{
 		"status":           status,
 		"response_message": responseMessage,
@@ -824,7 +809,7 @@ func (c *apiClient) updateSuggestion(id, status, responseMessage string) (*apiSu
 	if statusCode >= 400 {
 		return nil, fmt.Errorf("API error (%d): %s", statusCode, string(body))
 	}
-	var s apiSuggestion
+	var s apitypes.Suggestion
 	if err := json.Unmarshal(body, &s); err != nil {
 		return nil, err
 	}

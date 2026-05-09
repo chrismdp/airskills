@@ -541,10 +541,11 @@ func notifyResolvedSuggestions(client *apiClient, syncState *SyncState) {
 	var newest string
 	var shown bool
 	for _, s := range suggestions {
-		if s.Status == "pending" || s.ReviewedAt == nil {
+		if string(s.Status) == "pending" || s.ReviewedAt == nil {
 			continue
 		}
-		if cutoff != "" && *s.ReviewedAt <= cutoff {
+		reviewed := s.ReviewedAt.Format(time.RFC3339)
+		if cutoff != "" && reviewed <= cutoff {
 			continue
 		}
 		if !shown {
@@ -552,23 +553,24 @@ func notifyResolvedSuggestions(client *apiClient, syncState *SyncState) {
 			fmt.Println("--- Suggestions ---")
 			shown = true
 		}
-		skillName := s.OwnerSkillName
+		skillName := strDeref(s.OwnerSkillName)
 		if skillName == "" {
-			skillName = s.OwnerSkillID
+			skillName = s.OwnerSkillId.String()
 		}
-		switch s.Status {
+		responseMsg := strDeref(s.ResponseMessage)
+		switch string(s.Status) {
 		case "accepted":
 			fmt.Printf("  %s your suggestion for %q was accepted\n", green("✓"), skillName)
 		case "declined":
-			if s.ResponseMessage != "" {
+			if responseMsg != "" {
 				fmt.Printf("  %s your suggestion for %q was declined: %q\n",
-					yellow("✗"), skillName, s.ResponseMessage)
+					yellow("✗"), skillName, responseMsg)
 			} else {
 				fmt.Printf("  %s your suggestion for %q was declined\n", yellow("✗"), skillName)
 			}
 		}
-		if *s.ReviewedAt > newest {
-			newest = *s.ReviewedAt
+		if reviewed > newest {
+			newest = reviewed
 		}
 	}
 	if newest != "" {
