@@ -48,8 +48,8 @@ func setAnonHeader(req *http.Request) {
 // alias keeps existing call-sites readable while making it explicit
 // that the type is owned by the platform, not the CLI.
 //
-// Note: `current_owner` lives on apiArchivePutResponse only — the spec
-// scopes it to that response shape. apitypes.Skill does not carry it.
+// Note: `current_owner` lives on apitypes.ArchivePutResponse only — the
+// spec scopes it to that response shape. apitypes.Skill does not carry it.
 type apiSkill = apitypes.Skill
 
 // strDeref returns the pointed-to string, or "" if nil. Use at the
@@ -80,18 +80,6 @@ func testUUID(s string) openapi_types.UUID {
 		return u
 	}
 	return uuid.NewSHA1(uuid.Nil, []byte(s))
-}
-
-// apiArchivePutResponse mirrors apitypes.ArchivePutResponse — embeds
-// apiSkill (so all skill fields are accessible on the same value) and
-// adds the archive-PUT-only extras the spec scopes here: warning
-// (storage soft-limit notice), unresolved_dependencies, and
-// current_owner (used by the CLI to detect out-of-band transfers).
-type apiArchivePutResponse struct {
-	apiSkill
-	Warning                string                  `json:"warning,omitempty"`
-	UnresolvedDependencies []string                `json:"unresolved_dependencies,omitempty"`
-	CurrentOwner           *apitypes.OwnerNamespace `json:"current_owner,omitempty"`
 }
 
 // skillHasUpstreamUpdate reports whether a forked skill's pinned upstream
@@ -579,9 +567,9 @@ func (c *apiClient) createSkillWithGitHub(name, githubURL, githubSkill string) (
 }
 
 // putArchive uploads a tar.gz to the archive endpoint (single write path).
-// Returns *apiArchivePutResponse so callers can read the spec-correct
-// Warning + UnresolvedDependencies extras alongside the embedded Skill.
-func (c *apiClient) putArchive(skillID string, archive []byte, expectedHash, contentHash string) (*apiArchivePutResponse, int, error) {
+// Returns *apitypes.ArchivePutResponse so callers see the spec-defined
+// Warning + UnresolvedDependencies + CurrentOwner extras directly.
+func (c *apiClient) putArchive(skillID string, archive []byte, expectedHash, contentHash string) (*apitypes.ArchivePutResponse, int, error) {
 	url := c.baseURL + fmt.Sprintf("/api/v1/skills/%s/archive", skillID)
 	req, err := http.NewRequest("PUT", url, bytes.NewReader(archive))
 	if err != nil {
@@ -608,7 +596,7 @@ func (c *apiClient) putArchive(skillID string, archive []byte, expectedHash, con
 		return nil, resp.StatusCode, err
 	}
 
-	var skill apiArchivePutResponse
+	var skill apitypes.ArchivePutResponse
 	json.Unmarshal(body, &skill)
 
 	if resp.StatusCode >= 400 {

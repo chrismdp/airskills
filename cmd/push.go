@@ -582,10 +582,10 @@ in opposite directions.`,
 				}
 				if updated != nil {
 					s.marker.Version = updated.Version
-					s.marker.ContentHash = strDeref(updated.ContentHash)
-					if updated.Warning != "" {
+					s.marker.ContentHash = updated.ContentHash
+					if w := strDeref(updated.Warning); w != "" {
 						mu.Lock()
-						warnings = append(warnings, fmt.Sprintf("%s: %s", s.name, updated.Warning))
+						warnings = append(warnings, fmt.Sprintf("%s: %s", s.name, w))
 						mu.Unlock()
 					}
 
