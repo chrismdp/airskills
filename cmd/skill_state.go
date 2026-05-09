@@ -106,7 +106,7 @@ func classifySkills(
 
 		// Tracked match by skill_id wins. Falls back to dir-name match
 		// for legacy markers that might not have a skill_id (defensive).
-		trackedName := skillIDToName[r.ID]
+		trackedName := skillIDToName[r.Id]
 		var marker *SyncEntry
 		if trackedName != "" {
 			marker = state.Skills[trackedName]
@@ -184,7 +184,8 @@ func decideState(info SkillStateInfo) SkillState {
 		if info.Remote == nil {
 			return StateUntracked
 		}
-		if info.Remote.ContentHash != "" && info.LocalHash == info.Remote.ContentHash {
+		remoteHash := strDeref(info.Remote.ContentHash)
+		if remoteHash != "" && info.LocalHash == remoteHash {
 			return StateLinked
 		}
 		return StateUntrackedConflict
@@ -199,7 +200,7 @@ func decideState(info SkillStateInfo) SkillState {
 			// whether the upstream has moved past ResolvedHash.
 			upstream := ""
 			if info.Remote != nil {
-				upstream = info.Remote.ContentHash
+				upstream = strDeref(info.Remote.ContentHash)
 			}
 			if info.Marker.ResolvedHash != "" && upstream != "" && upstream == info.Marker.ResolvedHash {
 				return StateModified

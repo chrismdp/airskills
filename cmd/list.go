@@ -50,7 +50,7 @@ Use --deleted to show soft-deleted skills.`,
 				if s.DeletedAt != nil {
 					deletedAt = *s.DeletedAt
 				}
-				fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", s.Name, truncateDescription(s.Description, 60), s.Version, deletedAt)
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", s.Name, truncateDescription(strDeref(s.Description), 60), s.Version, deletedAt)
 			}
 			w.Flush()
 			return nil
@@ -82,7 +82,7 @@ Use --deleted to show soft-deleted skills.`,
 		fmt.Fprintln(w, "NAME\tDESCRIPTION\tVERSION\tSTATE")
 		for _, s := range skills {
 			state := stateByName[s.Name]
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", s.Name, truncateDescription(s.Description, 60), s.Version, listStateLabel(state))
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", s.Name, truncateDescription(strDeref(s.Description), 60), s.Version, listStateLabel(state))
 		}
 		w.Flush()
 		return nil

@@ -290,8 +290,8 @@ func installOneGitHubSkill(owner, repo, githubURL string, skill foundSkill) erro
 	if cfg != nil && token != nil && token.ExpiresAt > 0 {
 		client := newAPIClient(cfg, token)
 		if serverSkill, createErr := client.createSkillWithGitHub(slug, githubURL, skill.LeafName); createErr == nil {
-			entry.SkillID = serverSkill.ID
-			entry.ContentHash = serverSkill.ContentHash
+			entry.SkillID = serverSkill.Id
+			entry.ContentHash = strDeref(serverSkill.ContentHash)
 		}
 	}
 

@@ -216,8 +216,8 @@ var addCmd = &cobra.Command{
 			client := newAPIClient(cfg, token)
 			skill, createErr := client.createSkill(result.Slug, "", []string{"claude-code"}, result.ID, "")
 			if createErr == nil {
-				entry.SkillID = skill.ID
-				entry.ContentHash = skill.ContentHash
+				entry.SkillID = skill.Id
+				entry.ContentHash = strDeref(skill.ContentHash)
 			}
 			// If creation fails (e.g. network), fall through — sync will handle it
 		}

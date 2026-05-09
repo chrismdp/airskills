@@ -128,7 +128,7 @@ func runPull(cmd *cobra.Command, args []string) error {
 	// Resolve upstream updates on forked skills before deciding actions.
 	for i := range remoteSkills {
 		if remoteSkills[i].HasUpstreamUpdate() {
-			if updated, err := client.pullUpstream(remoteSkills[i].ID); err == nil {
+			if updated, err := client.pullUpstream(remoteSkills[i].Id); err == nil {
 				remoteSkills[i].ContentHash = updated.ContentHash
 				remoteSkills[i].Version = updated.Version
 			}
@@ -180,7 +180,7 @@ func runPull(cmd *cobra.Command, args []string) error {
 		// Auto-resolved: local already matches remote — update marker silently, no download.
 		if p.reason == "auto-resolved" {
 			if p.marker != nil {
-				p.marker.ContentHash = p.skill.ContentHash
+				p.marker.ContentHash = strDeref(p.skill.ContentHash)
 				p.marker.Version = p.skill.Version
 			}
 			autoResolved++
@@ -199,9 +199,9 @@ func runPull(cmd *cobra.Command, args []string) error {
 		if p.reason == "linked" {
 			dirName := filepath.Base(p.localDir)
 			syncState.Skills[dirName] = &SyncEntry{
-				SkillID:     p.skill.ID,
+				SkillID:     p.skill.Id,
 				Version:     p.skill.Version,
-				ContentHash: p.skill.ContentHash,
+				ContentHash: strDeref(p.skill.ContentHash),
 				Tool:        "claude-code",
 			}
 			autoResolved++
@@ -216,7 +216,7 @@ func runPull(cmd *cobra.Command, args []string) error {
 		lines[i].pct = 0.5
 		renderProgress(lines)
 
-		files, err := downloadSkillFiles(client, p.skill.ID)
+		files, err := downloadSkillFiles(client, p.skill.Id)
 		if err != nil || len(files) == 0 {
 			lines[i].status = "failed"
 			renderProgress(lines)
@@ -267,9 +267,9 @@ func runPull(cmd *cobra.Command, args []string) error {
 
 			// Add marker for the new dir
 			syncState.Skills[newDirName] = &SyncEntry{
-				SkillID:     p.skill.ID,
+				SkillID:     p.skill.Id,
 				Version:     p.skill.Version,
-				ContentHash: p.skill.ContentHash,
+				ContentHash: strDeref(p.skill.ContentHash),
 				Tool:        "claude-code",
 			}
 
@@ -327,9 +327,9 @@ func runPull(cmd *cobra.Command, args []string) error {
 			continue
 		}
 		syncState.Skills[dirName] = &SyncEntry{
-			SkillID:     p.skill.ID,
+			SkillID:     p.skill.Id,
 			Version:     p.skill.Version,
-			ContentHash: p.skill.ContentHash,
+			ContentHash: strDeref(p.skill.ContentHash),
 			Tool:        "claude-code",
 		}
 
@@ -346,7 +346,7 @@ func runPull(cmd *cobra.Command, args []string) error {
 			}
 
 			// Fetch commit messages since last known version
-			commits, err := client.getVersionHistory(p.skill.ID)
+			commits, err := client.getVersionHistory(p.skill.Id)
 			if err == nil {
 				for _, c := range commits {
 					if c.Message != "" {
@@ -604,7 +604,7 @@ func decidePullActions(remoteSkills []apiSkill, localSkills map[string]string, s
 
 	for _, remote := range remoteSkills {
 		trackedName := ""
-		if name, ok := skillIdToName[remote.ID]; ok {
+		if name, ok := skillIdToName[remote.Id]; ok {
 			trackedName = name
 		}
 
@@ -631,7 +631,8 @@ func decidePullActions(remoteSkills []apiSkill, localSkills map[string]string, s
 			}
 
 			marker := syncState.Skills[trackedName]
-			if remote.ContentHash == "" || marker.ContentHash == "" || remote.ContentHash == marker.ContentHash {
+			remoteHash := strDeref(remote.ContentHash)
+			if remoteHash == "" || marker.ContentHash == "" || remoteHash == marker.ContentHash {
 				continue
 			}
 
@@ -644,7 +645,7 @@ func decidePullActions(remoteSkills []apiSkill, localSkills map[string]string, s
 			localHash := computeMerkleHash(localFiles)
 
 			switch {
-			case localHash == remote.ContentHash:
+			case localHash == remoteHash:
 				// Auto-detect: local already matches remote bytes.
 				// Marker is stale from manual reconciliation — update silently.
 				actions = append(actions, pullEntry{skill: remote, reason: "auto-resolved", localDir: localDir, marker: marker})
@@ -663,7 +664,8 @@ func decidePullActions(remoteSkills []apiSkill, localSkills map[string]string, s
 			// (bytes differ → surface via existing conflict UX).
 			localFiles := readSkillFiles(localDir)
 			localHash := computeMerkleHash(localFiles)
-			if remote.ContentHash != "" && localHash == remote.ContentHash {
+			remoteHash := strDeref(remote.ContentHash)
+			if remoteHash != "" && localHash == remoteHash {
 				actions = append(actions, pullEntry{
 					skill: remote, reason: "linked", localDir: localDir,
 				})
@@ -779,7 +781,7 @@ func runPullForce(cmd *cobra.Command, args []string) error {
 		}
 
 		// Download remote files
-		files, err := downloadSkillFiles(client, p.skill.ID)
+		files, err := downloadSkillFiles(client, p.skill.Id)
 		if err != nil || len(files) == 0 {
 			fmt.Fprintf(os.Stderr, "  %s %s: download failed\n", yellow("!"), skillName)
 			continue
@@ -796,8 +798,8 @@ func runPullForce(cmd *cobra.Command, args []string) error {
 		if marker == nil {
 			marker = &SyncEntry{Tool: "claude-code"}
 		}
-		marker.SkillID = p.skill.ID
-		marker.ContentHash = p.skill.ContentHash
+		marker.SkillID = p.skill.Id
+		marker.ContentHash = strDeref(p.skill.ContentHash)
 		marker.Version = p.skill.Version
 		syncState.Skills[skillName] = marker
 		forcePulled++

@@ -24,7 +24,7 @@ func TestListDeletedSkillsFieldMapping(t *testing.T) {
 	deletedAt := "2026-04-15T10:00:00Z"
 	reason := "user_deleted"
 	s := apiSkill{
-		ID:             "skill-123",
+		Id:             "skill-123",
 		Name:           "my-skill",
 		Version:        "1.0.0",
 		DeletedAt:      &deletedAt,

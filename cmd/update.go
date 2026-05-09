@@ -46,7 +46,7 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 			continue
 		}
 
-		files, err := downloadSkillFiles(client, skill.ID)
+		files, err := downloadSkillFiles(client, skill.Id)
 		if err != nil || len(files) == 0 {
 			fmt.Fprintf(os.Stderr, "  ! %s: %v\n", skill.Name, err)
 			continue
@@ -60,9 +60,9 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 		}
 
 		syncState.Skills[skill.Name] = &SyncEntry{
-			SkillID:     skill.ID,
+			SkillID:     skill.Id,
 			Version:     skill.Version,
-			ContentHash: skill.ContentHash,
+			ContentHash: strDeref(skill.ContentHash),
 			Tool:        "claude-code",
 		}
 

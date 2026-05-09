@@ -75,7 +75,7 @@ func runExport(cmd *cobra.Command, args []string) error {
 
 		var exported int
 		for _, skill := range skills {
-			files, err := downloadSkillFiles(client, skill.ID)
+			files, err := downloadSkillFiles(client, skill.Id)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "  ! %s: %v\n", skill.Name, err)
 				continue
@@ -103,7 +103,7 @@ func runExport(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("skill %q not found in your account", name)
 	}
 
-	files, err := downloadSkillFiles(client, target.ID)
+	files, err := downloadSkillFiles(client, target.Id)
 	if err != nil {
 		return fmt.Errorf("downloading skill files: %w", err)
 	}

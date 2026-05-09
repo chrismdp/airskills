@@ -97,7 +97,7 @@ To restore the old slug, run 'airskills restore <old-slug>'.`,
 		}
 
 		respBody, err := client.post(
-			fmt.Sprintf("/api/v1/skills/%s/transfer", skill.ID),
+			fmt.Sprintf("/api/v1/skills/%s/transfer", skill.Id),
 			payload,
 		)
 		if err != nil {
@@ -123,15 +123,15 @@ To restore the old slug, run 'airskills restore <old-slug>'.`,
 			}
 			newKind = "user"
 		}
-		if newSlug != "" && updated.ID != "" {
-			if err := updateLocalMarkerForTransfer(skill.ID, updated.ID, newKind, newSlug); err != nil {
+		if newSlug != "" && updated.Id != "" {
+			if err := updateLocalMarkerForTransfer(skill.Id, updated.Id, newKind, newSlug); err != nil {
 				fmt.Fprintf(os.Stderr, "  %s server transferred OK but local marker update failed: %v\n", yellow("!"), err)
 			}
 		}
 
 		fmt.Printf("\n  %s Transferred.\n", green("✓"))
 		telemetry.Capture("cli_transfer", map[string]interface{}{
-			"skill_id": skill.ID,
+			"skill_id": skill.Id,
 			"to_org":   transferToOrg,
 			"to_user":  transferToOrg == "",
 		})

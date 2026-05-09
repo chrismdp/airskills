@@ -54,7 +54,7 @@ var historyCmd = &cobra.Command{
 			go func() {
 				defer wg.Done()
 				defer func() { <-sem }()
-				commits, err := client.getVersionHistory(s.ID)
+				commits, err := client.getVersionHistory(s.Id)
 				if err != nil || len(commits) == 0 {
 					return
 				}

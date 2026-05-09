@@ -48,7 +48,7 @@ func TestClassifySynced(t *testing.T) {
 			"deploy-check": {SkillID: "id-1", ContentHash: "h-server"},
 		},
 	}
-	remote := []apiSkill{{ID: "id-1", Name: "deploy-check", ContentHash: "h-server"}}
+	remote := []apiSkill{{Id: "id-1", Name: "deploy-check", ContentHash: strPtr("h-server")}}
 	local := map[string]string{"deploy-check": "/disk/deploy-check"}
 	hash := stubHasher(map[string]string{"/disk/deploy-check": "h-server"})
 
@@ -67,7 +67,7 @@ func TestClassifyModifiedOwned(t *testing.T) {
 			"my-skill": {SkillID: "id-1", ContentHash: "h-marker"},
 		},
 	}
-	remote := []apiSkill{{ID: "id-1", Name: "my-skill", ContentHash: "h-marker"}}
+	remote := []apiSkill{{Id: "id-1", Name: "my-skill", ContentHash: strPtr("h-marker")}}
 	local := map[string]string{"my-skill": "/disk/my-skill"}
 	hash := stubHasher(map[string]string{"/disk/my-skill": "h-local-edits"})
 
@@ -92,7 +92,7 @@ func TestClassifyModifiedSourcedResolved(t *testing.T) {
 			},
 		},
 	}
-	remote := []apiSkill{{ID: "id-1", Name: "heartbeat", ContentHash: "h-upstream-current"}}
+	remote := []apiSkill{{Id: "id-1", Name: "heartbeat", ContentHash: strPtr("h-upstream-current")}}
 	local := map[string]string{"heartbeat": "/disk/heartbeat"}
 	hash := stubHasher(map[string]string{"/disk/heartbeat": "h-customised"})
 
@@ -117,7 +117,7 @@ func TestClassifyModifiedPending(t *testing.T) {
 			},
 		},
 	}
-	remote := []apiSkill{{ID: "id-1", Name: "heartbeat", ContentHash: "h-upstream-new"}}
+	remote := []apiSkill{{Id: "id-1", Name: "heartbeat", ContentHash: strPtr("h-upstream-new")}}
 	local := map[string]string{"heartbeat": "/disk/heartbeat"}
 	hash := stubHasher(map[string]string{"/disk/heartbeat": "h-customised"})
 
@@ -143,7 +143,7 @@ func TestClassifyModifiedPendingMissingResolvedHash(t *testing.T) {
 			},
 		},
 	}
-	remote := []apiSkill{{ID: "id-1", Name: "heartbeat", ContentHash: "h-upstream"}}
+	remote := []apiSkill{{Id: "id-1", Name: "heartbeat", ContentHash: strPtr("h-upstream")}}
 	local := map[string]string{"heartbeat": "/disk/heartbeat"}
 	hash := stubHasher(map[string]string{"/disk/heartbeat": "h-customised"})
 
@@ -158,7 +158,7 @@ func TestClassifyLinked(t *testing.T) {
 	// Local dir present, no marker, server has a skill with the same
 	// name and matching bytes — sync will silently link.
 	state := &SyncState{Version: 1, Skills: map[string]*SyncEntry{}}
-	remote := []apiSkill{{ID: "id-1", Name: "drive-by", ContentHash: "h-match"}}
+	remote := []apiSkill{{Id: "id-1", Name: "drive-by", ContentHash: strPtr("h-match")}}
 	local := map[string]string{"drive-by": "/disk/drive-by"}
 	hash := stubHasher(map[string]string{"/disk/drive-by": "h-match"})
 
@@ -173,7 +173,7 @@ func TestClassifyUntrackedConflict(t *testing.T) {
 	// Local dir present, no marker, server has a skill with the same
 	// name but the bytes differ — surfaces via the conflict UX.
 	state := &SyncState{Version: 1, Skills: map[string]*SyncEntry{}}
-	remote := []apiSkill{{ID: "id-1", Name: "drive-by", ContentHash: "h-server"}}
+	remote := []apiSkill{{Id: "id-1", Name: "drive-by", ContentHash: strPtr("h-server")}}
 	local := map[string]string{"drive-by": "/disk/drive-by"}
 	hash := stubHasher(map[string]string{"/disk/drive-by": "h-local-different"})
 
@@ -201,7 +201,7 @@ func TestClassifyUntrackedNoRemote(t *testing.T) {
 func TestClassifyNotLocal(t *testing.T) {
 	// Server has a skill the user hasn't installed locally.
 	state := &SyncState{Version: 1, Skills: map[string]*SyncEntry{}}
-	remote := []apiSkill{{ID: "id-1", Name: "available", ContentHash: "h"}}
+	remote := []apiSkill{{Id: "id-1", Name: "available", ContentHash: strPtr("h")}}
 	local := map[string]string{}
 	hash := stubHasher(map[string]string{})
 
@@ -222,7 +222,7 @@ func TestClassifyMatchesByIDNotName(t *testing.T) {
 			"old-name": {SkillID: "id-1", ContentHash: "h"},
 		},
 	}
-	remote := []apiSkill{{ID: "id-1", Name: "new-name", ContentHash: "h"}}
+	remote := []apiSkill{{Id: "id-1", Name: "new-name", ContentHash: strPtr("h")}}
 	local := map[string]string{"old-name": "/disk/old-name"}
 	hash := stubHasher(map[string]string{"/disk/old-name": "h"})
 
@@ -247,7 +247,7 @@ func TestClassifyEmits1RowPerSkill(t *testing.T) {
 			"deploy-check": {SkillID: "id-1", ContentHash: "h"},
 		},
 	}
-	remote := []apiSkill{{ID: "id-1", Name: "deploy-check", ContentHash: "h"}}
+	remote := []apiSkill{{Id: "id-1", Name: "deploy-check", ContentHash: strPtr("h")}}
 	local := map[string]string{"deploy-check": "/disk/deploy-check"}
 	hash := stubHasher(map[string]string{"/disk/deploy-check": "h"})
 

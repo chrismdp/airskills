@@ -161,7 +161,7 @@ in opposite directions.`,
 		ownedSkillIDs := map[string]bool{}
 		for i := range remoteSkills {
 			remoteByName[remoteSkills[i].Name] = &remoteSkills[i]
-			ownedSkillIDs[remoteSkills[i].ID] = true
+			ownedSkillIDs[remoteSkills[i].Id] = true
 		}
 
 		// Filter out skills whose sync state SkillID belongs to another user.
@@ -372,14 +372,14 @@ in opposite directions.`,
 					// Check if skill already exists on server
 					if remote, found := remoteByName[s.name]; found {
 						s.marker = &SyncEntry{
-							SkillID:     remote.ID,
+							SkillID:     remote.Id,
 							Version:     remote.Version,
-							ContentHash: remote.ContentHash,
+							ContentHash: strDeref(remote.ContentHash),
 							Tool:        "claude-code",
 						}
 						isNew = false
 
-						if remote.ContentHash == contentHash {
+						if strDeref(remote.ContentHash) == contentHash {
 							mu.Lock()
 							syncState.Skills[s.name] = s.marker
 							mu.Unlock()
@@ -396,7 +396,7 @@ in opposite directions.`,
 
 							tmpDir := filepath.Join(os.TempDir(), "airskills-conflicts", s.name)
 							os.MkdirAll(tmpDir, 0755)
-							rawBody, rawErr := client.get(fmt.Sprintf("/api/v1/skills/%s/raw", remote.ID))
+							rawBody, rawErr := client.get(fmt.Sprintf("/api/v1/skills/%s/raw", remote.Id))
 							if rawErr == nil {
 								tmpPath := filepath.Join(tmpDir, "SKILL.md")
 								os.WriteFile(tmpPath, rawBody, 0644)
@@ -429,7 +429,7 @@ in opposite directions.`,
 							return
 						}
 
-						s.marker = &SyncEntry{SkillID: skill.ID, Version: skill.Version, Tool: "claude-code"}
+						s.marker = &SyncEntry{SkillID: skill.Id, Version: skill.Version, Tool: "claude-code"}
 						if createOrgID != "" {
 							s.marker.OwnerKind = "org"
 							s.marker.OwnerSlug = pushOrg
@@ -582,7 +582,7 @@ in opposite directions.`,
 				}
 				if updated != nil {
 					s.marker.Version = updated.Version
-					s.marker.ContentHash = updated.ContentHash
+					s.marker.ContentHash = strDeref(updated.ContentHash)
 					if updated.Warning != "" {
 						mu.Lock()
 						warnings = append(warnings, fmt.Sprintf("%s: %s", s.name, updated.Warning))

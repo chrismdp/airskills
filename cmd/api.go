@@ -40,32 +40,67 @@ func setAnonHeader(req *http.Request) {
 	}
 }
 
-// apiSkill represents a skill from the API.
+// apiSkill represents a skill from the API. Field shape mirrors
+// apitypes.Skill (which the codegen wiring landed in Phase D); this
+// keeps the local hand-rolled struct as a stand-in for one more
+// commit so Step 1b's import swap is purely an import + free-function
+// change with no field-name churn.
 //
-// OwnerID is a pointer because skills can be owned by an org instead of a
-// user — in that case owner_id is null and org_id is set.
+// OwnerId is a pointer because skills can be owned by an org instead
+// of a user — in that case owner_id is null and org_id is set.
 //
-// CurrentOwner is set on push responses so the CLI can detect server-side
-// transfers and keep the local marker in sync. The server never returns
-// "previous owner" — that would let attackers probe transfer history by
-// spoofing markers.
+// CurrentOwner is set on push responses so the CLI can detect
+// server-side transfers and keep the local marker in sync. Strictly
+// the spec scopes current_owner to ArchivePutResponse + ResolvedSkill;
+// it stays on apiSkill for now and Step 1b moves it.
 type apiSkill struct {
-	ID                  string          `json:"id"`
-	OwnerID             *string         `json:"owner_id"`
+	Id                  string          `json:"id"`
+	OwnerId             *string         `json:"owner_id"`
 	Slug                string          `json:"slug"`
 	Name                string          `json:"name"`
-	Description         string          `json:"description"`
+	Description         *string         `json:"description"`
 	Version             string          `json:"version"`
-	ContentHash         string          `json:"content_hash"`
-	OrgID               *string         `json:"org_id"`
+	ContentHash         *string         `json:"content_hash"`
+	OrgId               *string         `json:"org_id"`
 	ForkedFrom          *string         `json:"forked_from"`
 	Visibility          string          `json:"visibility"`
 	ToolFormats         []string        `json:"tool_formats"`
-	Warning             string          `json:"warning,omitempty"`
 	UpstreamContentHash *string         `json:"upstream_content_hash"`
 	CurrentOwner        *ownerNamespace `json:"current_owner,omitempty"`
 	DeletedAt           *string         `json:"deleted_at,omitempty"`
 	DeletionReason      *string         `json:"deletion_reason,omitempty"`
+}
+
+// strDeref returns the pointed-to string, or "" if nil. Use at the
+// boundary where nullable spec fields meet code that wants a value-type
+// string (formatting, marker writes, etc). Distinct from "" sentinel
+// semantics: if a caller cares about "missing vs empty" it must check
+// the pointer directly.
+func strDeref(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
+}
+
+// strPtr returns a pointer to s. Convenience for constructing
+// apiSkill / apitypes.Skill literals where nullable fields are
+// declared as *string. Mostly used in tests.
+func strPtr(s string) *string {
+	return &s
+}
+
+// apiArchivePutResponse is the PUT /api/v1/skills/{id}/archive response —
+// shape-equivalent to apitypes.ArchivePutResponse. It embeds apiSkill
+// (the spec's allOf composition) and adds the archive-specific extras
+// the spec scopes here only: warning (storage soft-limit notice),
+// unresolved_dependencies (the ones the server couldn't resolve).
+// Replaces apiSkill.Warning, which never made sense on bare-skill
+// responses.
+type apiArchivePutResponse struct {
+	apiSkill
+	Warning                string   `json:"warning,omitempty"`
+	UnresolvedDependencies []string `json:"unresolved_dependencies,omitempty"`
 }
 
 // ownerNamespace identifies a skill's owner — either a user (kind="user",
@@ -77,9 +112,11 @@ type ownerNamespace struct {
 
 // HasUpstreamUpdate returns true if this is a forked skill whose parent has changed.
 func (s *apiSkill) HasUpstreamUpdate() bool {
-	return s.ForkedFrom != nil && s.UpstreamContentHash != nil &&
-		s.ContentHash != "" && *s.UpstreamContentHash != "" &&
-		s.ContentHash != *s.UpstreamContentHash
+	if s.ForkedFrom == nil || s.UpstreamContentHash == nil || s.ContentHash == nil {
+		return false
+	}
+	return *s.ContentHash != "" && *s.UpstreamContentHash != "" &&
+		*s.ContentHash != *s.UpstreamContentHash
 }
 
 // pullUpstream tells the server to advance this skill's pin to the parent's latest.
@@ -591,7 +628,9 @@ func (c *apiClient) createSkillWithGitHub(name, githubURL, githubSkill string) (
 }
 
 // putArchive uploads a tar.gz to the archive endpoint (single write path).
-func (c *apiClient) putArchive(skillID string, archive []byte, expectedHash, contentHash string) (*apiSkill, int, error) {
+// Returns *apiArchivePutResponse so callers can read the spec-correct
+// Warning + UnresolvedDependencies extras alongside the embedded Skill.
+func (c *apiClient) putArchive(skillID string, archive []byte, expectedHash, contentHash string) (*apiArchivePutResponse, int, error) {
 	url := c.baseURL + fmt.Sprintf("/api/v1/skills/%s/archive", skillID)
 	req, err := http.NewRequest("PUT", url, bytes.NewReader(archive))
 	if err != nil {
@@ -618,7 +657,7 @@ func (c *apiClient) putArchive(skillID string, archive []byte, expectedHash, con
 		return nil, resp.StatusCode, err
 	}
 
-	var skill apiSkill
+	var skill apiArchivePutResponse
 	json.Unmarshal(body, &skill)
 
 	if resp.StatusCode >= 400 {

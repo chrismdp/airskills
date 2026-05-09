@@ -11,7 +11,7 @@ func TestClassifyForStatusFlagsTrackedOnServerNoMarker(t *testing.T) {
 	// must too. Regression for the silent-skip in cmd/status.go where
 	// the trackedName == "" + local-exists case fell off the loop.
 	remote := []apiSkill{
-		{ID: "id-foo", Name: "foo", ContentHash: "rh1"},
+		{Id: "id-foo", Name: "foo", ContentHash: strPtr("rh1")},
 	}
 	local := map[string]string{
 		"foo": "/agent/skills/foo",
@@ -29,10 +29,10 @@ func TestClassifyForStatusFlagsTrackedOnServerNoMarker(t *testing.T) {
 
 func TestClassifyForStatusBuckets(t *testing.T) {
 	remote := []apiSkill{
-		{ID: "id-tracked-clean", Name: "tracked-clean", ContentHash: "h-clean"},
-		{ID: "id-tracked-changed", Name: "tracked-changed", ContentHash: "h-new"},
-		{ID: "id-not-local", Name: "not-local", ContentHash: "h-x"},
-		{ID: "id-untracked", Name: "untracked-skill", ContentHash: "h-y"},
+		{Id: "id-tracked-clean", Name: "tracked-clean", ContentHash: strPtr("h-clean")},
+		{Id: "id-tracked-changed", Name: "tracked-changed", ContentHash: strPtr("h-new")},
+		{Id: "id-not-local", Name: "not-local", ContentHash: strPtr("h-x")},
+		{Id: "id-untracked", Name: "untracked-skill", ContentHash: strPtr("h-y")},
 	}
 	local := map[string]string{
 		"tracked-clean":   "/agent/skills/tracked-clean",

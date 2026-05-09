@@ -48,8 +48,8 @@ var publishCmd = &cobra.Command{
 
 		// Show what's about to happen and ask for confirmation
 		fmt.Printf("\n  Skill:  %s\n", skill.Name)
-		if skill.Description != "" {
-			fmt.Printf("  About:  %s\n", skill.Description)
+		if strDeref(skill.Description) != "" {
+			fmt.Printf("  About:  %s\n", strDeref(skill.Description))
 		}
 		fmt.Println()
 		fmt.Printf("  %s This will make %q publicly visible on the internet.\n", yellow("⚠"), skillName)
@@ -65,7 +65,7 @@ var publishCmd = &cobra.Command{
 
 		// Make it public
 		body, statusCode, err := client.put(
-			fmt.Sprintf("/api/v1/skills/%s", skill.ID),
+			fmt.Sprintf("/api/v1/skills/%s", skill.Id),
 			map[string]interface{}{
 				"visibility":     "public",
 				"confirm_public": true,
@@ -107,7 +107,7 @@ var publishCmd = &cobra.Command{
 
 		telemetry.Capture("cli_publish", map[string]interface{}{
 			"skill":    skillName,
-			"skill_id": skill.ID,
+			"skill_id": skill.Id,
 		})
 
 		return nil

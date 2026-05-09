@@ -220,14 +220,15 @@ func classifyForStatus(remoteSkills []apiSkill, localSkills map[string]string, s
 			b.upstream = append(b.upstream, remote.Name)
 		}
 
-		trackedName := skillIdToName[remote.ID]
+		trackedName := skillIdToName[remote.Id]
 
 		if trackedName != "" {
 			if _, exists := localSkills[trackedName]; !exists {
 				continue
 			}
 			marker := syncState.Skills[trackedName]
-			if marker != nil && marker.ContentHash != "" && remote.ContentHash != "" && marker.ContentHash != remote.ContentHash {
+			remoteHash := strDeref(remote.ContentHash)
+			if marker != nil && marker.ContentHash != "" && remoteHash != "" && marker.ContentHash != remoteHash {
 				b.toUpdate = append(b.toUpdate, trackedName)
 			}
 			continue

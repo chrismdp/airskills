@@ -47,7 +47,7 @@ pass --slug <new-slug> to rename on restore.`,
 			payload["slug"] = restoreNewSlug
 		}
 
-		body, err := client.post(fmt.Sprintf("/api/v1/skills/%s/restore", target.ID), payload)
+		body, err := client.post(fmt.Sprintf("/api/v1/skills/%s/restore", target.Id), payload)
 		if err != nil {
 			return fmt.Errorf("restoring skill: %w", err)
 		}
