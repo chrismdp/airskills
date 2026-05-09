@@ -192,21 +192,6 @@ func (c *apiClient) getMe() (*apitypes.Profile, error) {
 	return &profile, nil
 }
 
-// syncResult represents the response from the sync check endpoint.
-type syncResult struct {
-	NeedsUpdate int         `json:"needs_update"`
-	Skills      []syncSkill `json:"skills"`
-}
-
-// syncSkill is a skill entry in the sync check response.
-type syncSkill struct {
-	ID               string  `json:"id"`
-	Name             string  `json:"name"`
-	Version          string  `json:"version"`
-	ContentHash      string  `json:"content_hash"`
-	InstalledVersion *string `json:"installed_version"`
-}
-
 // apiClient wraps authenticated HTTP calls to the airskills API.
 type apiClient struct {
 	baseURL string
@@ -813,15 +798,3 @@ func (c *apiClient) updateSuggestion(id, status, responseMessage string) (*apity
 	return &s, nil
 }
 
-// syncCheck checks for updates since the given timestamp.
-func (c *apiClient) syncCheck(since string) (*syncResult, error) {
-	body, err := c.get(fmt.Sprintf("/api/v1/sync?since=%s", since))
-	if err != nil {
-		return nil, err
-	}
-	var result syncResult
-	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, err
-	}
-	return &result, nil
-}
