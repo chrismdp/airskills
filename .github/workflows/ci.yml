@@ -29,9 +29,11 @@ jobs:
       - name: Vet
         run: go vet ./...
 
-  # Regen-drift gate: re-runs scripts/codegen.sh against the committed
-  # fixture and fails if internal/apitypes/types.gen.go drifts. Forces
-  # a fixture refresh on every spec change.
+  # Regen-drift gate — keep types.gen.go in sync with
+  # scripts/fixtures/openapi.json. Re-runs scripts/codegen.sh against
+  # the committed fixture and fails if internal/apitypes/types.gen.go
+  # would change. Refresh the fixture (cp from $PLATFORM_REPO) and
+  # re-run codegen whenever the OpenAPI spec moves.
   codegen-drift:
     runs-on: ubuntu-latest
     steps:
