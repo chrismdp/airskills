@@ -13,6 +13,124 @@ import (
 	"github.com/chrismdp/airskills/config"
 )
 
+// TestCountSuggestionsPrefersNewEndpoint verifies that countSuggestions
+// hits the new /api/v1/suggestions/count route by default, not the legacy
+// polymorphic /api/v1/suggestions?count=1 form.
+func TestCountSuggestionsPrefersNewEndpoint(t *testing.T) {
+	countUseLegacy.Store(false)
+	t.Cleanup(func() { countUseLegacy.Store(false) })
+
+	var newHits, legacyHits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/suggestions/count":
+			newHits++
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"count":7}`))
+		case "/api/v1/suggestions":
+			legacyHits++
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"count":99}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	c := &apiClient{baseURL: srv.URL, token: "t", http: srv.Client()}
+	got, err := c.countSuggestions("owner", "pending", "")
+	if err != nil {
+		t.Fatalf("countSuggestions: %v", err)
+	}
+	if got != 7 {
+		t.Errorf("count: want 7 (from new endpoint), got %d", got)
+	}
+	if newHits != 1 {
+		t.Errorf("expected 1 hit on /suggestions/count, got %d", newHits)
+	}
+	if legacyHits != 0 {
+		t.Errorf("expected 0 hits on legacy ?count=1 path, got %d", legacyHits)
+	}
+}
+
+// TestCountSuggestionsFallsBackOnNotFound verifies the back-compat path:
+// older self-hosted platforms without /suggestions/count return 404, and
+// the CLI must transparently fall back to the legacy ?count=1 form. The
+// per-process cache then sticks so subsequent calls skip the probe.
+func TestCountSuggestionsFallsBackOnNotFound(t *testing.T) {
+	countUseLegacy.Store(false)
+	t.Cleanup(func() { countUseLegacy.Store(false) })
+
+	var newHits, legacyHits int
+	var lastLegacyQuery string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/suggestions/count":
+			newHits++
+			http.NotFound(w, r)
+		case "/api/v1/suggestions":
+			legacyHits++
+			lastLegacyQuery = r.URL.RawQuery
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"count":3}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	c := &apiClient{baseURL: srv.URL, token: "t", http: srv.Client()}
+
+	// First call probes the new endpoint, gets 404, falls back.
+	got, err := c.countSuggestions("owner", "pending", "")
+	if err != nil {
+		t.Fatalf("countSuggestions (first): %v", err)
+	}
+	if got != 3 {
+		t.Errorf("count (first): want 3, got %d", got)
+	}
+	if newHits != 1 || legacyHits != 1 {
+		t.Errorf("after first call: newHits=%d legacyHits=%d (want 1, 1)", newHits, legacyHits)
+	}
+	// Legacy path must include count=1 to trigger the count branch.
+	if !strings.Contains(lastLegacyQuery, "count=1") {
+		t.Errorf("legacy fallback query missing count=1: %q", lastLegacyQuery)
+	}
+
+	// Second call must NOT re-probe — go straight to legacy.
+	if _, err := c.countSuggestions("suggester", "", ""); err != nil {
+		t.Fatalf("countSuggestions (second): %v", err)
+	}
+	if newHits != 1 {
+		t.Errorf("after second call: newHits=%d (want still 1 — probe should be cached)", newHits)
+	}
+	if legacyHits != 2 {
+		t.Errorf("after second call: legacyHits=%d (want 2)", legacyHits)
+	}
+}
+
+// TestSuggestionsCountPathPropagatesFilters guards against silently dropping
+// query params on the new endpoint.
+func TestSuggestionsCountPathPropagatesFilters(t *testing.T) {
+	cases := []struct {
+		role, status, skill string
+		want                string
+	}{
+		{"", "", "", "/api/v1/suggestions/count"},
+		{"owner", "", "", "/api/v1/suggestions/count?role=owner"},
+		{"owner", "pending", "", "/api/v1/suggestions/count?role=owner&status=pending"},
+		{"", "", "abc-123", "/api/v1/suggestions/count?skill_id=abc-123"},
+		{"suggester", "accepted", "abc-123", "/api/v1/suggestions/count?role=suggester&status=accepted&skill_id=abc-123"},
+	}
+	for _, tc := range cases {
+		got := suggestionsCountPath(tc.role, tc.status, tc.skill)
+		if got != tc.want {
+			t.Errorf("suggestionsCountPath(%q,%q,%q): want %q, got %q",
+				tc.role, tc.status, tc.skill, tc.want, got)
+		}
+	}
+}
+
 // TestRefreshAccessTokenExposeError verifies that a non-200 response includes
 // both the HTTP status code and the response body in the error — not just a
 // bare status integer — so callers can diagnose why refresh failed.

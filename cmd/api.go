@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/chrismdp/airskills/config"
@@ -288,6 +289,31 @@ func (c *apiClient) get(path string) ([]byte, error) {
 		return nil, fmt.Errorf("API error (%d): %s", resp.StatusCode, string(body))
 	}
 	return body, nil
+}
+
+// getWithStatus is like get() but returns the HTTP status code instead of
+// folding it into an error string. Used by callers that need to react to
+// specific codes (e.g. fall back on 404) before treating other >=400 codes
+// as errors.
+func (c *apiClient) getWithStatus(path string) ([]byte, int, error) {
+	req, err := http.NewRequest("GET", c.baseURL+path, nil)
+	if err != nil {
+		return nil, 0, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	setAnonHeader(req)
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer resp.Body.Close()
+
+	body, readErr := io.ReadAll(resp.Body)
+	if readErr != nil {
+		return nil, resp.StatusCode, readErr
+	}
+	return body, resp.StatusCode, nil
 }
 
 func (c *apiClient) post(path string, payload interface{}) ([]byte, error) {
@@ -667,9 +693,44 @@ func (c *apiClient) listSuggestions(role, status, skillID string) ([]apiSuggesti
 	return resp.Suggestions, nil
 }
 
+// Per-process cache of the count-endpoint shape decision. The new
+// /api/v1/suggestions/count route is the preferred path; on a 404 we
+// fall back to the legacy ?count=1 form (older self-hosted platforms)
+// and remember the decision so we don't re-probe on every status call.
+var countUseLegacy atomic.Bool
+
 // countSuggestions hits the count-only fast path — used by `airskills status`
 // so the shell prompt doesn't pay for enrichment just to render a number.
+//
+// Tries GET /api/v1/suggestions/count first. On HTTP 404 (older platform
+// without the split), falls back to the legacy GET /api/v1/suggestions
+// ?count=1 polymorphic-response form. Per-process cache: once a 404 has
+// been observed, subsequent calls go straight to the legacy path.
 func (c *apiClient) countSuggestions(role, status, skillID string) (int, error) {
+	if countUseLegacy.Load() {
+		return c.countSuggestionsLegacy(role, status, skillID)
+	}
+	body, statusCode, err := c.getWithStatus(suggestionsCountPath(role, status, skillID))
+	if err != nil {
+		return 0, err
+	}
+	if statusCode == http.StatusNotFound {
+		countUseLegacy.Store(true)
+		return c.countSuggestionsLegacy(role, status, skillID)
+	}
+	if statusCode >= 400 {
+		return 0, fmt.Errorf("API error (%d): %s", statusCode, string(body))
+	}
+	var resp struct {
+		Count int `json:"count"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return 0, err
+	}
+	return resp.Count, nil
+}
+
+func (c *apiClient) countSuggestionsLegacy(role, status, skillID string) (int, error) {
 	body, err := c.get(suggestionsPath(role, status, skillID, true))
 	if err != nil {
 		return 0, err
@@ -701,6 +762,23 @@ func suggestionsPath(role, status, skillID string, countOnly bool) string {
 		return "/api/v1/suggestions"
 	}
 	return "/api/v1/suggestions?" + strings.Join(params, "&")
+}
+
+func suggestionsCountPath(role, status, skillID string) string {
+	params := []string{}
+	if role != "" {
+		params = append(params, "role="+role)
+	}
+	if status != "" {
+		params = append(params, "status="+status)
+	}
+	if skillID != "" {
+		params = append(params, "skill_id="+skillID)
+	}
+	if len(params) == 0 {
+		return "/api/v1/suggestions/count"
+	}
+	return "/api/v1/suggestions/count?" + strings.Join(params, "&")
 }
 
 func (c *apiClient) getSuggestion(id string) (*apiSuggestion, error) {
