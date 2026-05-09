@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/chrismdp/airskills/telemetry"
 	"github.com/spf13/cobra"
 )
 
@@ -39,7 +40,7 @@ type ghAsset struct {
 }
 
 func runSelfUpdate(cmd *cobra.Command, args []string) error {
-	_, err := performUpdate(version, true)
+	_, err := performUpdate(version, true, "manual")
 	return err
 }
 
@@ -53,9 +54,15 @@ func runSelfUpdate(cmd *cobra.Command, args []string) error {
 // lines on success, one on failure. Auto-mode also uses a tighter
 // 10s HTTP timeout so a slow network doesn't add 30s to every command.
 //
+// trigger ("manual" or "auto") tags the three telemetry events fired
+// from this function: cli_self_update_started, cli_self_update_completed,
+// cli_self_update_failed. Events fire only once we've decided an update
+// is available — pre-decision errors (manifest fetch, JSON parse) are
+// stderr-only by design.
+//
 // Auto-update fires *before* the user's command runs, never after,
 // so it cannot interfere with a mid-flight skill-state mutation.
-func performUpdate(currentVersion string, verbose bool) (string, error) {
+func performUpdate(currentVersion string, verbose bool, trigger string) (string, error) {
 	timeout := 30 * time.Second
 	if !verbose {
 		timeout = 10 * time.Second
@@ -102,6 +109,28 @@ func performUpdate(currentVersion string, verbose bool) (string, error) {
 		fmt.Fprintf(os.Stderr, "airskills: updating to v%s (from v%s)...\n", latest, currentVersion)
 	}
 
+	startedAt := time.Now()
+	telemetry.Capture("cli_self_update_started", map[string]interface{}{
+		"from_version": currentVersion,
+		"to_version":   latest,
+		"trigger":      trigger,
+	})
+
+	fail := func(reason string, err error) (string, error) {
+		msg := err.Error()
+		if len(msg) > 200 {
+			msg = msg[:200]
+		}
+		telemetry.Capture("cli_self_update_failed", map[string]interface{}{
+			"from_version": currentVersion,
+			"to_version":   latest,
+			"trigger":      trigger,
+			"reason":       reason,
+			"error":        msg,
+		})
+		return "", err
+	}
+
 	archiveName := fmt.Sprintf("airskills_%s_%s.tar.gz", runtime.GOOS, runtime.GOARCH)
 	var archiveURL, checksumURL string
 	for _, asset := range release.Assets {
@@ -113,7 +142,7 @@ func performUpdate(currentVersion string, verbose bool) (string, error) {
 		}
 	}
 	if archiveURL == "" {
-		return "", fmt.Errorf("no release found for %s/%s", runtime.GOOS, runtime.GOARCH)
+		return fail("other", fmt.Errorf("no release found for %s/%s", runtime.GOOS, runtime.GOARCH))
 	}
 
 	var expectedHash string
@@ -144,7 +173,7 @@ func performUpdate(currentVersion string, verbose bool) (string, error) {
 	}
 	archiveData, err := httpGet(client, archiveURL)
 	if err != nil {
-		return "", fmt.Errorf("download failed: %w", err)
+		return fail("network", fmt.Errorf("download failed: %w", err))
 	}
 	if verbose {
 		fmt.Printf("ok (%d bytes)\n", len(archiveData))
@@ -153,7 +182,7 @@ func performUpdate(currentVersion string, verbose bool) (string, error) {
 	if expectedHash != "" {
 		actualHash := sha256Hex(archiveData)
 		if actualHash != expectedHash {
-			return "", fmt.Errorf("checksum mismatch: expected %s, got %s", expectedHash, actualHash)
+			return fail("checksum", fmt.Errorf("checksum mismatch: expected %s, got %s", expectedHash, actualHash))
 		}
 		if verbose {
 			fmt.Println("Checksum verified.")
@@ -162,26 +191,26 @@ func performUpdate(currentVersion string, verbose bool) (string, error) {
 
 	binary, err := extractBinaryFromTarGz(archiveData, "airskills")
 	if err != nil {
-		return "", fmt.Errorf("extraction failed: %w", err)
+		return fail("extract", fmt.Errorf("extraction failed: %w", err))
 	}
 
 	execPath, err := os.Executable()
 	if err != nil {
-		return "", fmt.Errorf("cannot find current binary: %w", err)
+		return fail("permission", fmt.Errorf("cannot find current binary: %w", err))
 	}
 	execPath, err = filepath.EvalSymlinks(execPath)
 	if err != nil {
-		return "", fmt.Errorf("cannot resolve binary path: %w", err)
+		return fail("permission", fmt.Errorf("cannot resolve binary path: %w", err))
 	}
 
 	newPath := execPath + ".new"
 	if err := os.WriteFile(newPath, binary, 0755); err != nil {
-		return "", fmt.Errorf("cannot write new binary (try: sudo airskills self-update): %w", err)
+		return fail("permission", fmt.Errorf("cannot write new binary (try: sudo airskills self-update): %w", err))
 	}
 
 	if err := os.Rename(newPath, execPath); err != nil {
 		os.Remove(newPath)
-		return "", fmt.Errorf("cannot replace binary (try: sudo airskills self-update): %w", err)
+		return fail("permission", fmt.Errorf("cannot replace binary (try: sudo airskills self-update): %w", err))
 	}
 
 	if verbose {
@@ -189,6 +218,12 @@ func performUpdate(currentVersion string, verbose bool) (string, error) {
 	} else {
 		fmt.Fprintf(os.Stderr, "airskills: updated to v%s\n", latest)
 	}
+	telemetry.Capture("cli_self_update_completed", map[string]interface{}{
+		"from_version": currentVersion,
+		"to_version":   latest,
+		"trigger":      trigger,
+		"duration_ms":  time.Since(startedAt).Milliseconds(),
+	})
 	return latest, nil
 }
 

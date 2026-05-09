@@ -13,6 +13,11 @@ var (
 	version = "dev"
 	commit  = "none"
 	date    = "unknown"
+
+	// noUpdate disables the per-command auto-update check (--no-update).
+	// Companion to AIRSKILLS_NO_AUTO_UPDATE=1; the env var is for
+	// shells/profiles, the flag for one-off CI invocations.
+	noUpdate bool
 )
 
 var rootCmd = &cobra.Command{
@@ -51,8 +56,15 @@ func Execute() {
 	}
 
 	rootCmd.PersistentPreRun = func(cmd *cobra.Command, args []string) {
-		name := cmd.Name()
-		if name != "self-update" && name != "version" {
+		if shouldSkipUpdateCheck(cmd.Name()) {
+			return
+		}
+		// maybeAutoUpdate handles the active path (download + replace
+		// when an update is known and the binary is user-writable).
+		// checkForUpdates handles the passive path (print hint, kick
+		// the daily background fetch). They're mutually exclusive: if
+		// auto-update tried, we don't also print "new version available".
+		if !maybeAutoUpdate() {
 			checkForUpdates()
 		}
 	}
@@ -77,7 +89,21 @@ func wantsTelemetry(args []string) bool {
 	return true
 }
 
+// shouldSkipUpdateCheck reports whether PersistentPreRun's update flow
+// (auto-update + passive hint) should be skipped for the named command.
+// self-update has its own explicit version; version/help are non-actions
+// that shouldn't pay the cost or surprise the user.
+func shouldSkipUpdateCheck(cmdName string) bool {
+	switch cmdName {
+	case "self-update", "version", "help":
+		return true
+	}
+	return false
+}
+
 func init() {
+	rootCmd.PersistentFlags().BoolVar(&noUpdate, "no-update", false,
+		"Skip the per-run auto-update check (also: AIRSKILLS_NO_AUTO_UPDATE=1)")
 	rootCmd.AddCommand(versionCmd)
 }
 

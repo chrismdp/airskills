@@ -16,47 +16,55 @@ import (
 // and the caller continues with the current binary. Never returns an
 // error — auto-update must not fail the user's command.
 //
-// Phase 3 of the auto-self-update ticket wires this into rootCmd's
-// PersistentPreRun so it fires before every command. This Phase 2
-// only adds the helper; nothing calls it yet.
-func maybeAutoUpdate() {
+// Returns true if the function attempted an update (success or failure
+// with stderr message) — in that case the caller should suppress the
+// passive "new version available" hint that checkForUpdates() prints,
+// since it would either be redundant ("we just installed it") or
+// stack noisily on top of the failure line. Returns false if the
+// function decided not to attempt: dev build, env var / flag opt-out,
+// no cached update available, system-managed binary path, etc.
+func maybeAutoUpdate() bool {
 	if version == "dev" {
-		return
+		return false
 	}
 	if os.Getenv("AIRSKILLS_NO_AUTO_UPDATE") == "1" {
-		return
+		return false
+	}
+	if noUpdate {
+		return false
 	}
 
 	dir, err := config.Dir()
 	if err != nil {
-		return
+		return false
 	}
 	statePath := filepath.Join(dir, "update_state.json")
 	data, err := os.ReadFile(statePath)
 	if err != nil {
-		return
+		return false
 	}
 	var state updateState
 	if err := json.Unmarshal(data, &state); err != nil {
-		return
+		return false
 	}
 	if state.LatestVersion == "" || !isNewer(state.LatestVersion, version) {
-		return
+		return false
 	}
 
 	execPath, err := os.Executable()
 	if err != nil {
-		return
+		return false
 	}
 	if !isAutoUpdateSafe(execPath) {
-		return
+		return false
 	}
 
-	if _, err := performUpdate(version, false); err != nil {
+	if _, err := performUpdate(version, false, "auto"); err != nil {
 		fmt.Fprintf(os.Stderr,
 			"airskills: auto-update to v%s failed (%s) — current command will run on v%s\n",
 			state.LatestVersion, classifyUpdateError(err), version)
 	}
+	return true
 }
 
 // isAutoUpdateSafe returns true if execPath looks like a user-writable
