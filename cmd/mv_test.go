@@ -102,7 +102,7 @@ func TestMvUpdatesSyncStateKey(t *testing.T) {
 
 	state := loadSyncState()
 	state.Skills["old-name"] = &SyncEntry{
-		SkillID:     "skill-1",
+		SkillID:     testUUID("skill-1").String(),
 		Version:     "1.0.0",
 		ContentHash: "h1",
 		Tool:        "claude-code",
@@ -124,7 +124,7 @@ func TestMvUpdatesSyncStateKey(t *testing.T) {
 	if moved == nil {
 		t.Fatalf("new-name not found")
 	}
-	if moved.SkillID != "skill-1" {
+	if moved.SkillID != testUUID("skill-1").String() {
 		t.Errorf("SkillID lost across rename: got %q", moved.SkillID)
 	}
 }

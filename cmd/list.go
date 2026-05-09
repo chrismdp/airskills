@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -48,7 +49,7 @@ Use --deleted to show soft-deleted skills.`,
 			for _, s := range skills {
 				deletedAt := ""
 				if s.DeletedAt != nil {
-					deletedAt = *s.DeletedAt
+					deletedAt = s.DeletedAt.Format(time.RFC3339)
 				}
 				fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", s.Name, truncateDescription(strDeref(s.Description), 60), s.Version, deletedAt)
 			}

@@ -77,13 +77,13 @@ func TestRmDropsSyncStateEntry(t *testing.T) {
 
 	state := loadSyncState()
 	state.Skills["doomed"] = &SyncEntry{
-		SkillID:     "skill-doomed",
+		SkillID:     testUUID("skill-doomed").String(),
 		Version:     "1.0.0",
 		ContentHash: "h1",
 		Tool:        "claude-code",
 	}
 	state.Skills["keeper"] = &SyncEntry{
-		SkillID:     "skill-keeper",
+		SkillID:     testUUID("skill-keeper").String(),
 		Version:     "1.0.0",
 		ContentHash: "h2",
 		Tool:        "claude-code",

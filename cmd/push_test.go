@@ -139,7 +139,7 @@ func TestSyncState(t *testing.T) {
 		t.Errorf("fresh sync state should be empty, got %d entries", len(state.Skills))
 	}
 
-	state.Skills["test-skill"] = &SyncEntry{SkillID: "abc-123", Version: "1.0.0", Tool: "claude-code"}
+	state.Skills["test-skill"] = &SyncEntry{SkillID: testUUID("abc-123").String(), Version: "1.0.0", Tool: "claude-code"}
 	if err := saveSyncState(state); err != nil {
 		t.Fatalf("save sync state: %v", err)
 	}
@@ -149,7 +149,7 @@ func TestSyncState(t *testing.T) {
 	if entry == nil {
 		t.Fatal("test-skill not found in loaded sync state")
 	}
-	if entry.SkillID != "abc-123" || entry.Version != "1.0.0" || entry.Tool != "claude-code" {
+	if entry.SkillID != testUUID("abc-123").String() || entry.Version != "1.0.0" || entry.Tool != "claude-code" {
 		t.Errorf("entry = %+v, want abc-123/1.0.0/claude-code", entry)
 	}
 }
@@ -191,7 +191,7 @@ func TestPropagatePartialRenames(t *testing.T) {
 	hash := computeMerkleHash(readSkillFiles(filepath.Join(claudeDir, "today")))
 
 	syncState := &SyncState{Skills: map[string]*SyncEntry{
-		"old-name": {SkillID: "uuid-1", Version: "1.0.0", ContentHash: hash, Tool: "claude-code"},
+		"old-name": {SkillID: testUUID("uuid-1").String(), Version: "1.0.0", ContentHash: hash, Tool: "claude-code"},
 	}}
 	localSkills := map[string]string{
 		"today":    filepath.Join(claudeDir, "today"),
@@ -272,7 +272,7 @@ func TestPropagatePartialRenames_FullOrphan(t *testing.T) {
 	hash := computeMerkleHash(readSkillFiles(filepath.Join(claudeDir, "today")))
 
 	syncState := &SyncState{Skills: map[string]*SyncEntry{
-		"old-name": {SkillID: "uuid-1", Version: "1.0.0", ContentHash: hash, Tool: "claude-code"},
+		"old-name": {SkillID: testUUID("uuid-1").String(), Version: "1.0.0", ContentHash: hash, Tool: "claude-code"},
 	}}
 	localSkills := map[string]string{
 		"today": filepath.Join(claudeDir, "today"),

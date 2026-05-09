@@ -127,8 +127,8 @@ func runPull(cmd *cobra.Command, args []string) error {
 
 	// Resolve upstream updates on forked skills before deciding actions.
 	for i := range remoteSkills {
-		if remoteSkills[i].HasUpstreamUpdate() {
-			if updated, err := client.pullUpstream(remoteSkills[i].Id); err == nil {
+		if skillHasUpstreamUpdate(remoteSkills[i]) {
+			if updated, err := client.pullUpstream(remoteSkills[i].Id.String()); err == nil {
 				remoteSkills[i].ContentHash = updated.ContentHash
 				remoteSkills[i].Version = updated.Version
 			}
@@ -199,7 +199,7 @@ func runPull(cmd *cobra.Command, args []string) error {
 		if p.reason == "linked" {
 			dirName := filepath.Base(p.localDir)
 			syncState.Skills[dirName] = &SyncEntry{
-				SkillID:     p.skill.Id,
+				SkillID:     p.skill.Id.String(),
 				Version:     p.skill.Version,
 				ContentHash: strDeref(p.skill.ContentHash),
 				Tool:        "claude-code",
@@ -216,7 +216,7 @@ func runPull(cmd *cobra.Command, args []string) error {
 		lines[i].pct = 0.5
 		renderProgress(lines)
 
-		files, err := downloadSkillFiles(client, p.skill.Id)
+		files, err := downloadSkillFiles(client, p.skill.Id.String())
 		if err != nil || len(files) == 0 {
 			lines[i].status = "failed"
 			renderProgress(lines)
@@ -267,7 +267,7 @@ func runPull(cmd *cobra.Command, args []string) error {
 
 			// Add marker for the new dir
 			syncState.Skills[newDirName] = &SyncEntry{
-				SkillID:     p.skill.Id,
+				SkillID:     p.skill.Id.String(),
 				Version:     p.skill.Version,
 				ContentHash: strDeref(p.skill.ContentHash),
 				Tool:        "claude-code",
@@ -327,7 +327,7 @@ func runPull(cmd *cobra.Command, args []string) error {
 			continue
 		}
 		syncState.Skills[dirName] = &SyncEntry{
-			SkillID:     p.skill.Id,
+			SkillID:     p.skill.Id.String(),
 			Version:     p.skill.Version,
 			ContentHash: strDeref(p.skill.ContentHash),
 			Tool:        "claude-code",
@@ -346,7 +346,7 @@ func runPull(cmd *cobra.Command, args []string) error {
 			}
 
 			// Fetch commit messages since last known version
-			commits, err := client.getVersionHistory(p.skill.Id)
+			commits, err := client.getVersionHistory(p.skill.Id.String())
 			if err == nil {
 				for _, c := range commits {
 					if c.Message != "" {
@@ -604,7 +604,7 @@ func decidePullActions(remoteSkills []apiSkill, localSkills map[string]string, s
 
 	for _, remote := range remoteSkills {
 		trackedName := ""
-		if name, ok := skillIdToName[remote.Id]; ok {
+		if name, ok := skillIdToName[remote.Id.String()]; ok {
 			trackedName = name
 		}
 
@@ -781,7 +781,7 @@ func runPullForce(cmd *cobra.Command, args []string) error {
 		}
 
 		// Download remote files
-		files, err := downloadSkillFiles(client, p.skill.Id)
+		files, err := downloadSkillFiles(client, p.skill.Id.String())
 		if err != nil || len(files) == 0 {
 			fmt.Fprintf(os.Stderr, "  %s %s: download failed\n", yellow("!"), skillName)
 			continue
@@ -798,7 +798,7 @@ func runPullForce(cmd *cobra.Command, args []string) error {
 		if marker == nil {
 			marker = &SyncEntry{Tool: "claude-code"}
 		}
-		marker.SkillID = p.skill.Id
+		marker.SkillID = p.skill.Id.String()
 		marker.ContentHash = strDeref(p.skill.ContentHash)
 		marker.Version = p.skill.Version
 		syncState.Skills[skillName] = marker

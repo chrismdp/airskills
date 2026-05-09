@@ -123,15 +123,15 @@ To restore the old slug, run 'airskills restore <old-slug>'.`,
 			}
 			newKind = "user"
 		}
-		if newSlug != "" && updated.Id != "" {
-			if err := updateLocalMarkerForTransfer(skill.Id, updated.Id, newKind, newSlug); err != nil {
+		if newSlug != "" && updated.Id.String() != "" {
+			if err := updateLocalMarkerForTransfer(skill.Id.String(), updated.Id.String(), newKind, newSlug); err != nil {
 				fmt.Fprintf(os.Stderr, "  %s server transferred OK but local marker update failed: %v\n", yellow("!"), err)
 			}
 		}
 
 		fmt.Printf("\n  %s Transferred.\n", green("✓"))
 		telemetry.Capture("cli_transfer", map[string]interface{}{
-			"skill_id": skill.Id,
+			"skill_id": skill.Id.String(),
 			"to_org":   transferToOrg,
 			"to_user":  transferToOrg == "",
 		})

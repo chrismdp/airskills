@@ -107,7 +107,7 @@ var publishCmd = &cobra.Command{
 
 		telemetry.Capture("cli_publish", map[string]interface{}{
 			"skill":    skillName,
-			"skill_id": skill.Id,
+			"skill_id": skill.Id.String(),
 		})
 
 		return nil

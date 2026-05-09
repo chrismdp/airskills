@@ -106,7 +106,7 @@ func classifySkills(
 
 		// Tracked match by skill_id wins. Falls back to dir-name match
 		// for legacy markers that might not have a skill_id (defensive).
-		trackedName := skillIDToName[r.Id]
+		trackedName := skillIDToName[r.Id.String()]
 		var marker *SyncEntry
 		if trackedName != "" {
 			marker = state.Skills[trackedName]

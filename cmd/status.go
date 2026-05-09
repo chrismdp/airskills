@@ -216,11 +216,11 @@ func classifyForStatus(remoteSkills []apiSkill, localSkills map[string]string, s
 	for _, remote := range remoteSkills {
 		remoteByName[remote.Name] = true
 
-		if remote.HasUpstreamUpdate() {
+		if skillHasUpstreamUpdate(remote) {
 			b.upstream = append(b.upstream, remote.Name)
 		}
 
-		trackedName := skillIdToName[remote.Id]
+		trackedName := skillIdToName[remote.Id.String()]
 
 		if trackedName != "" {
 			if _, exists := localSkills[trackedName]; !exists {

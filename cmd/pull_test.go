@@ -18,7 +18,7 @@ func TestPullSkipsMissingLocal(t *testing.T) {
 		Version: 1,
 		Skills: map[string]*SyncEntry{
 			"today-in-claude-code": {
-				SkillID:     "skill-abc",
+				SkillID:     testUUID("skill-abc").String(),
 				Version:     "1.0.0",
 				ContentHash: "deadbeef",
 				Tool:        "claude-code",
@@ -26,7 +26,7 @@ func TestPullSkipsMissingLocal(t *testing.T) {
 		},
 	}
 	remote := []apiSkill{
-		{Id: "skill-abc", Name: "today-in-claude-code", Version: "1.0.0", ContentHash: strPtr("deadbeef")},
+		{Id: testUUID("skill-abc"), Name: "today-in-claude-code", Version: "1.0.0", ContentHash: strPtr("deadbeef")},
 	}
 	local := map[string]string{} // dir was deleted
 
@@ -51,7 +51,7 @@ func TestPullSkipsMissingLocal(t *testing.T) {
 func TestPullDownloadsNewRemote(t *testing.T) {
 	state := &SyncState{Version: 1, Skills: map[string]*SyncEntry{}}
 	remote := []apiSkill{
-		{Id: "skill-xyz", Name: "brand-new-skill", Version: "1.0.0", ContentHash: strPtr("abc123")},
+		{Id: testUUID("skill-xyz"), Name: "brand-new-skill", Version: "1.0.0", ContentHash: strPtr("abc123")},
 	}
 	local := map[string]string{}
 
@@ -86,7 +86,7 @@ func TestPullDecidesLinkedForMatchingBytes(t *testing.T) {
 
 	state := &SyncState{Version: 1, Skills: map[string]*SyncEntry{}}
 	remote := []apiSkill{
-		{Id: "skill-1", Name: "my-skill", Version: "1.0.0", ContentHash: strPtr(matchingHash)},
+		{Id: testUUID("skill-1"), Name: "my-skill", Version: "1.0.0", ContentHash: strPtr(matchingHash)},
 	}
 	local := map[string]string{"my-skill": skillDir}
 
@@ -111,7 +111,7 @@ func TestPullDecidesUntrackedConflictForDifferingBytes(t *testing.T) {
 
 	state := &SyncState{Version: 1, Skills: map[string]*SyncEntry{}}
 	remote := []apiSkill{
-		{Id: "skill-1", Name: "my-skill", Version: "1.0.0", ContentHash: strPtr("different-server-hash")},
+		{Id: testUUID("skill-1"), Name: "my-skill", Version: "1.0.0", ContentHash: strPtr("different-server-hash")},
 	}
 	local := map[string]string{"my-skill": skillDir}
 
@@ -142,7 +142,7 @@ func TestPullDetectsUpdated(t *testing.T) {
 		Version: 1,
 		Skills: map[string]*SyncEntry{
 			"tracked-skill": {
-				SkillID:     "skill-1",
+				SkillID:     testUUID("skill-1").String(),
 				Version:     "1.0.0",
 				ContentHash: localHash,
 				Tool:        "claude-code",
@@ -150,7 +150,7 @@ func TestPullDetectsUpdated(t *testing.T) {
 		},
 	}
 	remote := []apiSkill{
-		{Id: "skill-1", Name: "tracked-skill", Version: "1.1.0", ContentHash: strPtr("different-hash")},
+		{Id: testUUID("skill-1"), Name: "tracked-skill", Version: "1.1.0", ContentHash: strPtr("different-hash")},
 	}
 	local := map[string]string{"tracked-skill": skillDir}
 
@@ -176,7 +176,7 @@ func TestPullDetectsDiverged(t *testing.T) {
 		Version: 1,
 		Skills: map[string]*SyncEntry{
 			"tracked-skill": {
-				SkillID:     "skill-1",
+				SkillID:     testUUID("skill-1").String(),
 				Version:     "1.0.0",
 				ContentHash: "marker-hash-from-last-sync",
 				Tool:        "claude-code",
@@ -184,7 +184,7 @@ func TestPullDetectsDiverged(t *testing.T) {
 		},
 	}
 	remote := []apiSkill{
-		{Id: "skill-1", Name: "tracked-skill", Version: "1.1.0", ContentHash: strPtr("remote-changed-hash")},
+		{Id: testUUID("skill-1"), Name: "tracked-skill", Version: "1.1.0", ContentHash: strPtr("remote-changed-hash")},
 	}
 	local := map[string]string{"tracked-skill": skillDir}
 
@@ -214,7 +214,7 @@ func TestPullAutoDetectClassification(t *testing.T) {
 		Version: 1,
 		Skills: map[string]*SyncEntry{
 			"tracked-skill": {
-				SkillID:     "skill-1",
+				SkillID:     testUUID("skill-1").String(),
 				Version:     "1.0.0",
 				ContentHash: "stale-marker-hash", // different from both local and remote
 				Tool:        "claude-code",
@@ -223,7 +223,7 @@ func TestPullAutoDetectClassification(t *testing.T) {
 	}
 	// Remote hash now matches local (user reconciled manually)
 	remote := []apiSkill{
-		{Id: "skill-1", Name: "tracked-skill", Version: "1.1.0", ContentHash: strPtr(localHash)},
+		{Id: testUUID("skill-1"), Name: "tracked-skill", Version: "1.1.0", ContentHash: strPtr(localHash)},
 	}
 	local := map[string]string{"tracked-skill": skillDir}
 
@@ -252,7 +252,7 @@ func TestPullAutoDetectUpdatesMarker(t *testing.T) {
 	localHash := computeMerkleHash(localFiles)
 
 	marker := &SyncEntry{
-		SkillID:     "skill-1",
+		SkillID:     testUUID("skill-1").String(),
 		Version:     "1.0.0",
 		ContentHash: "stale-marker-hash",
 		Tool:        "claude-code",
@@ -262,7 +262,7 @@ func TestPullAutoDetectUpdatesMarker(t *testing.T) {
 		Skills:  map[string]*SyncEntry{"tracked-skill": marker},
 	}
 	remote := []apiSkill{
-		{Id: "skill-1", Name: "tracked-skill", Version: "1.1.0", ContentHash: strPtr(localHash)},
+		{Id: testUUID("skill-1"), Name: "tracked-skill", Version: "1.1.0", ContentHash: strPtr(localHash)},
 	}
 	local := map[string]string{"tracked-skill": skillDir}
 
@@ -302,7 +302,7 @@ func TestPullAutoDetectSkipsTransferredSkills(t *testing.T) {
 		Version: 1,
 		Skills: map[string]*SyncEntry{
 			"tracked-skill": {
-				SkillID:     "skill-1",
+				SkillID:     testUUID("skill-1").String(),
 				Version:     "1.0.0",
 				ContentHash: "stale-marker-hash",
 				Deleted:     true, // mid-transfer
@@ -311,7 +311,7 @@ func TestPullAutoDetectSkipsTransferredSkills(t *testing.T) {
 		},
 	}
 	remote := []apiSkill{
-		{Id: "skill-1", Name: "tracked-skill", Version: "1.1.0", ContentHash: strPtr(localHash)},
+		{Id: testUUID("skill-1"), Name: "tracked-skill", Version: "1.1.0", ContentHash: strPtr(localHash)},
 	}
 	local := map[string]string{"tracked-skill": skillDir}
 

@@ -170,7 +170,7 @@ func TestMirrorPropagatesEditFromNonFirstDir(t *testing.T) {
 	state := &SyncState{
 		Version: 1,
 		Skills: map[string]*SyncEntry{
-			"foo": {SkillID: "skill-1", Version: "1.0.0", ContentHash: markerHash, Tool: "claude-code"},
+			"foo": {SkillID: testUUID("skill-1").String(), Version: "1.0.0", ContentHash: markerHash, Tool: "claude-code"},
 		},
 	}
 
@@ -248,7 +248,7 @@ func TestMirrorStaleSecondaryCopyLosesToFreshPrimaryEdit(t *testing.T) {
 	state := &SyncState{
 		Version: 1,
 		Skills: map[string]*SyncEntry{
-			"foo": {SkillID: "skill-1", Version: "1.0.0", ContentHash: markerHash, Tool: "claude-code"},
+			"foo": {SkillID: testUUID("skill-1").String(), Version: "1.0.0", ContentHash: markerHash, Tool: "claude-code"},
 		},
 	}
 
@@ -324,7 +324,7 @@ func TestMigrateToNamespacedDirsRenamesOldInstall(t *testing.T) {
 		Version: 1,
 		Skills: map[string]*SyncEntry{
 			"my-skill": {
-				SkillID: "skill-123",
+				SkillID: testUUID("skill-123").String(),
 				Version: "1.0.0",
 				Tool:    "claude-code",
 				Source: &skillSource{
@@ -376,7 +376,7 @@ func TestMigrateToNamespacedDirsNoop(t *testing.T) {
 		Version: 1,
 		Skills: map[string]*SyncEntry{
 			"chrismdp-my-skill": {
-				SkillID: "skill-123",
+				SkillID: testUUID("skill-123").String(),
 				Version: "1.0.0",
 				Tool:    "claude-code",
 				Source: &skillSource{
@@ -411,7 +411,7 @@ func TestMigrateToNamespacedDirsLeavesLocalSkillsAlone(t *testing.T) {
 		Version: 1,
 		Skills: map[string]*SyncEntry{
 			"my-local-skill": {
-				SkillID: "skill-456",
+				SkillID: testUUID("skill-456").String(),
 				Version: "1.0.0",
 				Tool:    "claude-code",
 				// No Source — this is a user-created skill
@@ -453,7 +453,7 @@ func TestMirrorRemovesStaleFilesInTarget(t *testing.T) {
 	state := &SyncState{
 		Version: 1,
 		Skills: map[string]*SyncEntry{
-			"foo": {SkillID: "skill-1", Version: "1.0.0", ContentHash: markerHash, Tool: "claude-code"},
+			"foo": {SkillID: testUUID("skill-1").String(), Version: "1.0.0", ContentHash: markerHash, Tool: "claude-code"},
 		},
 	}
 
@@ -518,7 +518,7 @@ func TestMigrateToNamespacedDirsOrgSkill(t *testing.T) {
 		Version: 1,
 		Skills: map[string]*SyncEntry{
 			"deploy": {
-				SkillID: "skill-org-1",
+				SkillID: testUUID("skill-org-1").String(),
 				Version: "1.0.0",
 				Tool:    "claude-code",
 				Source: &skillSource{

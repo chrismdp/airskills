@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"testing"
+	"time"
 )
 
 func TestRestoreCmdRegistered(t *testing.T) {
@@ -21,16 +22,16 @@ func TestListDeletedSkillsFieldMapping(t *testing.T) {
 	// Verify that apiSkill correctly decodes deleted_at and deletion_reason
 	// from a server response — these fields are new and could silently zero
 	// out if the JSON tags are wrong.
-	deletedAt := "2026-04-15T10:00:00Z"
+	deletedAt, _ := time.Parse(time.RFC3339, "2026-04-15T10:00:00Z")
 	reason := "user_deleted"
 	s := apiSkill{
-		Id:             "skill-123",
+		Id:             testUUID("skill-123"),
 		Name:           "my-skill",
 		Version:        "1.0.0",
 		DeletedAt:      &deletedAt,
 		DeletionReason: &reason,
 	}
-	if s.DeletedAt == nil || *s.DeletedAt != deletedAt {
+	if s.DeletedAt == nil || !s.DeletedAt.Equal(deletedAt) {
 		t.Errorf("DeletedAt field wrong: got %v", s.DeletedAt)
 	}
 	if s.DeletionReason == nil || *s.DeletionReason != reason {

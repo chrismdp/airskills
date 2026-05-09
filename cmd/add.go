@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/chrismdp/airskills/config"
+	"github.com/chrismdp/airskills/internal/apitypes"
 	"github.com/chrismdp/airskills/telemetry"
 	"github.com/spf13/cobra"
 )
@@ -100,7 +101,7 @@ var addCmd = &cobra.Command{
 			Slug         string          `json:"slug"`
 			Content      string          `json:"content"`
 			Version      string          `json:"version"`
-			CurrentOwner *ownerNamespace `json:"current_owner"`
+			CurrentOwner *apitypes.OwnerNamespace `json:"current_owner"`
 		}
 		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 			return fmt.Errorf("failed to parse response: %w", err)
@@ -143,7 +144,7 @@ var addCmd = &cobra.Command{
 		ownerKind := "user"
 		ownerSlug := username
 		if result.CurrentOwner != nil {
-			ownerKind = result.CurrentOwner.Kind
+			ownerKind = string(result.CurrentOwner.Kind)
 			ownerSlug = result.CurrentOwner.Slug
 		}
 		dirName := result.Slug
@@ -216,7 +217,7 @@ var addCmd = &cobra.Command{
 			client := newAPIClient(cfg, token)
 			skill, createErr := client.createSkill(result.Slug, "", []string{"claude-code"}, result.ID, "")
 			if createErr == nil {
-				entry.SkillID = skill.Id
+				entry.SkillID = skill.Id.String()
 				entry.ContentHash = strDeref(skill.ContentHash)
 			}
 			// If creation fails (e.g. network), fall through — sync will handle it

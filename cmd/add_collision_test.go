@@ -29,9 +29,9 @@ func TestDetectAddCollision_SameSkillIsNoConflict(t *testing.T) {
 		os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte("x"), 0644)
 	}
 	state := &SyncState{Skills: map[string]*SyncEntry{
-		"plan": {SkillID: "skill-id-1"},
+		"plan": {SkillID: testUUID("skill-id-1").String()},
 	}}
-	if _, conflict := detectAddCollision("plan", "skill-id-1", state); conflict {
+	if _, conflict := detectAddCollision("plan", testUUID("skill-id-1").String(), state); conflict {
 		t.Fatalf("re-add of same skill should not be a conflict")
 	}
 }
@@ -48,7 +48,7 @@ func TestDetectAddCollision_DifferentSkillIsConflict(t *testing.T) {
 		os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte("local plan"), 0644)
 	}
 	state := &SyncState{Skills: map[string]*SyncEntry{
-		"plan": {SkillID: "skill-id-OLD"},
+		"plan": {SkillID: testUUID("skill-id-OLD").String()},
 	}}
 	path, conflict := detectAddCollision("plan", "skill-id-NEW", state)
 	if !conflict {

@@ -12,7 +12,10 @@ import (
 	"time"
 
 	"github.com/chrismdp/airskills/config"
+	"github.com/chrismdp/airskills/internal/apitypes"
 	"github.com/chrismdp/airskills/telemetry"
+	"github.com/google/uuid"
+	openapi_types "github.com/oapi-codegen/runtime/types"
 )
 
 // SkillsetNotFoundError is returned when the server reports an unknown
@@ -40,36 +43,14 @@ func setAnonHeader(req *http.Request) {
 	}
 }
 
-// apiSkill represents a skill from the API. Field shape mirrors
-// apitypes.Skill (which the codegen wiring landed in Phase D); this
-// keeps the local hand-rolled struct as a stand-in for one more
-// commit so Step 1b's import swap is purely an import + free-function
-// change with no field-name churn.
+// apiSkill is now an alias for the codegen'd apitypes.Skill. The hand-
+// rolled struct is gone: the spec is the single source of truth. The
+// alias keeps existing call-sites readable while making it explicit
+// that the type is owned by the platform, not the CLI.
 //
-// OwnerId is a pointer because skills can be owned by an org instead
-// of a user — in that case owner_id is null and org_id is set.
-//
-// CurrentOwner is set on push responses so the CLI can detect
-// server-side transfers and keep the local marker in sync. Strictly
-// the spec scopes current_owner to ArchivePutResponse + ResolvedSkill;
-// it stays on apiSkill for now and Step 1b moves it.
-type apiSkill struct {
-	Id                  string          `json:"id"`
-	OwnerId             *string         `json:"owner_id"`
-	Slug                string          `json:"slug"`
-	Name                string          `json:"name"`
-	Description         *string         `json:"description"`
-	Version             string          `json:"version"`
-	ContentHash         *string         `json:"content_hash"`
-	OrgId               *string         `json:"org_id"`
-	ForkedFrom          *string         `json:"forked_from"`
-	Visibility          string          `json:"visibility"`
-	ToolFormats         []string        `json:"tool_formats"`
-	UpstreamContentHash *string         `json:"upstream_content_hash"`
-	CurrentOwner        *ownerNamespace `json:"current_owner,omitempty"`
-	DeletedAt           *string         `json:"deleted_at,omitempty"`
-	DeletionReason      *string         `json:"deletion_reason,omitempty"`
-}
+// Note: `current_owner` lives on apiArchivePutResponse only — the spec
+// scopes it to that response shape. apitypes.Skill does not carry it.
+type apiSkill = apitypes.Skill
 
 // strDeref returns the pointed-to string, or "" if nil. Use at the
 // boundary where nullable spec fields meet code that wants a value-type
@@ -90,28 +71,35 @@ func strPtr(s string) *string {
 	return &s
 }
 
-// apiArchivePutResponse is the PUT /api/v1/skills/{id}/archive response —
-// shape-equivalent to apitypes.ArchivePutResponse. It embeds apiSkill
-// (the spec's allOf composition) and adds the archive-specific extras
-// the spec scopes here only: warning (storage soft-limit notice),
-// unresolved_dependencies (the ones the server couldn't resolve).
-// Replaces apiSkill.Warning, which never made sense on bare-skill
-// responses.
+// testUUID maps an arbitrary test-fixture string ("skill-1" etc) to
+// a deterministic UUID so tests can keep their human-readable IDs
+// while satisfying apitypes.Skill.Id's openapi_types.UUID type. SHA-1
+// based so collisions across distinct strings are vanishingly unlikely.
+func testUUID(s string) openapi_types.UUID {
+	if u, err := uuid.Parse(s); err == nil {
+		return u
+	}
+	return uuid.NewSHA1(uuid.Nil, []byte(s))
+}
+
+// apiArchivePutResponse mirrors apitypes.ArchivePutResponse — embeds
+// apiSkill (so all skill fields are accessible on the same value) and
+// adds the archive-PUT-only extras the spec scopes here: warning
+// (storage soft-limit notice), unresolved_dependencies, and
+// current_owner (used by the CLI to detect out-of-band transfers).
 type apiArchivePutResponse struct {
 	apiSkill
-	Warning                string   `json:"warning,omitempty"`
-	UnresolvedDependencies []string `json:"unresolved_dependencies,omitempty"`
+	Warning                string                  `json:"warning,omitempty"`
+	UnresolvedDependencies []string                `json:"unresolved_dependencies,omitempty"`
+	CurrentOwner           *apitypes.OwnerNamespace `json:"current_owner,omitempty"`
 }
 
-// ownerNamespace identifies a skill's owner — either a user (kind="user",
-// slug=username) or an org (kind="org", slug=org_slug).
-type ownerNamespace struct {
-	Kind string `json:"kind"`
-	Slug string `json:"slug"`
-}
-
-// HasUpstreamUpdate returns true if this is a forked skill whose parent has changed.
-func (s *apiSkill) HasUpstreamUpdate() bool {
+// skillHasUpstreamUpdate reports whether a forked skill's pinned upstream
+// hash has drifted from the parent's live hash. Free function rather
+// than a method because apiSkill is an alias for the codegen'd
+// apitypes.Skill — methods can't hang off a type alias to an
+// imported type.
+func skillHasUpstreamUpdate(s apiSkill) bool {
 	if s.ForkedFrom == nil || s.UpstreamContentHash == nil || s.ContentHash == nil {
 		return false
 	}

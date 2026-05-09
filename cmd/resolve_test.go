@@ -7,7 +7,7 @@ func TestApplyResolveWritesResolvedHash(t *testing.T) {
 		Version: 1,
 		Skills: map[string]*SyncEntry{
 			"heartbeat": {
-				SkillID:     "id-1",
+				SkillID:     testUUID("id-1").String(),
 				ContentHash: "h-local",
 				Source:      &skillSource{Owner: "chrismdp", Slug: "heartbeat"},
 			},
@@ -36,7 +36,7 @@ func TestApplyResolveNoopForOwnedSkill(t *testing.T) {
 	state := &SyncState{
 		Version: 1,
 		Skills: map[string]*SyncEntry{
-			"my-own": {SkillID: "id-1", ContentHash: "h"},
+			"my-own": {SkillID: testUUID("id-1").String(), ContentHash: "h"},
 		},
 	}
 	err := applyResolve(state, "my-own", "anything")
@@ -57,7 +57,7 @@ func TestApplyResolveOverwritesPriorResolvedHash(t *testing.T) {
 		Version: 1,
 		Skills: map[string]*SyncEntry{
 			"heartbeat": {
-				SkillID:      "id-1",
+				SkillID:      testUUID("id-1").String(),
 				ContentHash:  "h-local",
 				ResolvedHash: "h-upstream-old",
 				Source:       &skillSource{Owner: "chrismdp", Slug: "heartbeat"},

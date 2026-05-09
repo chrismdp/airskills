@@ -161,7 +161,7 @@ in opposite directions.`,
 		ownedSkillIDs := map[string]bool{}
 		for i := range remoteSkills {
 			remoteByName[remoteSkills[i].Name] = &remoteSkills[i]
-			ownedSkillIDs[remoteSkills[i].Id] = true
+			ownedSkillIDs[remoteSkills[i].Id.String()] = true
 		}
 
 		// Filter out skills whose sync state SkillID belongs to another user.
@@ -372,7 +372,7 @@ in opposite directions.`,
 					// Check if skill already exists on server
 					if remote, found := remoteByName[s.name]; found {
 						s.marker = &SyncEntry{
-							SkillID:     remote.Id,
+							SkillID:     remote.Id.String(),
 							Version:     remote.Version,
 							ContentHash: strDeref(remote.ContentHash),
 							Tool:        "claude-code",
@@ -429,7 +429,7 @@ in opposite directions.`,
 							return
 						}
 
-						s.marker = &SyncEntry{SkillID: skill.Id, Version: skill.Version, Tool: "claude-code"}
+						s.marker = &SyncEntry{SkillID: skill.Id.String(), Version: skill.Version, Tool: "claude-code"}
 						if createOrgID != "" {
 							s.marker.OwnerKind = "org"
 							s.marker.OwnerSlug = pushOrg
@@ -604,7 +604,7 @@ in opposite directions.`,
 								"\n  %s moved namespace %s → %s (dir unchanged)\n",
 								s.name, oldSlug, newSlug)
 						}
-						s.marker.OwnerKind = updated.CurrentOwner.Kind
+						s.marker.OwnerKind = string(updated.CurrentOwner.Kind)
 						s.marker.OwnerSlug = updated.CurrentOwner.Slug
 					}
 				}
