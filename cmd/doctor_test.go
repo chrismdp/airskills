@@ -173,6 +173,65 @@ func TestExtractRefSlugsNoFrontmatter(t *testing.T) {
 	}
 }
 
+// TestExtractRefSlugsSkipsFilesystemPaths verifies that paths like /tmp/foo,
+// /dev/null, /etc/hosts are not mistaken for skill refs (slug followed by /).
+func TestExtractRefSlugsSkipsFilesystemPaths(t *testing.T) {
+	text := `Use /real-skill.
+Save to /tmp/output.txt and /dev/null and /etc/hosts.
+Other paths: /var/log/foo, /usr/local/bin.
+`
+	slugs := extractRefSlugs(text)
+	if len(slugs) != 1 || slugs[0] != "real-skill" {
+		t.Errorf("expected [real-skill], got %v", slugs)
+	}
+}
+
+// TestExtractRefSlugsSkipsFencedCodeBlocks verifies that /slug references
+// inside fenced code blocks are ignored — they're code examples, not refs.
+func TestExtractRefSlugsSkipsFencedCodeBlocks(t *testing.T) {
+	text := "Real ref: /good-skill.\n\n```bash\npython3 script.py /tmp/foo.mp3\nrm /var/cache/x\n```\n\nAnother: /also-good.\n"
+	slugs := extractRefSlugs(text)
+	want := map[string]bool{"good-skill": true, "also-good": true}
+	if len(slugs) != 2 {
+		t.Fatalf("expected 2 slugs, got %d: %v", len(slugs), slugs)
+	}
+	for _, s := range slugs {
+		if !want[s] {
+			t.Errorf("unexpected slug: %q", s)
+		}
+	}
+}
+
+// TestExtractRefSlugsSkipsInlineCode verifies that /slug references inside
+// inline code spans (`...`) are ignored.
+func TestExtractRefSlugsSkipsInlineCode(t *testing.T) {
+	text := "See `/clear` and `/rename` are built-ins, not skills. But /real-skill is."
+	slugs := extractRefSlugs(text)
+	if len(slugs) != 1 || slugs[0] != "real-skill" {
+		t.Errorf("expected [real-skill], got %v", slugs)
+	}
+}
+
+// TestExtractRefSlugsSkipsMarkdownLinkURLs verifies that URL paths inside
+// markdown link parens — [text](/path/) — are not mistaken for skill refs.
+func TestExtractRefSlugsSkipsMarkdownLinkURLs(t *testing.T) {
+	text := "See [my talk](/ralph-loops-aie-europe/) and use /real-skill afterwards."
+	slugs := extractRefSlugs(text)
+	if len(slugs) != 1 || slugs[0] != "real-skill" {
+		t.Errorf("expected [real-skill], got %v", slugs)
+	}
+}
+
+// TestExtractRefSlugsSkipsAPIVersionPaths verifies paths like /v3/, /v4/api
+// (slug-followed-by-slash) are not mistaken for skill refs.
+func TestExtractRefSlugsSkipsAPIVersionPaths(t *testing.T) {
+	text := "Use /real-skill. The API is at https://api.example.com or relative paths /v3/users and /v4/broadcasts."
+	slugs := extractRefSlugs(text)
+	if len(slugs) != 1 || slugs[0] != "real-skill" {
+		t.Errorf("expected [real-skill], got %v", slugs)
+	}
+}
+
 // TestWalkBrokenRefsNoInstalled verifies that walkBrokenRefs returns nil when no
 // skills are installed (nothing to scan).
 func TestWalkBrokenRefsNoInstalled(t *testing.T) {
@@ -268,23 +327,50 @@ func TestRenderSyncStateReportSurfacesNotableStates(t *testing.T) {
 	var buf strings.Builder
 	renderSyncStateReport(&buf, []SkillStateInfo{
 		{Name: "owned-edited", State: StateModified},
-		{Name: "sourced-pending", State: StateModifiedPending},
+		{
+			Name:  "sourced-pending",
+			State: StateModifiedPending,
+			Marker: &SyncEntry{
+				Version: "1.2.0",
+				Source:  &skillSource{Owner: "chrismdp", Slug: "sourced-pending"},
+			},
+			Remote: &apiSkill{Version: "1.3.0"},
+		},
 		{Name: "drive-by", State: StateUntracked},
-		{Name: "matches-server", State: StateLinked},
-		{Name: "name-collides", State: StateUntrackedConflict},
+		{
+			Name:   "matches-server",
+			State:  StateLinked,
+			Remote: &apiSkill{Version: "1.0.8"},
+		},
+		{
+			Name:   "name-collides",
+			State:  StateUntrackedConflict,
+			Remote: &apiSkill{Version: "2.1.0"},
+		},
 		{Name: "elsewhere", State: StateNotLocal},
 	})
 	out := buf.String()
 	for _, want := range []string{
-		"owned-edited", "modified locally",
-		"sourced-pending", "airskills resolve sourced-pending",
-		"drive-by", "untracked",
-		"matches-server", "link silently",
-		"name-collides", "conflict",
-		"elsewhere", "not installed",
+		"owned-edited", "local has unpublished changes",
+		"sourced-pending", "customised copy of chrismdp/sourced-pending",
+		"Original moved 1.2.0 → 1.3.0", "airskills resolve sourced-pending",
+		"drive-by", "local exists, not tracked",
+		"matches-server", "Original v1.0.8 matches bytes",
+		"name-collides", "Original v2.1.0 differs",
+		"elsewhere", "on server, not installed here",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("expected output to mention %q, got:\n%s", want, out)
+		}
+	}
+	// Uniform `!` prefix — every notable line should start with `!`.
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "Sync state:" || strings.HasPrefix(trimmed, "✓") {
+			continue
+		}
+		if !strings.HasPrefix(trimmed, "!") {
+			t.Errorf("expected line to start with `!`, got: %q", trimmed)
 		}
 	}
 }

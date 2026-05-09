@@ -43,6 +43,10 @@ type conflictDetail struct {
 	name      string
 	localDir  string
 	remoteDir string
+	// kind discriminates "diverged" (tracked, both sides changed) from
+	// "untracked" (no marker, server has same name with different bytes).
+	// Drives the headline wording in conflictResolutionMessage.
+	kind string
 }
 
 type updateDetail struct {
@@ -233,10 +237,15 @@ func runPull(cmd *cobra.Command, args []string) error {
 			lines[i].pct = 1
 			renderProgress(lines)
 			diverged++
+			kind := "tracked"
+			if p.reason == "untracked-conflict" {
+				kind = "untracked"
+			}
 			divergedDetails = append(divergedDetails, conflictDetail{
 				name:      p.skill.Name,
 				localDir:  p.localDir,
 				remoteDir: conflictDir,
+				kind:      kind,
 			})
 			continue
 		}
@@ -395,6 +404,7 @@ func runPull(cmd *cobra.Command, args []string) error {
 				localDir:  d.localDir,
 				remoteDir: d.remoteDir,
 				source:    source,
+				kind:      d.kind,
 			})
 		}
 		fmt.Print(conflictResolutionMessage(entries, !isTTY))

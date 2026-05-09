@@ -48,6 +48,13 @@ type conflictEntry struct {
 	localDir  string
 	remoteDir string
 	source    *skillSource
+	// kind discriminates the cause of the conflict so the headline
+	// wording can be accurate. "" / "tracked" — the skill was tracked
+	// and has diverged on both sides since the last sync. "untracked"
+	// — the local skill exists but airskills has never tracked it,
+	// and the server happens to have a same-named skill with different
+	// bytes; the "diverged on both sides" framing doesn't apply.
+	kind string
 }
 
 // conflictResolutionMessage renders the canonical three-outcome conflict
@@ -58,7 +65,11 @@ type conflictEntry struct {
 func conflictResolutionMessage(entries []conflictEntry, isAgent bool) string {
 	var b strings.Builder
 	for _, e := range entries {
-		fmt.Fprintf(&b, "\nConflict: %s has changed both locally and on the server.\n", e.name)
+		if e.kind == "untracked" {
+			fmt.Fprintf(&b, "\nConflict: %s exists locally and on the server, but airskills hasn't tracked it before — your local bytes differ from the server's.\n", e.name)
+		} else {
+			fmt.Fprintf(&b, "\nConflict: %s has changed both locally and on the server.\n", e.name)
+		}
 		fmt.Fprintf(&b, "  Local:  %s\n", e.localDir)
 		fmt.Fprintf(&b, "  Remote: %s\n", e.remoteDir)
 		b.WriteString("\nPick ONE outcome, then run the matching command:\n\n")

@@ -85,9 +85,13 @@ func gatherSyncState() ([]SkillStateInfo, error) {
 	return classifySkills(remote, localSkills, syncState, hashLocal), nil
 }
 
-// renderSyncStateReport writes the doctor "Sync state" section. Notable
-// states get one line each; synced skills get a single-line summary so
-// the output stays scannable.
+// renderSyncStateReport writes the doctor "Sync state" section. Every
+// notable state shares a uniform `!` prefix; the line itself names the
+// cause and the action. Synced skills collapse into a single-line
+// summary so the output stays scannable.
+//
+// Wording is the contract — the cli-reference.mdx sample and
+// customisation.mdx pages are kept in sync with this.
 func renderSyncStateReport(w io.Writer, states []SkillStateInfo) {
 	fmt.Fprintln(w, "Sync state:")
 	if len(states) == 0 {
@@ -99,6 +103,7 @@ func renderSyncStateReport(w io.Writer, states []SkillStateInfo) {
 	copy(sorted, states)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
 
+	bang := red("!")
 	syncedCount := 0
 	for _, s := range sorted {
 		if s.State == StateSynced {
@@ -107,24 +112,62 @@ func renderSyncStateReport(w io.Writer, states []SkillStateInfo) {
 		}
 		switch s.State {
 		case StateModified:
-			fmt.Fprintf(w, "  %s %s — modified locally (sync to publish)\n", yellow("M"), s.Name)
+			if s.Marker != nil && s.Marker.Source != nil {
+				// Sourced + already resolved + locally modified — the user
+				// has unpublished customisations to a sourced skill.
+				fmt.Fprintf(w, "  %s %s — customised copy of %s/%s. Local has unpublished changes; run 'airskills push' to publish.\n",
+					bang, s.Name, s.Marker.Source.Owner, s.Marker.Source.Slug)
+			} else {
+				fmt.Fprintf(w, "  %s %s — local has unpublished changes. Run 'airskills push' to publish.\n",
+					bang, s.Name)
+			}
 		case StateModifiedPending:
-			fmt.Fprintf(w, "  %s %s — modified, original has moved → 'airskills resolve %s' or 'airskills pull --force %s'\n",
-				yellow("M*"), s.Name, s.Name, s.Name)
+			source := s.Marker.Source
+			fromVer := s.Marker.Version
+			toVer := ""
+			if s.Remote != nil {
+				toVer = s.Remote.Version
+			}
+			versionTransition := versionMoved(fromVer, toVer)
+			fmt.Fprintf(w, "  %s %s — customised copy of %s/%s. Original%s since you resolved. Review and 'airskills resolve %s', or 'pull --force' to drop your customised copy.\n",
+				bang, s.Name, source.Owner, source.Slug, versionTransition, s.Name)
 		case StateUntracked:
-			fmt.Fprintf(w, "  %s %s — untracked locally (no marker; arrived outside airskills?)\n", yellow("?"), s.Name)
+			fmt.Fprintf(w, "  %s %s — local exists, not tracked. No matching skill on the server.\n",
+				bang, s.Name)
 		case StateLinked:
-			fmt.Fprintf(w, "  %s %s — bytes match server; next sync will link silently\n", green("·"), s.Name)
+			fmt.Fprintf(w, "  %s %s — local exists, not tracked. Original%s matches bytes — next sync will link.\n",
+				bang, s.Name, versionLabel(s.Remote))
 		case StateUntrackedConflict:
-			fmt.Fprintf(w, "  %s %s — server has a same-named skill with different bytes; next sync will surface a conflict\n",
-				red("!"), s.Name)
+			fmt.Fprintf(w, "  %s %s — local exists, not tracked. Original%s differs — next sync will surface conflict.\n",
+				bang, s.Name, versionLabel(s.Remote))
 		case StateNotLocal:
-			fmt.Fprintf(w, "  %s %s — on server, not installed here ('airskills sync' or 'airskills add')\n", dim("—"), s.Name)
+			fmt.Fprintf(w, "  %s %s — on server, not installed here ('airskills sync' or 'airskills add').\n",
+				bang, s.Name)
 		}
 	}
 	if syncedCount > 0 {
 		fmt.Fprintf(w, "  %s %d synced.\n", green("✓"), syncedCount)
 	}
+}
+
+// versionLabel returns " v<x.y.z>" when the remote carries a version,
+// or "" otherwise. The leading space is intentional — call sites
+// concatenate this directly into a sentence ("Original v1.0.8 matches…").
+func versionLabel(r *apiSkill) string {
+	if r == nil || r.Version == "" {
+		return ""
+	}
+	return " v" + r.Version
+}
+
+// versionMoved formats the from→to transition for the modified-pending
+// state. Falls back to a bare "has moved" when versions aren't both
+// known so the line still reads naturally.
+func versionMoved(from, to string) string {
+	if from != "" && to != "" && from != to {
+		return fmt.Sprintf(" moved %s → %s", from, to)
+	}
+	return " has moved"
 }
 
 // walkBrokenRefs scans all locally installed skills for broken /ref references
@@ -249,16 +292,16 @@ var refSlugDenylist = map[string]bool{
 	"theme": true, "upgrade": true, "vim": true,
 }
 
-// fencedCodeBlock matches triple-backtick fenced code blocks. Content
-// inside is strip before slug-scanning so documentation samples (Jekyll
-// frontmatter, shell commands, etc.) don't get flagged as broken refs.
-var fencedCodeBlock = regexp.MustCompile("(?ms)^```[^\n]*\n.*?\n```$")
-
-// extractRefSlugs extracts /slug references from SKILL.md text, stripping
-// frontmatter and fenced code blocks. Mirrors the platform's
-// extractDependencySlugs logic and adds three filters: content inside
-// ```...``` blocks (samples, not refs), tokens immediately followed by '/'
-// (paths, e.g. /tmp/foo, /v4/broadcasts), and tokens in refSlugDenylist.
+// extractRefSlugs extracts /slug references from SKILL.md text. Mirrors the
+// platform's extractDependencySlugs logic.
+//
+// Skips contexts that are not skill references:
+//   - YAML frontmatter (--- ... ---)
+//   - Fenced code blocks (```...```)
+//   - Inline code spans (`...`)
+//   - Markdown link URLs ([text](url))
+//   - Filesystem and URL paths (slug followed by /, e.g. /tmp/foo, /v3/api)
+//   - refSlugDenylist (filesystem mounts and Claude Code built-ins like /clear)
 func extractRefSlugs(text string) []string {
 	body := text
 	if strings.HasPrefix(text, "---\n") {
@@ -266,17 +309,18 @@ func extractRefSlugs(text string) []string {
 			body = text[4+idx+4:]
 		}
 	}
-	body = fencedCodeBlock.ReplaceAllString(body, "")
-	pattern := regexp.MustCompile(`(?:^|[\s("'])\/([a-z0-9][a-z0-9-]*)`)
+	body = fencedCodeRe.ReplaceAllString(body, "")
+	body = inlineCodeRe.ReplaceAllString(body, "")
+	body = mdLinkURLRe.ReplaceAllString(body, "")
+
 	seen := map[string]bool{}
 	var slugs []string
-	for _, m := range pattern.FindAllStringSubmatchIndex(body, -1) {
-		slug := body[m[2]:m[3]]
-		// Skip if the matched slug is immediately followed by '/' — that
-		// makes it a path component (filesystem or URL), not a skill ref.
-		if m[3] < len(body) && body[m[3]] == '/' {
+	for _, match := range refSlugRe.FindAllStringSubmatch(body, -1) {
+		if len(match) < 3 || match[2] == "/" {
+			// slug followed by `/` is a path segment (e.g. /tmp/foo, /v3/api), not a skill ref
 			continue
 		}
+		slug := match[1]
 		if refSlugDenylist[slug] {
 			continue
 		}
@@ -287,6 +331,13 @@ func extractRefSlugs(text string) []string {
 	}
 	return slugs
 }
+
+var (
+	fencedCodeRe = regexp.MustCompile("(?s)```[^\n]*\n.*?```")
+	inlineCodeRe = regexp.MustCompile("`[^`\n]+`")
+	mdLinkURLRe  = regexp.MustCompile(`\]\([^)]*\)`)
+	refSlugRe    = regexp.MustCompile(`(?:^|[\s("'])/([a-z0-9][a-z0-9-]*)(/?)`)
+)
 
 func printRefReport(issues []refIssue) {
 	fmt.Println("Refs:")
