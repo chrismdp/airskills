@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -34,13 +35,93 @@ func (e *SkillsetNotFoundError) Error() string {
 		e.RequestedSlug, strings.Join(e.Available, ", "))
 }
 
-// setAnonHeader attaches the machine-level anonymous telemetry ID so the
-// server can attribute anonymous events (e.g. `airskills add` without login)
-// to a stable identity across sessions.
-func setAnonHeader(req *http.Request) {
+// setStandardHeaders attaches headers airskills sends on every API
+// request: the machine-level anonymous telemetry ID (so the server can
+// attribute anonymous events to a stable identity) and the CLI version
+// (so the server can refuse calls from CLIs below the hardcoded minimum
+// — see doRequest for the 426 Upgrade Required recovery flow).
+func setStandardHeaders(req *http.Request) {
 	if id := telemetry.AnonymousID(); id != "" {
 		req.Header.Set("X-Airskills-Anon-ID", id)
 	}
+	req.Header.Set("X-Airskills-CLI-Version", version)
+}
+
+// reExecGuardEnv is set on the child process after a 426-triggered
+// auto-update + re-exec. If the new process *also* hits a 426, that
+// means the floor is still ahead of the latest release we could fetch
+// — abort instead of looping into another upgrade attempt.
+const reExecGuardEnv = "AIRSKILLS_POST_FLOOR_UPGRADE"
+
+var (
+	// upgradeAttempted is per-process: at most one auto-update attempt
+	// per CLI invocation. Without this a stuck floor (CLI version still
+	// below floor after update) would loop forever.
+	upgradeAttempted atomic.Bool
+
+	// performUpdateFn and reExecFn are indirection points so tests can
+	// stub the upgrade and re-exec paths without hitting GitHub or
+	// actually replacing the running process.
+	performUpdateFn = performUpdate
+	reExecFn        = reExec
+)
+
+// doRequest is the single entry point for issuing API HTTP requests.
+// It wraps client.Do() with hardcoded-floor recovery: on HTTP 426
+// Upgrade Required, attempt to auto-self-update and re-exec the
+// current process so the user's command completes on the new binary.
+// When the upgrade or re-exec is unsafe (system-managed install,
+// network failure, no newer release published), returns a user-facing
+// error telling the user to upgrade manually.
+func doRequest(client *http.Client, req *http.Request) (*http.Response, error) {
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusUpgradeRequired {
+		return resp, nil
+	}
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	return nil, handleUpgradeRequired()
+}
+
+// handleUpgradeRequired runs the 426 recovery: at most one upgrade
+// attempt per process, only on writable installs, with a re-exec so
+// the running command completes on the new binary. Returns the error
+// the caller should propagate; never returns nil because either we
+// re-exec (and don't return) or we exit non-zero.
+func handleUpgradeRequired() error {
+	if os.Getenv(reExecGuardEnv) == "1" {
+		return fmt.Errorf("airskills %s is still below the server's minimum after auto-update — run `airskills self-update` manually", version)
+	}
+	if upgradeAttempted.Swap(true) {
+		return fmt.Errorf("airskills %s is no longer supported — run `airskills self-update` manually", version)
+	}
+
+	execPath, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("airskills %s is no longer supported — run `airskills self-update` manually (cannot resolve current binary: %v)", version, err)
+	}
+	if !isAutoUpdateSafe(execPath) {
+		return fmt.Errorf("airskills %s is no longer supported — run `airskills self-update` manually", version)
+	}
+
+	fmt.Fprintf(os.Stderr, "airskills: server requires a newer CLI version; auto-updating...\n")
+	newVersion, err := performUpdateFn(version, false, "auto-426")
+	if err != nil {
+		return fmt.Errorf("airskills %s is no longer supported and auto-update failed (%s) — run `airskills self-update` manually", version, classifyUpdateError(err))
+	}
+	if newVersion == "" {
+		return fmt.Errorf("airskills %s is no longer supported and no newer release is published — please wait for an update", version)
+	}
+
+	env := append(os.Environ(), reExecGuardEnv+"=1")
+	if err := reExecFn(execPath, os.Args, env); err != nil {
+		return fmt.Errorf("airskills upgraded to v%s but cannot re-exec (%v) — please re-run your command", newVersion, err)
+	}
+	// reExecFn does not return on success.
+	return nil
 }
 
 // apiSkill is now an alias for the codegen'd apitypes.Skill. The hand-
@@ -234,7 +315,14 @@ func newAPIClientAuto() (*apiClient, error) {
 // refreshAccessToken exchanges a refresh token for a new access token via the platform API.
 func refreshAccessToken(apiURL, refreshToken string) (*config.TokenData, error) {
 	payload, _ := json.Marshal(map[string]string{"refresh_token": refreshToken})
-	resp, err := http.Post(apiURL+"/api/v1/auth/refresh", "application/json", bytes.NewReader(payload))
+	req, err := http.NewRequest("POST", apiURL+"/api/v1/auth/refresh", bytes.NewReader(payload))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	setStandardHeaders(req)
+
+	resp, err := doRequest(http.DefaultClient, req)
 	if err != nil {
 		return nil, err
 	}
@@ -258,9 +346,9 @@ func (c *apiClient) get(path string) ([]byte, error) {
 		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
-	setAnonHeader(req)
+	setStandardHeaders(req)
 
-	resp, err := c.http.Do(req)
+	resp, err := doRequest(c.http, req)
 	if err != nil {
 		return nil, err
 	}
@@ -287,9 +375,9 @@ func (c *apiClient) getWithStatus(path string) ([]byte, int, error) {
 		return nil, 0, err
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
-	setAnonHeader(req)
+	setStandardHeaders(req)
 
-	resp, err := c.http.Do(req)
+	resp, err := doRequest(c.http, req)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -314,9 +402,9 @@ func (c *apiClient) post(path string, payload interface{}) ([]byte, error) {
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	req.Header.Set("Content-Type", "application/json")
-	setAnonHeader(req)
+	setStandardHeaders(req)
 
-	resp, err := c.http.Do(req)
+	resp, err := doRequest(c.http, req)
 	if err != nil {
 		return nil, err
 	}
@@ -345,9 +433,9 @@ func (c *apiClient) put(path string, payload interface{}) ([]byte, int, error) {
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	req.Header.Set("Content-Type", "application/json")
-	setAnonHeader(req)
+	setStandardHeaders(req)
 
-	resp, err := c.http.Do(req)
+	resp, err := doRequest(c.http, req)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -367,9 +455,9 @@ func (c *apiClient) del(path string) error {
 		return err
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
-	setAnonHeader(req)
+	setStandardHeaders(req)
 
-	resp, err := c.http.Do(req)
+	resp, err := doRequest(c.http, req)
 	if err != nil {
 		return err
 	}
@@ -420,9 +508,9 @@ func (c *apiClient) listPersonalSkillsInSkillset(skillset string) ([]apiSkill, s
 		return nil, "", err
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
-	setAnonHeader(req)
+	setStandardHeaders(req)
 
-	resp, err := c.http.Do(req)
+	resp, err := doRequest(c.http, req)
 	if err != nil {
 		return nil, "", err
 	}
@@ -577,7 +665,7 @@ func (c *apiClient) putArchive(skillID string, archive []byte, expectedHash, con
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	req.Header.Set("Content-Type", "application/gzip")
-	setAnonHeader(req)
+	setStandardHeaders(req)
 	if expectedHash != "" {
 		req.Header.Set("X-Expected-Hash", expectedHash)
 	}
@@ -585,7 +673,7 @@ func (c *apiClient) putArchive(skillID string, archive []byte, expectedHash, con
 		req.Header.Set("X-Content-Hash", contentHash)
 	}
 
-	resp, err := c.http.Do(req)
+	resp, err := doRequest(c.http, req)
 	if err != nil {
 		return nil, 0, err
 	}

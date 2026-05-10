@@ -76,9 +76,9 @@ var addCmd = &cobra.Command{
 		if authHeader != "" {
 			req.Header.Set("Authorization", authHeader)
 		}
-		setAnonHeader(req)
+		setStandardHeaders(req)
 
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := doRequest(http.DefaultClient, req)
 		if err != nil {
 			return fmt.Errorf("failed to fetch: %w", err)
 		}
@@ -277,9 +277,9 @@ func downloadSkillByID(apiURL, skillID, fallbackContent, authHeader string) (map
 	if authHeader != "" {
 		archiveReq.Header.Set("Authorization", authHeader)
 	}
-	setAnonHeader(archiveReq)
+	setStandardHeaders(archiveReq)
 
-	archiveResp, err := http.DefaultClient.Do(archiveReq)
+	archiveResp, err := doRequest(http.DefaultClient, archiveReq)
 	if err == nil && archiveResp.StatusCode == 200 {
 		defer archiveResp.Body.Close()
 		files, err := extractTarGzToMap(archiveResp.Body)

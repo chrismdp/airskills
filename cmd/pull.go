@@ -478,7 +478,7 @@ func runPullAnon(localSkills map[string]string, syncState *SyncState, skipSlugs 
 		// Resolve the skill from its source
 		resolveURL := fmt.Sprintf("%s/api/v1/resolve/%s/%s", cfg.APIURL, entry.Source.Owner, entry.Source.Slug)
 		resolveReq, _ := http.NewRequest("GET", resolveURL, nil)
-		setAnonHeader(resolveReq)
+		setStandardHeaders(resolveReq)
 		resp, err := http.DefaultClient.Do(resolveReq)
 		if err != nil {
 			continue

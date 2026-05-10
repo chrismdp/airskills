@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -254,4 +255,265 @@ func TestNewAPIClientAutoRefreshSavesToken(t *testing.T) {
 	if saved.RefreshToken != newToken.RefreshToken {
 		t.Errorf("saved RefreshToken: want %q, got %q", newToken.RefreshToken, saved.RefreshToken)
 	}
+}
+
+// TestSetStandardHeadersSendsCLIVersion verifies every authenticated
+// request carries the X-Airskills-CLI-Version header so the server can
+// compare it against the hardcoded floor and return 426 if the CLI is
+// below it.
+func TestSetStandardHeadersSendsCLIVersion(t *testing.T) {
+	var got string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Get("X-Airskills-CLI-Version")
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"count":0}`))
+	}))
+	defer srv.Close()
+
+	c := &apiClient{baseURL: srv.URL, token: "t", http: srv.Client()}
+	if _, err := c.countSuggestions("", "", ""); err != nil {
+		t.Fatalf("countSuggestions: %v", err)
+	}
+	if got != version {
+		t.Errorf("X-Airskills-CLI-Version: want %q, got %q", version, got)
+	}
+}
+
+// TestRefreshAccessTokenSendsCLIVersion verifies the unauthenticated
+// refresh endpoint also carries the version header. A user with an
+// expired token AND an obsolete CLI must hit 426 on refresh, not on
+// the first authenticated call after — otherwise the auto-update path
+// can't trigger.
+func TestRefreshAccessTokenSendsCLIVersion(t *testing.T) {
+	var got string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Get("X-Airskills-CLI-Version")
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(config.TokenData{AccessToken: "x", RefreshToken: "y", ExpiresAt: time.Now().Add(time.Hour).Unix()})
+	}))
+	defer srv.Close()
+
+	if _, err := refreshAccessToken(srv.URL, "rt"); err != nil {
+		t.Fatalf("refreshAccessToken: %v", err)
+	}
+	if got != version {
+		t.Errorf("X-Airskills-CLI-Version on refresh: want %q, got %q", version, got)
+	}
+}
+
+// TestDoRequestPassThroughOnNon426 verifies the wrapper does not
+// interfere with non-426 responses — same status code, same body.
+func TestDoRequestPassThroughOnNon426(t *testing.T) {
+	for _, status := range []int{200, 201, 400, 404, 500} {
+		t.Run(fmt.Sprintf("status_%d", status), func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(status)
+				w.Write([]byte("body"))
+			}))
+			defer srv.Close()
+
+			req, _ := http.NewRequest("GET", srv.URL, nil)
+			resp, err := doRequest(srv.Client(), req)
+			if err != nil {
+				t.Fatalf("doRequest: %v", err)
+			}
+			if resp.StatusCode != status {
+				t.Errorf("status: want %d, got %d", status, resp.StatusCode)
+			}
+			resp.Body.Close()
+		})
+	}
+}
+
+// TestDoRequest426TriggersUpgradeAndReExec verifies the happy-path
+// recovery: the first 426 attempts an auto-update, and on success the
+// new binary is re-execed (we stub both to assert the call shape).
+func TestDoRequest426TriggersUpgradeAndReExec(t *testing.T) {
+	resetUpgradeState(t)
+	t.Setenv(reExecGuardEnv, "")
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUpgradeRequired)
+		w.Write([]byte(`{"error":"upgrade required"}`))
+	}))
+	defer srv.Close()
+
+	var updateCalled, reExecCalled bool
+	performUpdateFn = func(currentVersion string, verbose bool, trigger string) (string, error) {
+		updateCalled = true
+		if trigger != "auto-426" {
+			t.Errorf("performUpdate trigger: want %q, got %q", "auto-426", trigger)
+		}
+		return "9.9.9", nil
+	}
+	t.Cleanup(func() { performUpdateFn = performUpdate })
+
+	reExecFn = func(execPath string, args []string, env []string) error {
+		reExecCalled = true
+		// Verify the guard env var is set so the new process won't loop.
+		found := false
+		for _, kv := range env {
+			if kv == reExecGuardEnv+"=1" {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("re-exec env missing %s=1", reExecGuardEnv)
+		}
+		return nil
+	}
+	t.Cleanup(func() { reExecFn = reExec })
+
+	req, _ := http.NewRequest("GET", srv.URL, nil)
+	_, err := doRequest(srv.Client(), req)
+	if err != nil {
+		t.Fatalf("doRequest after successful update should return nil error (re-exec stubbed), got %v", err)
+	}
+	if !updateCalled {
+		t.Error("performUpdateFn was not called")
+	}
+	if !reExecCalled {
+		t.Error("reExecFn was not called")
+	}
+}
+
+// TestDoRequest426SecondTimeBailsOut verifies the no-infinite-loop
+// guarantee: once an upgrade has been attempted in this process, a
+// subsequent 426 returns an error rather than triggering a second
+// upgrade.
+func TestDoRequest426SecondTimeBailsOut(t *testing.T) {
+	resetUpgradeState(t)
+	t.Setenv(reExecGuardEnv, "")
+	upgradeAttempted.Store(true) // simulate prior attempt
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUpgradeRequired)
+	}))
+	defer srv.Close()
+
+	performUpdateFn = func(string, bool, string) (string, error) {
+		t.Fatal("performUpdateFn must NOT be called on a repeat 426")
+		return "", nil
+	}
+	t.Cleanup(func() { performUpdateFn = performUpdate })
+
+	req, _ := http.NewRequest("GET", srv.URL, nil)
+	_, err := doRequest(srv.Client(), req)
+	if err == nil {
+		t.Fatal("expected error on repeat 426")
+	}
+	if !strings.Contains(err.Error(), "no longer supported") {
+		t.Errorf("error should mention 'no longer supported': %v", err)
+	}
+	if !strings.Contains(err.Error(), "self-update") {
+		t.Errorf("error should mention 'self-update': %v", err)
+	}
+}
+
+// TestDoRequest426InsideReExecedChildBailsOut verifies that a 426
+// reaching a process that itself was spawned by a re-exec (i.e. has
+// the guard env set) does not trigger another upgrade — the floor is
+// genuinely above the latest published release and the user must wait.
+func TestDoRequest426InsideReExecedChildBailsOut(t *testing.T) {
+	resetUpgradeState(t)
+	t.Setenv(reExecGuardEnv, "1")
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUpgradeRequired)
+	}))
+	defer srv.Close()
+
+	performUpdateFn = func(string, bool, string) (string, error) {
+		t.Fatal("performUpdateFn must NOT be called when re-exec guard is set")
+		return "", nil
+	}
+	t.Cleanup(func() { performUpdateFn = performUpdate })
+
+	req, _ := http.NewRequest("GET", srv.URL, nil)
+	_, err := doRequest(srv.Client(), req)
+	if err == nil {
+		t.Fatal("expected error when 426 hits inside re-execed child")
+	}
+	if !strings.Contains(err.Error(), "still below") {
+		t.Errorf("error should mention 'still below the server's minimum': %v", err)
+	}
+}
+
+// TestDoRequest426UpdateFailureSurfacesError verifies that when
+// performUpdate returns an error, the user sees a clear "auto-update
+// failed" message pointing at manual self-update, and reExec is never
+// called.
+func TestDoRequest426UpdateFailureSurfacesError(t *testing.T) {
+	resetUpgradeState(t)
+	t.Setenv(reExecGuardEnv, "")
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUpgradeRequired)
+	}))
+	defer srv.Close()
+
+	performUpdateFn = func(string, bool, string) (string, error) {
+		return "", fmt.Errorf("download failed: connection reset")
+	}
+	t.Cleanup(func() { performUpdateFn = performUpdate })
+
+	reExecFn = func(string, []string, []string) error {
+		t.Fatal("reExecFn must NOT be called after a failed update")
+		return nil
+	}
+	t.Cleanup(func() { reExecFn = reExec })
+
+	req, _ := http.NewRequest("GET", srv.URL, nil)
+	_, err := doRequest(srv.Client(), req)
+	if err == nil {
+		t.Fatal("expected error after failed update")
+	}
+	if !strings.Contains(err.Error(), "auto-update failed") {
+		t.Errorf("error should mention 'auto-update failed': %v", err)
+	}
+}
+
+// TestDoRequest426NoNewerReleaseBailsOut verifies that when the
+// upgrade attempt finds we're already on the latest published version
+// (performUpdate returns "" with no error), the user gets a "no newer
+// release" message rather than a re-exec attempt that would just loop.
+func TestDoRequest426NoNewerReleaseBailsOut(t *testing.T) {
+	resetUpgradeState(t)
+	t.Setenv(reExecGuardEnv, "")
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUpgradeRequired)
+	}))
+	defer srv.Close()
+
+	performUpdateFn = func(string, bool, string) (string, error) {
+		return "", nil // already on latest
+	}
+	t.Cleanup(func() { performUpdateFn = performUpdate })
+
+	reExecFn = func(string, []string, []string) error {
+		t.Fatal("reExecFn must NOT be called when no newer release exists")
+		return nil
+	}
+	t.Cleanup(func() { reExecFn = reExec })
+
+	req, _ := http.NewRequest("GET", srv.URL, nil)
+	_, err := doRequest(srv.Client(), req)
+	if err == nil {
+		t.Fatal("expected error when no newer release is available")
+	}
+	if !strings.Contains(err.Error(), "no newer release") {
+		t.Errorf("error should mention 'no newer release': %v", err)
+	}
+}
+
+// resetUpgradeState clears the per-process upgrade state between tests
+// so each test starts from a fresh slate. Without this, the first test
+// that calls handleUpgradeRequired will set upgradeAttempted=true and
+// poison every subsequent test in the package.
+func resetUpgradeState(t *testing.T) {
+	t.Helper()
+	upgradeAttempted.Store(false)
+	t.Cleanup(func() { upgradeAttempted.Store(false) })
 }

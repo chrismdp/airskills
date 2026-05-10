@@ -56,9 +56,9 @@ func autoInstallGuide() {
 	if authHeader != "" {
 		req.Header.Set("Authorization", authHeader)
 	}
-	setAnonHeader(req)
+	setStandardHeaders(req)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := doRequest(http.DefaultClient, req)
 	if err != nil || resp.StatusCode != 200 {
 		return // guide not published yet or network issue — skip silently
 	}
