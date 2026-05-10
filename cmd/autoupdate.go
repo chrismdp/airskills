@@ -6,9 +6,21 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 
 	"github.com/chrismdp/airskills/config"
 )
+
+// autoUpdateDidFire is true once maybeAutoUpdate has successfully
+// swapped the on-disk binary in the current process. Other code paths
+// that compare the server-reported latest CLI version against the
+// in-process `version` constant — notably cmd/status.go's "run
+// airskills self-update" hint — consult this to suppress a redundant
+// prompt: the user already saw "airskills: updated to vX" from the
+// auto-update, but the running process's compiled-in `version` lags
+// the on-disk binary until the next spawn, so a naive isNewer check
+// would still tell them to upgrade to a version they already have.
+var autoUpdateDidFire atomic.Bool
 
 // maybeAutoUpdate auto-applies a CLI binary update if one is known to
 // be available, the binary lives in a user-writable path, and no
@@ -63,6 +75,8 @@ func maybeAutoUpdate() bool {
 		fmt.Fprintf(os.Stderr,
 			"airskills: auto-update to v%s failed (%s) — current command will run on v%s\n",
 			state.LatestVersion, classifyUpdateError(err), version)
+	} else {
+		autoUpdateDidFire.Store(true)
 	}
 	return true
 }
