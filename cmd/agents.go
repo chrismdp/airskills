@@ -97,7 +97,7 @@ func installSkillToAgents(slug string, files map[string][]byte) ([]string, error
 		for name, content := range files {
 			target := filepath.Join(skillDir, name)
 			os.MkdirAll(filepath.Dir(target), 0755)
-			if err := os.WriteFile(target, content, 0644); err != nil {
+			if err := os.WriteFile(target, content, fileMode(content)); err != nil {
 				continue
 			}
 		}

@@ -123,7 +123,7 @@ Also available as 'airskills show'.`,
 			if err := os.MkdirAll(filepath.Dir(fullPath), 0755); err != nil {
 				return fmt.Errorf("failed to create directory for %s: %w", relPath, err)
 			}
-			if err := os.WriteFile(fullPath, data, 0644); err != nil {
+			if err := os.WriteFile(fullPath, data, fileMode(data)); err != nil {
 				return fmt.Errorf("failed to write %s: %w", relPath, err)
 			}
 		}

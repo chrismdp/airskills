@@ -3,6 +3,7 @@ package cmd
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -58,6 +59,50 @@ func TestInstallSkillToAgents(t *testing.T) {
 	_, err = os.ReadFile(filepath.Join(tmpHome, ".claude", "skills", "test-skill", "scripts", "run.sh"))
 	if err != nil {
 		t.Error("missing scripts/run.sh in Claude Code")
+	}
+}
+
+func TestInstallSkillPreservesExecutableBitOnShebangFiles(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix mode bits don't apply on Windows")
+	}
+
+	tmpHome := t.TempDir()
+	setTestHome(t, tmpHome)
+	os.MkdirAll(filepath.Join(tmpHome, ".claude", "skills"), 0755)
+
+	files := map[string][]byte{
+		"SKILL.md":   []byte("# Test\nHello"),
+		"run.sh":     []byte("#!/bin/bash\necho hi"),
+		"helper.py":  []byte("#!/usr/bin/env python3\nprint('hi')"),
+		"data.txt":   []byte("plain data"),
+		"README.md":  []byte("# Plain markdown, no shebang"),
+	}
+
+	if _, err := installSkillToAgents("test-exec", files); err != nil {
+		t.Fatalf("installSkillToAgents: %v", err)
+	}
+
+	skillDir := filepath.Join(tmpHome, ".claude", "skills", "test-exec")
+
+	for _, name := range []string{"run.sh", "helper.py"} {
+		info, err := os.Stat(filepath.Join(skillDir, name))
+		if err != nil {
+			t.Fatalf("stat %s: %v", name, err)
+		}
+		if info.Mode()&0111 == 0 {
+			t.Errorf("expected %s to be executable, got mode %v", name, info.Mode())
+		}
+	}
+
+	for _, name := range []string{"SKILL.md", "data.txt", "README.md"} {
+		info, err := os.Stat(filepath.Join(skillDir, name))
+		if err != nil {
+			t.Fatalf("stat %s: %v", name, err)
+		}
+		if info.Mode()&0111 != 0 {
+			t.Errorf("expected %s NOT to be executable, got mode %v", name, info.Mode())
+		}
 	}
 }
 

@@ -227,7 +227,7 @@ func writeFilesToDir(dir string, files map[string][]byte) error {
 		if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
 			return err
 		}
-		if err := os.WriteFile(target, data, 0644); err != nil {
+		if err := os.WriteFile(target, data, fileMode(data)); err != nil {
 			return err
 		}
 	}
