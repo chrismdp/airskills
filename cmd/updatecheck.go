@@ -17,7 +17,16 @@ type updateState struct {
 	LatestVersion string `json:"latest_version"`
 }
 
-const updateCheckInterval = 24 * time.Hour
+// updateCheckInterval is how long checkForUpdates trusts the cached
+// `update_state.json` before kicking the background re-fetch from
+// GitHub. 24h was too long: a release tagged just after a user's last
+// run sat unreachable to maybeAutoUpdate for a full day, because the
+// cache stayed stale and auto-update only fires on cached "newer
+// version known". 1h keeps users within an hour of the latest release
+// (well under the GitHub unauthenticated rate limit at our user count)
+// while preserving the original "don't hit the API on every command"
+// intent.
+const updateCheckInterval = 1 * time.Hour
 const releasesURL = "https://api.github.com/repos/chrismdp/airskills/releases/latest"
 
 func checkForUpdates() {
