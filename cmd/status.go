@@ -107,12 +107,8 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		})
 	}
 
-	// Suppress the server-reported latestCLI hint when this process
-	// already auto-updated — the user just saw "airskills: updated to
-	// vX" from maybeAutoUpdate, but our compiled-in `version` constant
-	// still lags the on-disk binary until next spawn, so the naive
-	// isNewer comparison above would otherwise nag them to self-update
-	// to a version they already have.
+	// Compiled-in `version` lags the on-disk binary after an in-process
+	// auto-update, so isNewer above falsely flags an upgrade.
 	showLatestCLI := hr.latestCLI != "" && !autoUpdateDidFire.Load()
 
 	if needPush == 0 && needPull == 0 && needUpdate == 0 && needUntracked == 0 && upstreamUpdates == 0 && pendingSuggestions == 0 && !showLatestCLI {

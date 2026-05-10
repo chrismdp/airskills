@@ -71,14 +71,28 @@ func maybeAutoUpdate() bool {
 		return false
 	}
 
-	if _, err := performUpdate(version, false, "auto"); err != nil {
+	newVersion, err := performUpdate(version, false, "auto")
+	finalizeAutoUpdate(state.LatestVersion, version, newVersion, err)
+	return true
+}
+
+// finalizeAutoUpdate handles bookkeeping after performUpdate returns.
+// On err, narrate the failure on stderr. Set autoUpdateDidFire only
+// when newVersion is non-empty — performUpdate returns ("", nil) when
+// the GitHub fetch shows we're already on latest, which is reachable
+// in the wild whenever update_state.json races with a release rollback
+// or a stale cached manifest. Setting the flag in that case would
+// suppress legitimate hints in cmd/status.go.
+func finalizeAutoUpdate(latestVersion, currentVersion, newVersion string, err error) {
+	if err != nil {
 		fmt.Fprintf(os.Stderr,
 			"airskills: auto-update to v%s failed (%s) — current command will run on v%s\n",
-			state.LatestVersion, classifyUpdateError(err), version)
-	} else {
+			latestVersion, classifyUpdateError(err), currentVersion)
+		return
+	}
+	if newVersion != "" {
 		autoUpdateDidFire.Store(true)
 	}
-	return true
 }
 
 // isAutoUpdateSafe returns true if execPath looks like a user-writable

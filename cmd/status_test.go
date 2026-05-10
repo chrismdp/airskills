@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -70,20 +71,17 @@ func TestClassifyForStatusBuckets(t *testing.T) {
 	}
 }
 
-// TestRunStatusSuppressesLatestCLIHintAfterAutoUpdate guards the Phase 5
-// fix: when maybeAutoUpdate has already swapped the on-disk binary in
-// this process, runStatus must NOT also print "[airskills] update → X:
-// run 'airskills self-update'". The user just saw "airskills: updated
-// to vX" — repeating the prompt for a version they already have on disk
-// is confusing and undermines the auto-update UX.
+// Reproduces the tmux-re-attach scenario: maybeAutoUpdate fires,
+// autoUpdateDidFire is true, runStatus must not nag for self-update.
 func TestRunStatusSuppressesLatestCLIHintAfterAutoUpdate(t *testing.T) {
-	out := runStatusCapture(t, "0.6.1", "99.99.99", true)
+	out := runStatusCapture(t, statusFixture{
+		runningVersion: "0.6.1",
+		latestCLI:      "99.99.99",
+		autoUpdated:    true,
+	})
 	if strings.Contains(out, "self-update") {
-		t.Errorf("after auto-update, latestCLI hint must be suppressed; got:\n%s", out)
+		t.Errorf("latestCLI hint must be suppressed; got:\n%s", out)
 	}
-	// Cosmetic side-bug: with the suppression in place we should route
-	// into the all-clean branch since nothing else is pending. Verify
-	// we don't emit the empty "[airskills]  — run 'airskills sync'" line.
 	if strings.Contains(out, "[airskills]  — run") {
 		t.Errorf("empty parts line leaked through; got:\n%s", out)
 	}
@@ -92,38 +90,126 @@ func TestRunStatusSuppressesLatestCLIHintAfterAutoUpdate(t *testing.T) {
 	}
 }
 
-// TestRunStatusPrintsLatestCLIHintWhenNoAutoUpdate guards the existing
-// behaviour: a system-managed install (brew/apt/snap) where auto-update
-// never fired must still see the "run airskills self-update" prompt.
-// Suppression only kicks in for processes that themselves auto-updated.
+// brew/apt/snap installs never auto-update — the hint must still print.
 func TestRunStatusPrintsLatestCLIHintWhenNoAutoUpdate(t *testing.T) {
-	out := runStatusCapture(t, "0.6.1", "99.99.99", false)
+	out := runStatusCapture(t, statusFixture{
+		runningVersion: "0.6.1",
+		latestCLI:      "99.99.99",
+		autoUpdated:    false,
+	})
 	if !strings.Contains(out, "self-update") {
-		t.Errorf("with autoUpdateDidFire=false, latestCLI hint must print; got:\n%s", out)
+		t.Errorf("hint must print; got:\n%s", out)
 	}
 	if !strings.Contains(out, "99.99.99") {
-		t.Errorf("expected the latest version 99.99.99 in the hint; got:\n%s", out)
+		t.Errorf("expected version 99.99.99 in the hint; got:\n%s", out)
 	}
 }
 
-// runStatusCapture drives runStatus end-to-end against a stub server
-// that reports the given latestCLI from /api/v1/health, returns empty
-// skills + zero suggestions, and captures the resulting stderr output
-// so tests can assert on what the user actually sees. Sets the
-// in-memory `version` constant and the `autoUpdateDidFire` flag for
-// the duration of the test.
-func runStatusCapture(t *testing.T, runningVersion, serverLatestCLI string, autoUpdated bool) string {
+// Pins down that suppression doesn't accidentally route into the
+// all-clean branch (and produce an empty parts line) when other work
+// is pending. autoUpdateDidFire=true with one local-only skill must
+// still print the "↑ 1 to push" line, and not the self-update line.
+func TestRunStatusSuppressesLatestCLIHintButKeepsPartsLine(t *testing.T) {
+	out := runStatusCapture(t, statusFixture{
+		runningVersion: "0.6.1",
+		latestCLI:      "99.99.99",
+		autoUpdated:    true,
+		localSkills:    []string{"local-only-skill"},
+	})
+	if strings.Contains(out, "self-update") {
+		t.Errorf("self-update line must not print; got:\n%s", out)
+	}
+	if !strings.Contains(out, "to push") {
+		t.Errorf("expected '↑ 1 to push' parts line; got:\n%s", out)
+	}
+	if strings.Contains(out, "in sync") {
+		t.Errorf("must not route into all-clean branch when work is pending; got:\n%s", out)
+	}
+}
+
+// Quiet mode is the shell-prompt hot path (eval "$(airskills status)").
+// Suppression must hold there too — and the output must collapse to
+// nothing on the all-clean route.
+func TestRunStatusSuppressesLatestCLIHintInQuietMode(t *testing.T) {
+	out := runStatusCapture(t, statusFixture{
+		runningVersion: "0.6.1",
+		latestCLI:      "99.99.99",
+		autoUpdated:    true,
+		quiet:          true,
+	})
+	if strings.Contains(out, "self-update") {
+		t.Errorf("self-update line must not print in quiet mode; got:\n%s", out)
+	}
+	if strings.TrimSpace(out) != "" {
+		t.Errorf("quiet all-clean must produce no output; got:\n%s", out)
+	}
+}
+
+// Direct unit test for the post-performUpdate gate: the flag must only
+// flip when an actual swap happened. ("", nil) is the rare-but-real
+// case where update_state.json said newer-available but the GitHub
+// re-fetch in performUpdate disagreed (release rollback, stale cache).
+func TestFinalizeAutoUpdateGatesOnNewVersion(t *testing.T) {
+	cases := []struct {
+		name       string
+		newVersion string
+		err        error
+		wantFlag   bool
+	}{
+		{"successful swap sets flag", "0.6.4", nil, true},
+		{"already on latest does not set flag", "", nil, false},
+		{"failure does not set flag", "", fmt.Errorf("download failed"), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			autoUpdateDidFire.Store(false)
+			t.Cleanup(func() { autoUpdateDidFire.Store(false) })
+			// Capture stderr so the failure-path notification doesn't
+			// leak into test output.
+			_ = captureStderr(t, func() {
+				finalizeAutoUpdate("0.6.4", "0.6.1", tc.newVersion, tc.err)
+			})
+			if got := autoUpdateDidFire.Load(); got != tc.wantFlag {
+				t.Errorf("autoUpdateDidFire = %v, want %v", got, tc.wantFlag)
+			}
+		})
+	}
+}
+
+// statusFixture bundles the inputs runStatusCapture varies. Most tests
+// only set a subset; zero values are sensible defaults (no local
+// skills, no quiet mode).
+type statusFixture struct {
+	runningVersion string
+	latestCLI      string
+	autoUpdated    bool
+	localSkills    []string
+	quiet          bool
+}
+
+func runStatusCapture(t *testing.T, f statusFixture) string {
 	t.Helper()
 
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 
+	for _, name := range f.localSkills {
+		dir := filepath.Join(home, ".claude", "skills", name)
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatalf("MkdirAll skill: %v", err)
+		}
+		body := "---\nname: " + name + "\ndescription: test\n---\n# " + name + "\n"
+		if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(body), 0600); err != nil {
+			t.Fatalf("write SKILL.md: %v", err)
+		}
+	}
+
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/api/v1/health":
-			w.Write([]byte(`{"latest_cli":"` + serverLatestCLI + `"}`))
+			w.Write([]byte(`{"latest_cli":"` + f.latestCLI + `"}`))
 		case "/api/v1/skills":
 			w.Write([]byte(`{"skills":[]}`))
 		case "/api/v1/suggestions/count":
@@ -152,14 +238,21 @@ func runStatusCapture(t *testing.T, runningVersion, serverLatestCLI string, auto
 	}
 
 	oldVersion := version
-	version = runningVersion
+	version = f.runningVersion
 	t.Cleanup(func() { version = oldVersion })
 
-	autoUpdateDidFire.Store(autoUpdated)
+	autoUpdateDidFire.Store(f.autoUpdated)
 	t.Cleanup(func() { autoUpdateDidFire.Store(false) })
 
+	cmd := *statusCmd
+	cmd.ResetFlags()
+	cmd.Flags().BoolP("quiet", "q", false, "")
+	if f.quiet {
+		cmd.Flags().Set("quiet", "true")
+	}
+
 	return captureStderr(t, func() {
-		if err := runStatus(statusCmd, nil); err != nil {
+		if err := runStatus(&cmd, nil); err != nil {
 			t.Fatalf("runStatus: %v", err)
 		}
 	})
