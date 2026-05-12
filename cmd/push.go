@@ -164,26 +164,62 @@ in opposite directions.`,
 			ownedSkillIDs[remoteSkills[i].Id.String()] = true
 		}
 
-		// Filter out skills whose sync state SkillID belongs to another user.
-		// This happens when skills are installed via "add" from another user and
-		// the sync state somehow ends up with the original owner's skill ID.
+		// Filter out skills whose sync state SkillID isn't in the caller's
+		// owned set. Two cases:
+		//  - has Source (was added from another user) → clear SkillID so it
+		//    gets created as a fork.
+		//  - no Source → the skill_id existed at some point and we tracked it,
+		//    but the server doesn't return it anymore. Either it was deleted
+		//    (orphan), transferred to a different owner (moved), or the server
+		//    is having a bad day (transient). Classify and act on each.
 		var filtered []skillEntry
-		var skipped int
+		type skippedCandidate struct {
+			name     string
+			localDir string
+			marker   *SyncEntry
+		}
+		var skippedCandidates []skippedCandidate
 		for _, s := range skills {
 			if s.marker != nil && s.marker.SkillID != "" && !ownedSkillIDs[s.marker.SkillID] {
-				// SkillID doesn't belong to us. If it has a Source (was added from
-				// another user), clear the SkillID so it gets created as a fork.
 				if s.marker.Source != nil {
 					s.marker.SkillID = ""
 				} else {
-					// Unknown ownership — skip to avoid "not your skill" errors
-					skipped++
+					skippedCandidates = append(skippedCandidates, skippedCandidate{
+						name: s.name, localDir: s.dir, marker: s.marker,
+					})
 					continue
 				}
 			}
 			filtered = append(filtered, s)
 		}
 		skills = filtered
+
+		// Resolve each skipped marker against the server and apply the
+		// appropriate action. See cmd/skipped_marker.go for the decision
+		// tree; mutations happen here so we keep all sync-state writes in
+		// one place. Buckets surface in the summary further down.
+		var orphanRemoved, orphanKept, movedKept, transient []skippedAction
+		var earlyWarnings []string
+		for _, c := range skippedCandidates {
+			action := classifySkippedMarker(client, c.name, c.marker, c.localDir)
+			switch action.kind {
+			case actionOrphanRemove:
+				if _, err := removeLocalSkill(c.name); err != nil {
+					earlyWarnings = append(earlyWarnings, fmt.Sprintf("%s: deleted server-side but local removal failed: %v", c.name, err))
+				}
+				delete(syncState.Skills, c.name)
+				orphanRemoved = append(orphanRemoved, action)
+			case actionOrphanKeep:
+				delete(syncState.Skills, c.name)
+				orphanKept = append(orphanKept, action)
+			case actionMovedKeep:
+				delete(syncState.Skills, c.name)
+				movedKept = append(movedKept, action)
+			case actionTransient:
+				// Leave marker + dir intact; retry next sync.
+				transient = append(transient, action)
+			}
+		}
 
 		// Print initial progress lines
 		lines := make([]progressLine, len(skills))
@@ -695,13 +731,49 @@ in opposite directions.`,
 		if failed > 0 {
 			parts = append(parts, red(fmt.Sprintf("%d failed", failed)))
 		}
-		if skipped > 0 {
-			parts = append(parts, dim(fmt.Sprintf("%d skipped (not yours)", skipped)))
+		if len(orphanRemoved) > 0 {
+			parts = append(parts, fmt.Sprintf("%d orphan removed", len(orphanRemoved)))
+		}
+		if len(orphanKept) > 0 {
+			parts = append(parts, yellow(fmt.Sprintf("%d orphan with local edits", len(orphanKept))))
+		}
+		if len(movedKept) > 0 {
+			parts = append(parts, yellow(fmt.Sprintf("%d moved (re-link needed)", len(movedKept))))
+		}
+		if len(transient) > 0 {
+			parts = append(parts, dim(fmt.Sprintf("%d couldn't verify", len(transient))))
 		}
 		if len(parts) == 0 {
 			parts = append(parts, dim("all unchanged"))
 		}
 		fmt.Printf("\n%s\n", strings.Join(parts, ", "))
+
+		// Per-skill detail for actions we took on skipped markers. Always
+		// print these by default — the user removed/transferred something
+		// elsewhere, and they need to see the consequence on this machine
+		// plus how to undo it.
+		for _, a := range orphanRemoved {
+			fmt.Printf("  %s %s: removed locally (deleted server-side).\n", green("-"), a.name)
+			fmt.Printf("       Undo: airskills restore %s\n", a.name)
+		}
+		for _, a := range orphanKept {
+			fmt.Printf("  %s %s: deleted server-side; local edits kept, marker dropped.\n", yellow("!"), a.name)
+			fmt.Println("       Next sync WILL create a NEW skill under your account from this dir.")
+			fmt.Printf("       Prevent now: airskills rm --keep-remote %s\n", a.name)
+			fmt.Printf("       Get server version back: airskills restore %s\n", a.name)
+		}
+		for _, a := range movedKept {
+			fmt.Printf("  %s %s: moved to %s/%s; local kept, marker dropped.\n", yellow("!"), a.name, a.newOwnerSlug, a.newSkillSlug)
+			fmt.Println("       Next sync WILL create a NEW skill under your account from this dir.")
+			fmt.Printf("       Prevent + follow updates: airskills rm --keep-remote %s && airskills add %s/%s\n", a.name, a.newOwnerSlug, a.newSkillSlug)
+			fmt.Printf("       Prevent + discard:        airskills rm --keep-remote %s\n", a.name)
+		}
+		for _, a := range transient {
+			fmt.Printf("  %s %s: couldn't verify server state — will retry next sync.\n", dim("?"), a.name)
+		}
+		for _, w := range earlyWarnings {
+			fmt.Printf("  %s %s\n", yellow("!"), w)
+		}
 
 		if len(warnings) > 0 {
 			for _, w := range warnings {
@@ -710,14 +782,17 @@ in opposite directions.`,
 		}
 
 		telemetry.Capture("cli_push", map[string]interface{}{
-			"pushed":    pushed,
-			"created":   created,
-			"linked":    linked,
-			"renamed":   renamed,
-			"conflicts": conflicts,
-			"failed":    failed,
-			"skipped":   skipped,
-			"force":     pushForce,
+			"pushed":         pushed,
+			"created":        created,
+			"linked":         linked,
+			"renamed":        renamed,
+			"conflicts":      conflicts,
+			"failed":         failed,
+			"orphan_removed": len(orphanRemoved),
+			"orphan_kept":    len(orphanKept),
+			"moved_kept":     len(movedKept),
+			"transient":      len(transient),
+			"force":          pushForce,
 		})
 
 		if len(validationMessages) > 0 {
