@@ -29,13 +29,13 @@ func TestClassifySkippedMarker(t *testing.T) {
 	// Common server: route by URL + status to simulate each kind.
 	// Each subtest overrides the handler.
 	cases := []struct {
-		name        string
-		handler     http.HandlerFunc
-		bodyOnDisk  string
-		markerHash  string // overrides clean hash if non-empty
-		wantKind    skippedActionKind
-		wantOwner   string
-		wantSkill   string
+		name       string
+		handler    http.HandlerFunc
+		bodyOnDisk string
+		markerHash string // overrides clean hash if non-empty
+		wantKind   skippedActionKind
+		wantOwner  string
+		wantSkill  string
 	}{
 		{
 			name: "orphan + clean local → remove",
@@ -55,12 +55,26 @@ func TestClassifySkippedMarker(t *testing.T) {
 			wantKind:   actionOrphanKeep,
 		},
 		{
-			name: "moved to org → keep dir",
+			name: "moved to org live skill detail shape → keep dir",
 			handler: func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
 				json.NewEncoder(w).Encode(map[string]interface{}{
-					"slug": "foo-new",
-					"org":  map[string]string{"slug": "neworg"},
+					"id":             skillID,
+					"owner_id":       nil,
+					"org_id":         "22222222-2222-2222-2222-222222222222",
+					"name":           "foo-new",
+					"slug":           "foo-new",
+					"visibility":     "private",
+					"version":        "1.0.0",
+					"content_hash":   "abc123",
+					"archive_size":   123,
+					"files":          []map[string]string{{"path": "SKILL.md"}},
+					"dependencies":   []map[string]string{},
+					"owner":          nil,
+					"org":            map[string]string{"slug": "neworg", "name": "New Org"},
+					"deleted_at":     nil,
+					"forked_from":    nil,
+					"head_commit_id": nil,
 				})
 			},
 			bodyOnDisk: "---\nname: foo\ndescription: t\n---\nbody",
@@ -81,6 +95,28 @@ func TestClassifySkippedMarker(t *testing.T) {
 			wantKind:   actionMovedKeep,
 			wantOwner:  "alice",
 			wantSkill:  "foo",
+		},
+		{
+			name: "successful detail without owner namespace → transient",
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"slug": "foo",
+				})
+			},
+			bodyOnDisk: "---\nname: foo\ndescription: t\n---\nbody",
+			wantKind:   actionTransient,
+		},
+		{
+			name: "successful detail without slug → transient",
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"org": map[string]string{"slug": "neworg"},
+				})
+			},
+			bodyOnDisk: "---\nname: foo\ndescription: t\n---\nbody",
+			wantKind:   actionTransient,
 		},
 		{
 			name: "server 500 → transient (no destructive action)",

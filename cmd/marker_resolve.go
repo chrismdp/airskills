@@ -93,10 +93,10 @@ const (
 
 // markerState describes the server-truth view of a marker after re-resolution.
 type markerState struct {
-	kind       markerStateKind
-	ownerKind  string // "user" | "org"
-	ownerSlug  string
-	skillSlug  string
+	kind      markerStateKind
+	ownerKind string // "user" | "org"
+	ownerSlug string
+	skillSlug string
 }
 
 // updateLocalMarkerForTransfer records the new owner namespace AND the new
@@ -153,6 +153,10 @@ func classifyMarkerSkill(c *apiClient, marker *SyncEntry) (markerState, error) {
 		Org *struct {
 			Slug string `json:"slug"`
 		} `json:"org"`
+		CurrentOwner *struct {
+			Kind string `json:"kind"`
+			Slug string `json:"slug"`
+		} `json:"current_owner"`
 	}
 	if err := parseJSON(body, &resp); err != nil {
 		return markerState{kind: markerStateError}, err
@@ -164,6 +168,12 @@ func classifyMarkerSkill(c *apiClient, marker *SyncEntry) (markerState, error) {
 	} else if resp.Owner != nil {
 		state.ownerKind = "user"
 		state.ownerSlug = resp.Owner.Username
+	} else if resp.CurrentOwner != nil {
+		state.ownerKind = resp.CurrentOwner.Kind
+		state.ownerSlug = resp.CurrentOwner.Slug
+	}
+	if state.skillSlug == "" || state.ownerSlug == "" {
+		return markerState{kind: markerStateError}, fmt.Errorf("skill detail response missing moved destination")
 	}
 	// We're here because push returned 403/404; if GET succeeds, the user can
 	// READ but not WRITE. Always classify as moved (i.e. stale marker).

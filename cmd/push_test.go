@@ -437,7 +437,7 @@ func TestPushDoesNotCreatePhantomAfterMovedKept(t *testing.T) {
 			fmt.Fprint(w, `{"skills":[]}`)
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/skills/"+skillID:
 			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprint(w, `{"slug":"stale-mover","org":{"slug":"chrismdp-ltd"}}`)
+			fmt.Fprintf(w, `{"id":%q,"owner_id":null,"org_id":"55555555-5555-5555-5555-555555555555","name":"stale-mover","slug":"stale-mover","visibility":"private","version":"1.0.0","content_hash":%q,"archive_size":123,"files":[{"path":"SKILL.md"}],"dependencies":[],"owner":null,"org":{"slug":"chrismdp-ltd","name":"Chris MDP Ltd"},"deleted_at":null,"forked_from":null,"head_commit_id":null}`, skillID, hash)
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/skills":
 			createPosts++
 			w.WriteHeader(http.StatusCreated)
@@ -453,11 +453,20 @@ func TestPushDoesNotCreatePhantomAfterMovedKept(t *testing.T) {
 
 	cmd := &cobra.Command{Use: "push"}
 
-	_ = captureStdout(t, func() {
+	out := captureStdout(t, func() {
 		if err := pushCmd.RunE(cmd, nil); err != nil {
 			t.Fatalf("push pass 1: %v", err)
 		}
 	})
+	if !strings.Contains(out, "1 moved (re-link needed)") {
+		t.Fatalf("pass 1: expected moved summary, got output:\n%s", out)
+	}
+	if !strings.Contains(out, "stale-mover: moved to chrismdp-ltd/stale-mover") {
+		t.Fatalf("pass 1: expected moved destination, got output:\n%s", out)
+	}
+	if !strings.Contains(out, "airskills rm --keep-remote stale-mover && airskills add chrismdp-ltd/stale-mover") {
+		t.Fatalf("pass 1: expected recovery command, got output:\n%s", out)
+	}
 	if createPosts != 0 {
 		t.Fatalf("pass 1: expected 0 POST /api/v1/skills, got %d", createPosts)
 	}

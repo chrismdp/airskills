@@ -282,6 +282,8 @@ caller asked about something else.`,
 		var orphanRemoved, orphanKept, movedKept, transient []skippedAction
 		var earlyWarnings []string
 		for _, c := range skippedCandidates {
+			// Orphan/moved detection lives in push only, deliberately — see
+			// platform/doc/changes/cli-moved-transfer-marker-validation.md.
 			action := classifySkippedMarker(client, c.name, c.marker, c.localDir)
 			switch action.kind {
 			case actionOrphanRemove:
