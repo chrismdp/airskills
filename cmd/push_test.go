@@ -564,7 +564,7 @@ func TestPushMovedWarningForOrgSkillInEffectiveSetSaysNoActionNeeded(t *testing.
 	if !strings.Contains(out, "stale-mover: moved to chrismdp-ltd/stale-mover") {
 		t.Fatalf("expected moved destination, got output:\n%s", out)
 	}
-	if !strings.Contains(out, "next sync will re-link automatically") {
+	if !strings.Contains(out, "Next sync will re-link automatically") {
 		t.Fatalf("expected no-action-needed guidance, got output:\n%s", out)
 	}
 	if strings.Contains(out, "airskills rm --keep-remote stale-mover && airskills add chrismdp-ltd/stale-mover") {
