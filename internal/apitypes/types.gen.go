@@ -1185,7 +1185,7 @@ type SkillFile struct {
 type SkillsListResponse struct {
 	Skills []Skill `json:"skills"`
 
-	// Skillset Present when scope=personal and a skillset filter resolved.
+	// Skillset Present when the caller uses effective skillset mode (no scope parameter).
 	Skillset *struct {
 		Name string `json:"name"`
 		Slug string `json:"slug"`
@@ -1457,7 +1457,7 @@ type GetApiV1SkillsParams struct {
 	// Scope `personal` filters to caller-owned skills; `org` to skills in any of the caller's orgs. Default: all accessible.
 	Scope *GetApiV1SkillsParamsScope `form:"scope,omitempty" json:"scope,omitempty"`
 
-	// Skillset Filter to skills within a specific skillset (slug). Only applies when scope is unset or 'personal'.
+	// Skillset Filter to the effective skill set for this personal skillset slug. Must not be combined with scope.
 	Skillset *string `form:"skillset,omitempty" json:"skillset,omitempty"`
 
 	// Deleted `true` returns the caller's recently-deleted skills (personal namespace only).

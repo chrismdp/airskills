@@ -490,17 +490,17 @@ func (c *apiClient) listSkills(scope string) ([]apiSkill, error) {
 	return resp.Skills, nil
 }
 
-// listPersonalSkillsInSkillset fetches the caller's personal skills scoped
-// to a specific skillset (empty slug = server resolves to the caller's
-// is_default=true skillset). Returns the resolved skillset slug alongside
-// the skills so callers can log which skillset they synced against.
+// listPersonalSkillsInSkillset fetches the caller's effective sync skills for
+// a specific personal skillset (empty slug = server resolves to the caller's
+// is_default=true skillset). Returns the resolved skillset slug alongside the
+// skills so callers can log which skillset they synced against.
 //
 // A SkillsetNotFoundError is returned when the server reports an unknown
 // slug; callers should render its message and exit non-zero.
 func (c *apiClient) listPersonalSkillsInSkillset(skillset string) ([]apiSkill, string, error) {
-	path := "/api/v1/skills?scope=personal"
+	path := "/api/v1/skills"
 	if skillset != "" {
-		path += "&skillset=" + url.QueryEscape(skillset)
+		path += "?skillset=" + url.QueryEscape(skillset)
 	}
 
 	req, err := http.NewRequest("GET", c.baseURL+path, nil)
@@ -863,4 +863,3 @@ func (c *apiClient) updateSuggestion(id, status, responseMessage string) (*apity
 	}
 	return &s, nil
 }
-

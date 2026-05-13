@@ -301,6 +301,32 @@ func TestRefreshAccessTokenSendsCLIVersion(t *testing.T) {
 	}
 }
 
+func TestListPersonalSkillsInSkillsetDoesNotSendPersonalScope(t *testing.T) {
+	var gotPath, gotQuery string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotQuery = r.URL.RawQuery
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"skillset":{"slug":"client-work","name":"Client work"},"skills":[]}`))
+	}))
+	defer srv.Close()
+
+	c := &apiClient{baseURL: srv.URL, token: "t", http: srv.Client()}
+	_, resolved, err := c.listPersonalSkillsInSkillset("client-work")
+	if err != nil {
+		t.Fatalf("listPersonalSkillsInSkillset: %v", err)
+	}
+	if resolved != "client-work" {
+		t.Fatalf("resolved skillset: want %q, got %q", "client-work", resolved)
+	}
+	if gotPath != "/api/v1/skills" {
+		t.Fatalf("path: want /api/v1/skills, got %q", gotPath)
+	}
+	if gotQuery != "skillset=client-work" {
+		t.Fatalf("query: want skillset=client-work, got %q", gotQuery)
+	}
+}
+
 // TestDoRequestPassThroughOnNon426 verifies the wrapper does not
 // interfere with non-426 responses — same status code, same body.
 func TestDoRequestPassThroughOnNon426(t *testing.T) {

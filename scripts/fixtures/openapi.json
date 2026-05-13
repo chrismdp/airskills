@@ -347,7 +347,7 @@
               "slug",
               "name"
             ],
-            "description": "Present when scope=personal and a skillset filter resolved."
+            "description": "Present when the caller uses effective skillset mode (no scope parameter)."
           }
         },
         "required": [
@@ -1955,7 +1955,7 @@
       },
       "get": {
         "summary": "List the caller's skills",
-        "description": "Returns skills the caller can see (owned, org-member, shared). Skillset filter applies in personal scope.",
+        "description": "Returns skills the caller can see. Use scope for ownership queries, or skillset/no scope for the caller's effective sync surface.",
         "tags": [
           "skills"
         ],
@@ -1982,10 +1982,10 @@
           {
             "schema": {
               "type": "string",
-              "description": "Filter to skills within a specific skillset (slug). Only applies when scope is unset or 'personal'."
+              "description": "Filter to the effective skill set for this personal skillset slug. Must not be combined with scope."
             },
             "required": false,
-            "description": "Filter to skills within a specific skillset (slug). Only applies when scope is unset or 'personal'.",
+            "description": "Filter to the effective skill set for this personal skillset slug. Must not be combined with scope.",
             "name": "skillset",
             "in": "query"
           },
@@ -2016,7 +2016,7 @@
             }
           },
           "400": {
-            "description": "Database error"
+            "description": "Invalid query combination or database error."
           },
           "401": {
             "description": "Missing or invalid token"
