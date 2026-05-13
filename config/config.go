@@ -2,15 +2,18 @@ package config
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 const (
 	DefaultAPIURL = "https://airskills.ai"
 	configDir     = "airskills"
-	configFile         = "config.json"
-	tokenFile          = "token.json"
+	configFile    = "config.json"
+	tokenFile     = "token.json"
+	tokenLockFile = "token.lock"
 )
 
 type Config struct {
@@ -106,7 +109,68 @@ func SaveToken(token *TokenData) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, tokenFile), data, 0600)
+	path := filepath.Join(dir, tokenFile)
+	tmp, err := os.CreateTemp(dir, ".token-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(tmpPath)
+		return err
+	}
+	if err := tmp.Chmod(0600); err != nil {
+		tmp.Close()
+		os.Remove(tmpPath)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	return nil
+}
+
+func WithTokenLock(fn func() error) error {
+	dir, err := Dir()
+	if err != nil {
+		return err
+	}
+	lockPath := filepath.Join(dir, tokenLockFile)
+	release, err := acquireTokenLock(lockPath)
+	if err != nil {
+		return err
+	}
+	defer release()
+	return fn()
+}
+
+func acquireTokenLock(path string) (func(), error) {
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+		if err == nil {
+			_, _ = fmt.Fprintf(f, "%d\n", os.Getpid())
+			_ = f.Close()
+			return func() { _ = os.Remove(path) }, nil
+		}
+		if !os.IsExist(err) {
+			return nil, err
+		}
+		if info, statErr := os.Stat(path); statErr == nil && time.Since(info.ModTime()) > 30*time.Second {
+			_ = os.Remove(path)
+			continue
+		}
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf("timed out waiting for token lock")
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
 }
 
 func ClearToken() error {

@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -254,6 +256,83 @@ func TestNewAPIClientAutoRefreshSavesToken(t *testing.T) {
 	}
 	if saved.RefreshToken != newToken.RefreshToken {
 		t.Errorf("saved RefreshToken: want %q, got %q", newToken.RefreshToken, saved.RefreshToken)
+	}
+}
+
+func TestNewAPIClientAutoSerializesConcurrentRefresh(t *testing.T) {
+	newToken := config.TokenData{
+		AccessToken:  "refreshed-access-token",
+		RefreshToken: "refreshed-refresh-token",
+		ExpiresAt:    time.Now().Add(30 * 24 * time.Hour).Unix(),
+	}
+
+	var refreshCalls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/auth/refresh" {
+			call := atomic.AddInt32(&refreshCalls, 1)
+			time.Sleep(50 * time.Millisecond)
+			if call > 1 {
+				http.Error(w, `{"error":"refresh token already used"}`, http.StatusUnauthorized)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(newToken)
+			return
+		}
+		http.Error(w, `{"error":"not found"}`, 404)
+	}))
+	defer srv.Close()
+
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	t.Setenv("USERPROFILE", tmpHome)
+
+	cfgDir := filepath.Join(tmpHome, ".config", "airskills")
+	if err := os.MkdirAll(cfgDir, 0700); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	cfgData, _ := json.Marshal(config.Config{APIURL: srv.URL})
+	if err := os.WriteFile(filepath.Join(cfgDir, "config.json"), cfgData, 0600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	expiredToken := config.TokenData{
+		AccessToken:  "old-access-token",
+		RefreshToken: "old-refresh-token",
+		ExpiresAt:    time.Now().Add(-1 * time.Hour).Unix(),
+	}
+	tokenData, _ := json.Marshal(expiredToken)
+	if err := os.WriteFile(filepath.Join(cfgDir, "token.json"), tokenData, 0600); err != nil {
+		t.Fatalf("write token: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	for range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			client, err := newAPIClientAuto()
+			if err != nil {
+				errs <- err
+				return
+			}
+			if client.token != newToken.AccessToken {
+				errs <- fmt.Errorf("client token: want %q, got %q", newToken.AccessToken, client.token)
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := atomic.LoadInt32(&refreshCalls); got != 1 {
+		t.Fatalf("refresh calls: want 1, got %d", got)
 	}
 }
 

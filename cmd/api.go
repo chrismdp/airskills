@@ -284,29 +284,38 @@ func newAPIClientAuto() (*apiClient, error) {
 		return nil, err
 	}
 
-	token, err := config.LoadToken()
-	if err != nil {
-		return nil, err
-	}
-	if token == nil {
-		return nil, fmt.Errorf("not logged in — run 'airskills login' first")
-	}
-
-	// Auto-refresh expired tokens
-	if time.Now().Unix() > token.ExpiresAt {
-		if token.RefreshToken == "" {
-			return nil, fmt.Errorf("session expired — run 'airskills login'")
-		}
-		refreshed, err := refreshAccessToken(cfg.APIURL, token.RefreshToken)
+	var token *config.TokenData
+	if err := config.WithTokenLock(func() error {
+		loaded, err := config.LoadToken()
 		if err != nil {
-			return nil, fmt.Errorf("session expired and refresh failed (%s) — run 'airskills login'", err)
+			return err
 		}
-		token = refreshed
-		if err := config.SaveToken(token); err != nil {
-			// Non-fatal — continue with in-memory token for this request.
-			// Next run will re-refresh (slightly wasteful but correct).
-			_ = err
+		if loaded == nil {
+			return fmt.Errorf("not logged in — run 'airskills login' first")
 		}
+
+		// Auto-refresh expired tokens while holding the token lock so concurrent
+		// CLI processes re-read the rotated token instead of burning the same
+		// refresh token twice.
+		if time.Now().Unix() > loaded.ExpiresAt {
+			if loaded.RefreshToken == "" {
+				return fmt.Errorf("session expired — run 'airskills login'")
+			}
+			refreshed, err := refreshAccessToken(cfg.APIURL, loaded.RefreshToken)
+			if err != nil {
+				return fmt.Errorf("session expired and refresh failed (%s) — run 'airskills login'", err)
+			}
+			loaded = refreshed
+			if err := config.SaveToken(loaded); err != nil {
+				// Non-fatal — continue with in-memory token for this request.
+				// Next run will re-refresh (slightly wasteful but correct).
+				_ = err
+			}
+		}
+		token = loaded
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 
 	return newAPIClient(cfg, token), nil
