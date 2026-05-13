@@ -803,15 +803,20 @@ in opposite directions.`,
 			}
 		}
 
-		// Show conflict resolution instructions
-		if len(conflictMessages) > 0 {
+		// Show conflict resolution instructions. During `sync`, pull emits the
+		// canonical block after it has full sync-state context.
+		if len(conflictMessages) > 0 && cmd.Name() != "sync" {
 			var entries []conflictEntry
 			for _, c := range conflictMessages {
+				var source *skillSource
+				if entry := syncState.Skills[c.name]; entry != nil {
+					source = entry.Source
+				}
 				entries = append(entries, conflictEntry{
 					name:      c.name,
 					localDir:  filepath.Dir(c.localPath),
 					remoteDir: filepath.Dir(c.remotePath),
-					source:    nil, // push doesn't have syncState in scope here; sourced caveat skipped
+					source:    source,
 				})
 			}
 			fmt.Print(conflictResolutionMessage(entries, !isTTY))

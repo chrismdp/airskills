@@ -117,9 +117,9 @@ func TestConflictResolutionMessageSourcedCaveat(t *testing.T) {
 	}
 }
 
-// TestConflictResolutionMessageTTYVsHeadless verifies both modes produce the
-// same text content (colour aside).
-func TestConflictResolutionMessageTTYVsHeadless(t *testing.T) {
+// TestConflictResolutionMessageBothBranchesShowCommands verifies both reader
+// variants retain the three resolution commands.
+func TestConflictResolutionMessageBothBranchesShowCommands(t *testing.T) {
 	entries := []conflictEntry{
 		{name: "foo", localDir: "/local/foo", remoteDir: "/remote/foo"},
 	}
@@ -134,6 +134,59 @@ func TestConflictResolutionMessageTTYVsHeadless(t *testing.T) {
 		if !strings.Contains(headless, want) {
 			t.Errorf("headless message missing %q", want)
 		}
+	}
+}
+
+func TestConflictResolutionMessageTTYAddressesHuman(t *testing.T) {
+	msg := conflictResolutionMessage([]conflictEntry{
+		{name: "foo", localDir: "/local/foo", remoteDir: "/remote/foo"},
+	}, false)
+
+	if !strings.Contains(msg, "Ask your agent") {
+		t.Fatalf("TTY message should ask the human to involve their agent, got:\n%s", msg)
+	}
+	if strings.Contains(msg, "You are an agent") {
+		t.Fatalf("TTY message should not address the reader as an agent, got:\n%s", msg)
+	}
+}
+
+func TestConflictResolutionMessageHeadlessAddressesAgent(t *testing.T) {
+	msg := conflictResolutionMessage([]conflictEntry{
+		{name: "foo", localDir: "/local/foo", remoteDir: "/remote/foo"},
+	}, true)
+
+	if !strings.Contains(msg, "You are an agent") {
+		t.Fatalf("headless message should address the agent directly, got:\n%s", msg)
+	}
+	if strings.Contains(msg, "Ask your agent") {
+		t.Fatalf("headless message should not ask the agent to ask itself, got:\n%s", msg)
+	}
+}
+
+func TestConflictResolutionMessageBranchesDifferOnlyAtOpening(t *testing.T) {
+	entries := []conflictEntry{
+		{name: "foo", localDir: "/local/foo", remoteDir: "/remote/foo"},
+	}
+	tty := conflictResolutionMessage(entries, false)
+	headless := conflictResolutionMessage(entries, true)
+
+	if tty == headless {
+		t.Fatal("TTY and headless messages should differ at their addressed reader text")
+	}
+
+	normalize := func(s string) string {
+		s = strings.ReplaceAll(s,
+			"Ask your agent to read /local/foo and /remote/foo and decide with you\nhow to resolve. The agent should then run one of:",
+			"<opening>")
+		s = strings.ReplaceAll(s,
+			"You are an agent. Read /local/foo and /remote/foo and decide with the\nuser how to resolve. Then run one of:",
+			"<opening>")
+		s = strings.ReplaceAll(s, "the changes you want to keep", "the changes to keep")
+		return s
+	}
+
+	if normalize(tty) != normalize(headless) {
+		t.Fatalf("conflict message branches drifted beyond opening/merge clause.\nTTY:\n%s\nHeadless:\n%s", tty, headless)
 	}
 }
 

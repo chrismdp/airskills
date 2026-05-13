@@ -57,11 +57,10 @@ type conflictEntry struct {
 	kind string
 }
 
-// conflictResolutionMessage renders the canonical three-outcome conflict
+// conflictResolutionMessage renders the canonical conflict-resolution
 // instructions used by both push and pull conflict paths. entries is the list
-// of skills currently in conflict; isAgent controls colour (off for
-// headless/agent surfaces, on for TTY). Both modes produce the same text
-// content — TTY mode adds ANSI colour where the existing helpers did.
+// of skills currently in conflict; isAgent switches the opening guidance
+// between human-at-terminal and agent-as-reader wording.
 func conflictResolutionMessage(entries []conflictEntry, isAgent bool) string {
 	var b strings.Builder
 	for _, e := range entries {
@@ -72,18 +71,25 @@ func conflictResolutionMessage(entries []conflictEntry, isAgent bool) string {
 		}
 		fmt.Fprintf(&b, "  Local:  %s\n", e.localDir)
 		fmt.Fprintf(&b, "  Remote: %s\n", e.remoteDir)
-		b.WriteString("\nPick ONE outcome, then run the matching command:\n\n")
-		fmt.Fprintf(&b, "  Keep your local version:            airskills push --force %s\n", e.name)
-		fmt.Fprintf(&b, "  Take remote, discard local:         airskills pull --force %s\n", e.name)
-		b.WriteString("  Custom merge (your edits + theirs): edit local, then airskills sync\n")
-		b.WriteString("                                      (auto-detect handles it if your\n")
-		b.WriteString("                                       local matches remote bytes; if not,\n")
-		fmt.Fprintf(&b, "                                       use airskills push --force %s)\n", e.name)
+		if isAgent {
+			fmt.Fprintf(&b, "\nYou are an agent. Read %s and %s and decide with the\nuser how to resolve. Then run one of:\n\n", e.localDir, e.remoteDir)
+			fmt.Fprintf(&b, "  Merge — combine the changes to keep into %s, then:\n", e.localDir)
+		} else {
+			fmt.Fprintf(&b, "\nAsk your agent to read %s and %s and decide with you\nhow to resolve. The agent should then run one of:\n\n", e.localDir, e.remoteDir)
+			fmt.Fprintf(&b, "  Merge — combine the changes you want to keep into %s, then:\n", e.localDir)
+		}
+		b.WriteString("    airskills sync\n")
+		b.WriteString("  (Sync will silently auto-resolve if your merged copy ends up with the\n")
+		b.WriteString("   same content hash as the remote.)\n\n")
+		b.WriteString("  Keep local, discard remote:\n")
+		fmt.Fprintf(&b, "    airskills push --force %s\n\n", e.name)
+		b.WriteString("  Take remote, discard local:\n")
+		fmt.Fprintf(&b, "    airskills pull --force %s\n", e.name)
 		b.WriteString("\nRecovery:\n")
 		b.WriteString("  After push --force: previous remote kept in server-side version history\n")
 		fmt.Fprintf(&b, "                      → airskills pull --version <prev-commit> %s\n", e.name)
 		fmt.Fprintf(&b, "                      → list commits with: airskills log %s\n", e.name)
-		b.WriteString("  After pull --force: previous local saved to ~/.airskills/undo/<ts>/<skill>/<agent>/\n")
+		b.WriteString("  After pull --force: previous local saved to ~/.airskills/undo/<ts>/<name>/<agent>/\n")
 		b.WriteString("                      → cp -r that back if needed (one subdir per agent)\n")
 		b.WriteString("\nNEVER edit airskills metadata (~/.config/airskills/sync.json) directly — the\n")
 		b.WriteString("CLI owns state. You can edit content files freely.\n")

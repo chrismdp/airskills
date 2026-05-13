@@ -4,10 +4,19 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"encoding/json"
+	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
+
+	"github.com/chrismdp/airskills/config"
+	"github.com/spf13/cobra"
 )
 
 func TestCreateTarGz(t *testing.T) {
@@ -126,6 +135,133 @@ func TestExtractTarGzToMap(t *testing.T) {
 	if string(files["data.json"]) != `{"key":"value"}` {
 		t.Errorf("data.json = %q", string(files["data.json"]))
 	}
+}
+
+func TestPushSuppressesConflictBlockInsideSync(t *testing.T) {
+	output := runPushConflictScenario(t, "sync", nil)
+
+	if strings.Contains(output, "Conflict: borrowed") {
+		t.Fatalf("push inside sync should leave conflict block emission to pull, got:\n%s", output)
+	}
+}
+
+func TestPushStandaloneConflictIncludesSourcedCaveat(t *testing.T) {
+	output := runPushConflictScenario(t, "push", &skillSource{Owner: "alice", Slug: "borrowed-original"})
+
+	if !strings.Contains(output, "Conflict: borrowed") {
+		t.Fatalf("standalone push should show the conflict block, got:\n%s", output)
+	}
+	if !strings.Contains(output, "sourced from alice/borrowed-original") {
+		t.Fatalf("standalone push should include sourced-skill caveat, got:\n%s", output)
+	}
+}
+
+func runPushConflictScenario(t *testing.T, cmdName string, source *skillSource) string {
+	t.Helper()
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	oldIsTTY := isTTY
+	isTTY = false
+	t.Cleanup(func() { isTTY = oldIsTTY })
+
+	skillID := "11111111-1111-1111-1111-111111111111"
+	skillDir := filepath.Join(home, ".claude", "skills", "borrowed")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: borrowed\ndescription: test\n---\n\nlocal body\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	state := &SyncState{Version: 1, Skills: map[string]*SyncEntry{
+		"borrowed": {
+			SkillID:     skillID,
+			Version:     "1.0.0",
+			ContentHash: "old-marker-hash",
+			Tool:        "claude-code",
+			Source:      source,
+		},
+	}}
+	if err := saveSyncState(state); err != nil {
+		t.Fatalf("save sync state: %v", err)
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/skills":
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{"skills":[{"id":%q,"name":"borrowed","slug":"borrowed","version":"1.0.0","content_hash":"server-hash","tool_formats":["claude-code"],"visibility":"private","dependency_count":0}]}`, skillID)
+		case r.Method == http.MethodPut && r.URL.Path == "/api/v1/skills/"+skillID+"/archive":
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusConflict)
+			fmt.Fprint(w, `{"remote_content_hash":"server-hash"}`)
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/skills/"+skillID+"/raw":
+			w.Header().Set("Content-Type", "text/plain")
+			fmt.Fprint(w, "---\nname: borrowed\ndescription: test\n---\n\nremote body\n")
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
+		}
+	}))
+	defer srv.Close()
+
+	writeTestConfigAndToken(t, home, srv.URL)
+
+	cmd := &cobra.Command{Use: cmdName}
+	return captureStdout(t, func() {
+		if err := pushCmd.RunE(cmd, nil); err != nil {
+			t.Fatalf("push RunE: %v", err)
+		}
+	})
+}
+
+func writeTestConfigAndToken(t *testing.T, home, apiURL string) {
+	t.Helper()
+
+	cfgDir := filepath.Join(home, ".config", "airskills")
+	if err := os.MkdirAll(cfgDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cfgData, err := json.Marshal(config.Config{APIURL: apiURL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cfgDir, "config.json"), cfgData, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tokenData, err := json.Marshal(config.TokenData{
+		AccessToken:  "test-token",
+		RefreshToken: "refresh-token",
+		ExpiresAt:    time.Now().Add(time.Hour).Unix(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cfgDir, "token.json"), tokenData, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+
+	old := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = w
+	fn()
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = old
+	out, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(out)
 }
 
 func TestSyncState(t *testing.T) {
