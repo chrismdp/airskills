@@ -389,6 +389,104 @@ func TestRenameLocalSkillRewritesNameField(t *testing.T) {
 	}
 }
 
+// TestPushDoesNotCreatePhantomAfterMovedKept covers the regression where
+// pushing a local dir whose marker had been classified as "moved to a
+// different owner" would, on the next push, silently create a NEW
+// personal skill from the dir — because the marker was fully deleted,
+// leaving the orphan dir indistinguishable from an untracked one.
+//
+// After the fix, moved-kept entries persist as a tombstone marker
+// (Deleted: true, MovedTo set) so subsequent pushes leave the dir alone
+// instead of auto-publishing a duplicate.
+func TestPushDoesNotCreatePhantomAfterMovedKept(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	oldIsTTY := isTTY
+	isTTY = false
+	t.Cleanup(func() { isTTY = oldIsTTY })
+
+	skillID := "22222222-2222-2222-2222-222222222222"
+	skillDir := filepath.Join(home, ".claude", "skills", "stale-mover")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	skillBody := []byte("---\nname: stale-mover\ndescription: test\n---\n\nbody\n")
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), skillBody, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	hash := computeMerkleHash(readSkillFiles(skillDir))
+
+	state := &SyncState{Version: 1, Skills: map[string]*SyncEntry{
+		"stale-mover": {
+			SkillID:     skillID,
+			Version:     "1.0.0",
+			ContentHash: hash,
+			Tool:        "claude-code",
+		},
+	}}
+	if err := saveSyncState(state); err != nil {
+		t.Fatalf("save sync state: %v", err)
+	}
+
+	var createPosts int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/skills":
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `{"skills":[]}`)
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/skills/"+skillID:
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `{"slug":"stale-mover","org":{"slug":"chrismdp-ltd"}}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/skills":
+			createPosts++
+			w.WriteHeader(http.StatusCreated)
+			fmt.Fprintf(w, `{"id":%q,"name":"stale-mover","slug":"stale-mover","version":"1.0.0"}`, "33333333-3333-3333-3333-333333333333")
+		default:
+			t.Logf("unexpected request: %s %s", r.Method, r.URL.String())
+			http.Error(w, "not found", 404)
+		}
+	}))
+	defer srv.Close()
+
+	writeTestConfigAndToken(t, home, srv.URL)
+
+	cmd := &cobra.Command{Use: "push"}
+
+	_ = captureStdout(t, func() {
+		if err := pushCmd.RunE(cmd, nil); err != nil {
+			t.Fatalf("push pass 1: %v", err)
+		}
+	})
+	if createPosts != 0 {
+		t.Fatalf("pass 1: expected 0 POST /api/v1/skills, got %d", createPosts)
+	}
+
+	_ = captureStdout(t, func() {
+		if err := pushCmd.RunE(cmd, nil); err != nil {
+			t.Fatalf("push pass 2: %v", err)
+		}
+	})
+	if createPosts != 0 {
+		t.Fatalf("pass 2: expected 0 POST /api/v1/skills, got %d (phantom personal skill was created)", createPosts)
+	}
+
+	final := loadSyncState()
+	entry := final.Skills["stale-mover"]
+	if entry == nil {
+		t.Fatalf("expected stale-mover marker to be retained as a tombstone")
+	}
+	if !entry.Deleted {
+		t.Errorf("expected Deleted=true on tombstone marker, got %+v", entry)
+	}
+	if entry.MovedTo == "" {
+		t.Errorf("expected MovedTo to record the new owner/slug, got empty")
+	}
+	if entry.SkillID != "" {
+		t.Errorf("expected SkillID cleared on tombstone marker, got %q", entry.SkillID)
+	}
+}
+
 // TestPropagatePartialRenames_FullOrphan covers the case where the marker
 // has no surviving dirs anywhere. The function should leave it alone (the
 // existing orphan-hash detector in push handles those).

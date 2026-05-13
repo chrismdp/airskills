@@ -180,6 +180,12 @@ in opposite directions.`,
 		}
 		var skippedCandidates []skippedCandidate
 		for _, s := range skills {
+			if s.marker != nil && s.marker.Deleted {
+				// Tombstoned by a prior push (orphan or moved). The dir is
+				// kept locally on purpose; do not re-classify it and do not
+				// auto-publish it as a new personal skill.
+				continue
+			}
 			if s.marker != nil && s.marker.SkillID != "" && !ownedSkillIDs[s.marker.SkillID] {
 				if s.marker.Source != nil {
 					s.marker.SkillID = ""
@@ -210,10 +216,16 @@ in opposite directions.`,
 				delete(syncState.Skills, c.name)
 				orphanRemoved = append(orphanRemoved, action)
 			case actionOrphanKeep:
-				delete(syncState.Skills, c.name)
+				// Tombstone the marker rather than dropping it: a bare dir
+				// with no marker would otherwise be auto-published as a
+				// new personal skill on the next push.
+				syncState.Skills[c.name] = &SyncEntry{Deleted: true}
 				orphanKept = append(orphanKept, action)
 			case actionMovedKeep:
-				delete(syncState.Skills, c.name)
+				syncState.Skills[c.name] = &SyncEntry{
+					Deleted: true,
+					MovedTo: action.newOwnerSlug + "/" + action.newSkillSlug,
+				}
 				movedKept = append(movedKept, action)
 			case actionTransient:
 				// Leave marker + dir intact; retry next sync.
@@ -757,16 +769,14 @@ in opposite directions.`,
 			fmt.Printf("       Undo: airskills restore %s\n", a.name)
 		}
 		for _, a := range orphanKept {
-			fmt.Printf("  %s %s: deleted server-side; local edits kept, marker dropped.\n", yellow("!"), a.name)
-			fmt.Println("       Next sync WILL create a NEW skill under your account from this dir.")
-			fmt.Printf("       Prevent now: airskills rm --keep-remote %s\n", a.name)
-			fmt.Printf("       Get server version back: airskills restore %s\n", a.name)
+			fmt.Printf("  %s %s: deleted server-side; local edits kept and marked untracked.\n", yellow("!"), a.name)
+			fmt.Printf("       Restore server version: airskills restore %s\n", a.name)
+			fmt.Printf("       Discard local copy:     airskills rm --keep-remote %s\n", a.name)
 		}
 		for _, a := range movedKept {
-			fmt.Printf("  %s %s: moved to %s/%s; local kept, marker dropped.\n", yellow("!"), a.name, a.newOwnerSlug, a.newSkillSlug)
-			fmt.Println("       Next sync WILL create a NEW skill under your account from this dir.")
-			fmt.Printf("       Prevent + follow updates: airskills rm --keep-remote %s && airskills add %s/%s\n", a.name, a.newOwnerSlug, a.newSkillSlug)
-			fmt.Printf("       Prevent + discard:        airskills rm --keep-remote %s\n", a.name)
+			fmt.Printf("  %s %s: moved to %s/%s; local kept and marked untracked.\n", yellow("!"), a.name, a.newOwnerSlug, a.newSkillSlug)
+			fmt.Printf("       Follow updates from the new owner: airskills rm --keep-remote %s && airskills add %s/%s\n", a.name, a.newOwnerSlug, a.newSkillSlug)
+			fmt.Printf("       Discard local copy:                airskills rm --keep-remote %s\n", a.name)
 		}
 		for _, a := range transient {
 			fmt.Printf("  %s %s: couldn't verify server state — will retry next sync.\n", dim("?"), a.name)
