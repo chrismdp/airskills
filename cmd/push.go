@@ -155,13 +155,28 @@ in opposite directions.`,
 			return nil
 		}
 
-		// Fetch owned skills only (scope=personal filters server-side)
-		remoteSkills, _ := client.listSkills("personal")
+		// Fetch the caller's EFFECTIVE skillset — owned skills PLUS any
+		// org skills they can reach via membership (default + assigned
+		// skillsets). scope=personal would exclude the org slice and turn
+		// every org-membership marker into a spurious "moved (re-link
+		// needed)" warning, because its skill_id would look unowned. See
+		// cli-push-owned-listing-excludes-org-membership-skills.md (and
+		// the matching pull-side fix in skills-list-scope-personal-…).
+		//
+		// Empty skillset slug => server resolves to the caller's default.
+		// 404 (no default skillset) is treated as an empty listing so push
+		// still works for brand-new accounts before any skillset exists.
+		remoteSkills, _, listErr := client.listPersonalSkillsInSkillset("")
+		if listErr != nil {
+			if _, isNotFound := listErr.(*SkillsetNotFoundError); !isNotFound {
+				return fmt.Errorf("fetching skills: %w", listErr)
+			}
+		}
 		remoteByName := map[string]*apiSkill{}
-		ownedSkillIDs := map[string]bool{}
+		effectiveSkillIDs := map[string]bool{}
 		for i := range remoteSkills {
 			remoteByName[remoteSkills[i].Name] = &remoteSkills[i]
-			ownedSkillIDs[remoteSkills[i].Id.String()] = true
+			effectiveSkillIDs[remoteSkills[i].Id.String()] = true
 		}
 
 		// Filter out skills whose sync state SkillID isn't in the caller's
@@ -186,7 +201,7 @@ in opposite directions.`,
 				// auto-publish it as a new personal skill.
 				continue
 			}
-			if s.marker != nil && s.marker.SkillID != "" && !ownedSkillIDs[s.marker.SkillID] {
+			if s.marker != nil && s.marker.SkillID != "" && !effectiveSkillIDs[s.marker.SkillID] {
 				if s.marker.Source != nil {
 					s.marker.SkillID = ""
 				} else {

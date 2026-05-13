@@ -487,6 +487,113 @@ func TestPushDoesNotCreatePhantomAfterMovedKept(t *testing.T) {
 	}
 }
 
+// TestPushNoMovedWarningForOrgMembershipSkill verifies the headline bug:
+// for a skill the caller is a member of via an org skillset (but does NOT
+// personally own), every sync was emitting a spurious "moved (re-link
+// needed)" warning. The classifier used scope=personal which excludes
+// org-membership skills, so a marker for one looked like it pointed at a
+// transferred-away skill.
+//
+// After the fix push lists the caller's effective skillset, not their
+// personal scope, so the org skill is in the "skills I can reach" set and
+// the marker is treated as plain synced. No misclassification, no warning.
+func TestPushNoMovedWarningForOrgMembershipSkill(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	oldIsTTY := isTTY
+	isTTY = false
+	t.Cleanup(func() { isTTY = oldIsTTY })
+
+	skillID := "44444444-4444-4444-4444-444444444444"
+	skillDir := filepath.Join(home, ".claude", "skills", "org-member-skill")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	skillBody := []byte("---\nname: org-member-skill\ndescription: test\n---\n\nbody\n")
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), skillBody, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	hash := computeMerkleHash(readSkillFiles(skillDir))
+
+	state := &SyncState{Version: 1, Skills: map[string]*SyncEntry{
+		"org-member-skill": {
+			SkillID:     skillID,
+			Version:     "1.0.0",
+			ContentHash: hash,
+			Tool:        "claude-code",
+			// owner_kind/owner_slug intentionally absent — verification (5):
+			// backfill-tolerant. Existing markers without these fields should
+			// still classify correctly.
+		},
+	}}
+	if err := saveSyncState(state); err != nil {
+		t.Fatalf("save sync state: %v", err)
+	}
+
+	var personalScopeHits, effectiveSkillsetHits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/skills":
+			scope := r.URL.Query().Get("scope")
+			skillset := r.URL.Query().Has("skillset")
+			isEffective := scope == "" && (skillset || r.URL.RawQuery == "")
+			w.Header().Set("Content-Type", "application/json")
+			if scope == "personal" {
+				personalScopeHits++
+				// Caller does NOT personally own this skill — it's org-owned.
+				fmt.Fprint(w, `{"skills":[]}`)
+			} else if isEffective {
+				effectiveSkillsetHits++
+				// The caller's effective skillset DOES include the org skill.
+				fmt.Fprintf(w, `{"skillset":{"slug":"default","name":"Default"},"skills":[{"id":%q,"name":"org-member-skill","slug":"org-member-skill","version":"1.0.0","content_hash":%q,"tool_formats":["claude-code"],"owner_id":null,"org_id":"55555555-5555-5555-5555-555555555555","visibility":"private","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","deleted_at":null,"deletion_reason":null,"description":null,"head_commit_id":null,"forked_from":null,"upstream_content_hash":null,"dependency_count":0,"archive_size":null,"pinned_archive_path":null}]}`, skillID, hash)
+			} else {
+				fmt.Fprint(w, `{"skills":[]}`)
+			}
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/skills":
+			t.Errorf("unexpected POST /api/v1/skills — push should not create anything")
+			w.WriteHeader(http.StatusCreated)
+			fmt.Fprint(w, `{"id":"00000000-0000-0000-0000-000000000000"}`)
+		default:
+			// Permit any other introspection (skill detail GETs) with a
+			// generic shape so the classifier (which we should NOT invoke)
+			// doesn't crash if reached.
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `{}`)
+		}
+	}))
+	defer srv.Close()
+
+	writeTestConfigAndToken(t, home, srv.URL)
+
+	cmd := &cobra.Command{Use: "push"}
+	out := captureStdout(t, func() {
+		if err := pushCmd.RunE(cmd, nil); err != nil {
+			t.Fatalf("push: %v", err)
+		}
+	})
+
+	if effectiveSkillsetHits == 0 {
+		t.Errorf("expected push to fetch the effective skillset listing, but it never did. Hits: scope=personal %d, effective %d.\nOutput:\n%s",
+			personalScopeHits, effectiveSkillsetHits, out)
+	}
+	if strings.Contains(out, "moved") || strings.Contains(out, "re-link needed") {
+		t.Errorf("expected NO 'moved' warning for org-membership skill, got output:\n%s", out)
+	}
+
+	final := loadSyncState()
+	entry := final.Skills["org-member-skill"]
+	if entry == nil {
+		t.Fatalf("marker missing after push")
+	}
+	if entry.Deleted {
+		t.Errorf("expected marker NOT to be tombstoned, got Deleted=true")
+	}
+	if entry.SkillID != skillID {
+		t.Errorf("expected SkillID preserved, got %q", entry.SkillID)
+	}
+}
+
 // TestPropagatePartialRenames_FullOrphan covers the case where the marker
 // has no surviving dirs anywhere. The function should leave it alone (the
 // existing orphan-hash detector in push handles those).

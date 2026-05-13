@@ -1,0 +1,65 @@
+package cmd
+
+import (
+	"sync"
+)
+
+// ownerResolver maps an apiSkill's owner_id / org_id UUIDs to the
+// (kind, slug) pair the local marker stores. The skills list endpoint
+// returns UUIDs only, but the marker stores slugs so other commands
+// (doctor, list, future tooling) can identify a skill's namespace
+// without re-fetching the world.
+//
+// Lookups are lazy: the resolver only hits /api/v1/me and
+// /api/v1/organizations the first time it's asked, so tests with
+// no-skill responses pay nothing. Errors during init are swallowed —
+// a partial marker (no owner_kind/owner_slug) is no worse than the
+// pre-fix state.
+type ownerResolver struct {
+	c        *apiClient
+	initOnce sync.Once
+	userID   string
+	username string
+	orgsByID map[string]string // org_id → org slug
+}
+
+func newOwnerResolver(c *apiClient) *ownerResolver {
+	return &ownerResolver{c: c}
+}
+
+func (r *ownerResolver) init() {
+	if r.c == nil {
+		return
+	}
+	profile, err := r.c.getMe()
+	if err == nil && profile != nil {
+		r.userID = profile.Id.String()
+		r.username = profile.Username
+	}
+	orgs, err := listCallerOrgs(r.c)
+	if err == nil {
+		r.orgsByID = make(map[string]string, len(orgs))
+		for _, o := range orgs {
+			r.orgsByID[o.ID] = o.Slug
+		}
+	}
+}
+
+// resolve returns the (kind, slug) for a skill. Empty strings mean
+// "unknown" — caller should leave the marker fields blank rather than
+// guess. Org skills the caller is not a member of (e.g. just transferred
+// in) return ("org", "") which is still better than nothing: the kind
+// alone tells push not to misclassify the skill as a personal orphan.
+func (r *ownerResolver) resolve(skill *apiSkill) (kind, slug string) {
+	if skill == nil {
+		return "", ""
+	}
+	r.initOnce.Do(r.init)
+	if skill.OrgId != nil {
+		return "org", r.orgsByID[skill.OrgId.String()]
+	}
+	if skill.OwnerId != nil && r.userID != "" && skill.OwnerId.String() == r.userID {
+		return "user", r.username
+	}
+	return "", ""
+}

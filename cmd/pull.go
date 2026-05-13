@@ -135,6 +135,8 @@ func runPull(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	owners := newOwnerResolver(client)
+
 	toPull, missingWarnings := decidePullActions(remoteSkills, localSkills, syncState)
 
 	// Drop any actions for slugs that have unresolved local divergence —
@@ -198,11 +200,14 @@ func runPull(cmd *cobra.Command, args []string) error {
 		// classifier on the next sync will see this as plain "synced".
 		if p.reason == "linked" {
 			dirName := filepath.Base(p.localDir)
+			ownerKind, ownerSlug := owners.resolve(&p.skill)
 			syncState.Skills[dirName] = &SyncEntry{
 				SkillID:     p.skill.Id.String(),
 				Version:     p.skill.Version,
 				ContentHash: strDeref(p.skill.ContentHash),
 				Tool:        "claude-code",
+				OwnerKind:   ownerKind,
+				OwnerSlug:   ownerSlug,
 			}
 			autoResolved++
 			fmt.Printf("  %s %s %s\n", green("·"), p.skill.Name, dim("linked (bytes match server, no download)"))
@@ -266,11 +271,14 @@ func runPull(cmd *cobra.Command, args []string) error {
 			}
 
 			// Add marker for the new dir
+			ownerKind, ownerSlug := owners.resolve(&p.skill)
 			syncState.Skills[newDirName] = &SyncEntry{
 				SkillID:     p.skill.Id.String(),
 				Version:     p.skill.Version,
 				ContentHash: strDeref(p.skill.ContentHash),
 				Tool:        "claude-code",
+				OwnerKind:   ownerKind,
+				OwnerSlug:   ownerSlug,
 			}
 
 			// Reconcile old dir
@@ -326,11 +334,14 @@ func runPull(cmd *cobra.Command, args []string) error {
 			failed++
 			continue
 		}
+		ownerKind, ownerSlug := owners.resolve(&p.skill)
 		syncState.Skills[dirName] = &SyncEntry{
 			SkillID:     p.skill.Id.String(),
 			Version:     p.skill.Version,
 			ContentHash: strDeref(p.skill.ContentHash),
 			Tool:        "claude-code",
+			OwnerKind:   ownerKind,
+			OwnerSlug:   ownerSlug,
 		}
 
 		if p.reason == "updated" {
