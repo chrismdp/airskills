@@ -928,6 +928,7 @@ caller asked about something else.`,
 		// print these by default — the user removed/transferred something
 		// elsewhere, and they need to see the consequence on this machine
 		// plus how to undo it.
+		orgSlugByID, callerOrgSlugs := movedDestinationOrgLookups(client, movedKept)
 		for _, a := range orphanRemoved {
 			fmt.Printf("  %s %s: removed locally (deleted server-side).\n", green("-"), a.name)
 			fmt.Printf("       Undo: airskills restore %s\n", a.name)
@@ -939,8 +940,16 @@ caller asked about something else.`,
 		}
 		for _, a := range movedKept {
 			fmt.Printf("  %s %s: moved to %s/%s; local kept and marked untracked.\n", yellow("!"), a.name, a.newOwnerSlug, a.newSkillSlug)
-			fmt.Printf("       Follow updates from the new owner: airskills rm --keep-remote %s && airskills add %s/%s\n", a.name, a.newOwnerSlug, a.newSkillSlug)
-			fmt.Printf("       Discard local copy:                airskills rm --keep-remote %s\n", a.name)
+			switch {
+			case movedDestinationInEffectiveSet(a, remoteSkills, orgSlugByID):
+				fmt.Println("       New owner org membership detected; this skill is in a skillset this machine receives. Next sync will re-link automatically. No action needed.")
+			case a.newOwnerKind == "org" && callerOrgSlugs[a.newOwnerSlug]:
+				fmt.Printf("       This org skill is not in a skillset you receive. To avoid creating a duplicate, run: airskills rm --keep-remote %s\n", a.name)
+				fmt.Println("       Then ask an admin of the new owner org to add you to a skillset that contains it.")
+			default:
+				fmt.Printf("       Follow updates from the new owner: airskills rm --keep-remote %s && airskills add %s/%s\n", a.name, a.newOwnerSlug, a.newSkillSlug)
+				fmt.Printf("       Discard local copy:                airskills rm --keep-remote %s\n", a.name)
+			}
 		}
 		for _, a := range transient {
 			fmt.Printf("  %s %s: couldn't verify server state — will retry next sync.\n", dim("?"), a.name)
@@ -1013,6 +1022,46 @@ caller asked about something else.`,
 
 		return nil
 	},
+}
+
+func movedDestinationOrgLookups(client *apiClient, moved []skippedAction) (map[string]string, map[string]bool) {
+	needsOrgs := false
+	for _, a := range moved {
+		if a.newOwnerKind == "org" {
+			needsOrgs = true
+			break
+		}
+	}
+	if !needsOrgs {
+		return nil, nil
+	}
+	orgs, err := listCallerOrgs(client)
+	if err != nil {
+		return nil, nil
+	}
+	orgSlugByID := make(map[string]string, len(orgs))
+	callerOrgSlugs := make(map[string]bool, len(orgs))
+	for _, org := range orgs {
+		orgSlugByID[org.ID] = org.Slug
+		callerOrgSlugs[org.Slug] = true
+	}
+	return orgSlugByID, callerOrgSlugs
+}
+
+func movedDestinationInEffectiveSet(a skippedAction, remoteSkills []apiSkill, orgSlugByID map[string]string) bool {
+	if a.newOwnerKind != "org" || a.newOwnerSlug == "" || a.newSkillSlug == "" {
+		return false
+	}
+	for i := range remoteSkills {
+		skill := remoteSkills[i]
+		if skill.Slug != a.newSkillSlug || skill.OrgId == nil {
+			continue
+		}
+		if orgSlugByID[skill.OrgId.String()] == a.newOwnerSlug {
+			return true
+		}
+	}
+	return false
 }
 
 func init() {

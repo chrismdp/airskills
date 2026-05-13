@@ -496,6 +496,85 @@ func TestPushDoesNotCreatePhantomAfterMovedKept(t *testing.T) {
 	}
 }
 
+func TestPushMovedWarningForOrgSkillInEffectiveSetSaysNoActionNeeded(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	oldIsTTY := isTTY
+	isTTY = false
+	t.Cleanup(func() { isTTY = oldIsTTY })
+
+	oldSkillID := "22222222-2222-2222-2222-222222222222"
+	newSkillID := "44444444-4444-4444-4444-444444444444"
+	orgID := "55555555-5555-5555-5555-555555555555"
+	skillDir := filepath.Join(home, ".claude", "skills", "stale-mover")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	skillBody := []byte("---\nname: stale-mover\ndescription: test\n---\n\nbody\n")
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), skillBody, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	hash := computeMerkleHash(readSkillFiles(skillDir))
+
+	state := &SyncState{Version: 1, Skills: map[string]*SyncEntry{
+		"stale-mover": {
+			SkillID:     oldSkillID,
+			Version:     "1.0.0",
+			ContentHash: hash,
+			Tool:        "claude-code",
+		},
+	}}
+	if err := saveSyncState(state); err != nil {
+		t.Fatalf("save sync state: %v", err)
+	}
+
+	var createPosts int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/skills":
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{"skillset":{"slug":"default","name":"Default"},"skills":[{"id":%q,"name":"stale-mover","slug":"stale-mover","version":"1.0.0","content_hash":%q,"tool_formats":["claude-code"],"owner_id":null,"org_id":%q,"visibility":"private","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","deleted_at":null,"deletion_reason":null,"description":null,"head_commit_id":null,"forked_from":%q,"upstream_content_hash":null,"dependency_count":0,"archive_size":null,"pinned_archive_path":null}]}`, newSkillID, hash, orgID, oldSkillID)
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/skills/"+oldSkillID:
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{"id":%q,"owner_id":null,"org_id":%q,"name":"stale-mover","slug":"stale-mover","visibility":"private","version":"1.0.0","content_hash":%q,"archive_size":123,"files":[{"path":"SKILL.md"}],"dependencies":[],"owner":null,"org":{"slug":"chrismdp-ltd","name":"Chris MDP Ltd"},"deleted_at":null,"forked_from":null,"head_commit_id":null}`, oldSkillID, orgID, hash)
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/organizations":
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{"organizations":[{"id":%q,"slug":"chrismdp-ltd","name":"Chris MDP Ltd","role":"admin","member_count":2}]}`, orgID)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/skills":
+			createPosts++
+			w.WriteHeader(http.StatusCreated)
+			fmt.Fprintf(w, `{"id":%q,"name":"stale-mover","slug":"stale-mover","version":"1.0.0"}`, "33333333-3333-3333-3333-333333333333")
+		default:
+			t.Logf("unexpected request: %s %s", r.Method, r.URL.String())
+			http.Error(w, "not found", 404)
+		}
+	}))
+	defer srv.Close()
+
+	writeTestConfigAndToken(t, home, srv.URL)
+
+	cmd := &cobra.Command{Use: "push"}
+	out := captureStdout(t, func() {
+		if err := pushCmd.RunE(cmd, nil); err != nil {
+			t.Fatalf("push: %v", err)
+		}
+	})
+
+	if !strings.Contains(out, "stale-mover: moved to chrismdp-ltd/stale-mover") {
+		t.Fatalf("expected moved destination, got output:\n%s", out)
+	}
+	if !strings.Contains(out, "next sync will re-link automatically") {
+		t.Fatalf("expected no-action-needed guidance, got output:\n%s", out)
+	}
+	if strings.Contains(out, "airskills rm --keep-remote stale-mover && airskills add chrismdp-ltd/stale-mover") {
+		t.Fatalf("expected no rm/add recovery command for reachable org skill, got output:\n%s", out)
+	}
+	if createPosts != 0 {
+		t.Fatalf("expected 0 POST /api/v1/skills, got %d", createPosts)
+	}
+}
+
 // TestPushNoMovedWarningForOrgMembershipSkill verifies the headline bug:
 // for a skill the caller is a member of via an org skillset (but does NOT
 // personally own), every sync was emitting a spurious "moved (re-link

@@ -33,6 +33,7 @@ type skippedAction struct {
 	kind         skippedActionKind
 	name         string
 	localDir     string
+	newOwnerKind string // "user" | "org", populated for actionMovedKeep
 	newOwnerSlug string // populated for actionMovedKeep
 	newSkillSlug string // populated for actionMovedKeep
 }
@@ -64,6 +65,7 @@ func classifySkippedMarker(client *apiClient, name string, marker *SyncEntry, lo
 			kind:         actionMovedKeep,
 			name:         name,
 			localDir:     localDir,
+			newOwnerKind: state.ownerKind,
 			newOwnerSlug: state.ownerSlug,
 			newSkillSlug: state.skillSlug,
 		}
