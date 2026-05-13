@@ -1,11 +1,6 @@
-```
-       _          _    _ _ _     
-      (_)        | |  (_) | |    
-  __ _ _ _ __ ___| | ___| | |___ 
- / _` | | '__/ __| |/ / | | / __|
-| (_| | | |  \__ \   <| | | \__ \
- \__,_|_|_|  |___/_|\_\_|_|_|___/
-```
+<p align="center">
+  <img src="https://raw.githubusercontent.com/chrismdp/airskills/main/assets/airskills-mark.png" alt="airskills" width="240">
+</p>
 
 Your AI skills are scattered across machines, tools, and teammates. airskills fixes that.
 
