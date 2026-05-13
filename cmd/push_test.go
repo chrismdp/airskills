@@ -631,3 +631,117 @@ func TestPropagatePartialRenames_FullOrphan(t *testing.T) {
 		t.Errorf("localSkills should have exactly one entry, got %v", localSkills)
 	}
 }
+
+// TestPushScopesToPositionalArg verifies that `airskills push <name>`
+// uploads only the named skill, leaving other dirty skills untouched.
+//
+// Before the fix, the positional arg was silently ignored and push always
+// operated on the full effective set — see
+// doc/changes/cli-push-positional-arg-silently-ignored.md (platform repo).
+func TestPushScopesToPositionalArg(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	oldIsTTY := isTTY
+	isTTY = false
+	t.Cleanup(func() { isTTY = oldIsTTY })
+
+	alphaID := "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+	betaID := "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+
+	for name := range map[string]string{"alpha": alphaID, "beta": betaID} {
+		dir := filepath.Join(home, ".claude", "skills", name)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		body := fmt.Sprintf("---\nname: %s\ndescription: test\n---\n\nbody %s\n", name, name)
+		if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	state := &SyncState{Version: 1, Skills: map[string]*SyncEntry{
+		"alpha": {SkillID: alphaID, Version: "1.0.0", ContentHash: "stale-alpha-hash", Tool: "claude-code"},
+		"beta":  {SkillID: betaID, Version: "1.0.0", ContentHash: "stale-beta-hash", Tool: "claude-code"},
+	}}
+	if err := saveSyncState(state); err != nil {
+		t.Fatalf("save sync state: %v", err)
+	}
+
+	uploads := map[string]int{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/skills":
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{"skills":[
+				{"id":%q,"name":"alpha","slug":"alpha","version":"1.0.0","content_hash":"server-alpha","tool_formats":["claude-code"],"visibility":"private","dependency_count":0},
+				{"id":%q,"name":"beta","slug":"beta","version":"1.0.0","content_hash":"server-beta","tool_formats":["claude-code"],"visibility":"private","dependency_count":0}
+			]}`, alphaID, betaID)
+		case r.Method == http.MethodPut && strings.HasSuffix(r.URL.Path, "/archive"):
+			id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/v1/skills/"), "/archive")
+			uploads[id]++
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{"id":%q,"version":"1.0.1","content_hash":"new-hash"}`, id)
+		default:
+			t.Logf("unexpected request: %s %s", r.Method, r.URL.String())
+			http.Error(w, "not handled", 404)
+		}
+	}))
+	defer srv.Close()
+
+	writeTestConfigAndToken(t, home, srv.URL)
+
+	cmd := &cobra.Command{Use: "push"}
+	_ = captureStdout(t, func() {
+		if err := pushCmd.RunE(cmd, []string{"alpha"}); err != nil {
+			t.Fatalf("push RunE: %v", err)
+		}
+	})
+
+	if uploads[alphaID] != 1 {
+		t.Errorf("alpha uploads = %d, want 1", uploads[alphaID])
+	}
+	if uploads[betaID] != 0 {
+		t.Errorf("beta uploads = %d, want 0 (scoped push should not touch beta)", uploads[betaID])
+	}
+}
+
+// TestPushRejectsUnknownSkill verifies that a positional arg that doesn't
+// match any local skill directory errors out before any work is done.
+func TestPushRejectsUnknownSkill(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	oldIsTTY := isTTY
+	isTTY = false
+	t.Cleanup(func() { isTTY = oldIsTTY })
+
+	skillDir := filepath.Join(home, ".claude", "skills", "alpha")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"),
+		[]byte("---\nname: alpha\ndescription: test\n---\n\nbody\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Logf("server received %s %s", r.Method, r.URL.String())
+		http.Error(w, "should not reach server", 500)
+	}))
+	defer srv.Close()
+
+	writeTestConfigAndToken(t, home, srv.URL)
+
+	cmd := &cobra.Command{Use: "push"}
+	var err error
+	_ = captureStdout(t, func() {
+		err = pushCmd.RunE(cmd, []string{"does-not-exist"})
+	})
+	if err == nil {
+		t.Fatal("expected error for unknown skill, got nil")
+	}
+	if !strings.Contains(err.Error(), "does-not-exist") {
+		t.Errorf("error %q should name the unknown skill", err.Error())
+	}
+}

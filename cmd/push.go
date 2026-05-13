@@ -52,16 +52,27 @@ var pushForce bool
 var pushOrg string
 
 var pushCmd = &cobra.Command{
-	Use:   "push",
+	Use:   "push [skill...]",
 	Short: "Push local skill changes to airskills.ai",
+	Args:  cobra.ArbitraryArgs,
 	Long: `Scans local skills, detects changes, and pushes updates (including all files) to the server.
+
+With no positional arguments, push operates on every dirty skill in the
+caller's effective set. Pass one or more skill names to scope push to just
+those skills — useful after resolving a conflict on one skill without
+touching the others.
 
 --force tells the server "my local wins, take it as-is" by skipping the
 content-hash conflict check. Use it after you've reviewed a conflict and
 decided your local copy is the truth. The mirror flag is 'pull --force',
 which means "remote wins, overwrite my local". Both flags express the same
 intent — "I'm about to overwrite the other side, do it anyway" — pointed
-in opposite directions.`,
+in opposite directions.
+
+Mirror and orphan-classifier passes always run across every detected skill,
+even when push is scoped to named skills — mirroring keeps multi-agent dirs
+consistent and surfacing moved/deleted markers is important even when the
+caller asked about something else.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := newAPIClientAuto()
 		if err != nil {
@@ -78,9 +89,41 @@ in opposite directions.`,
 			}
 		}
 
-		// Confirm force push
+		// Validate positional args up front — before any expensive work or
+		// the force confirmation prompt. Each named skill must correspond
+		// to a local directory; push uploads local content, so a name
+		// that isn't on disk can't be pushed. A bad name should fail fast,
+		// not after the user has accepted a force-overwrite prompt.
+		if len(args) > 0 {
+			preScan, scanErr := scanSkillsFromAgents()
+			if scanErr != nil || len(preScan) == 0 {
+				return fmt.Errorf("unknown skill %q (no local skill directories found)", args[0])
+			}
+			for _, name := range args {
+				if _, ok := preScan[name]; !ok {
+					return fmt.Errorf("unknown skill %q (no local directory found)", name)
+				}
+			}
+		}
+
+		// Confirm force push. When scoped to named skills, the prompt names
+		// them — the user is force-pushing exactly the skills they typed,
+		// not the wider dirty set.
 		if pushForce {
-			fmt.Print("Force push will overwrite remote versions. Continue? [y/N] ")
+			prompt := "Force push will overwrite remote versions. Continue? [y/N] "
+			if len(args) > 0 {
+				quoted := make([]string, len(args))
+				for i, a := range args {
+					quoted[i] = fmt.Sprintf("%q", a)
+				}
+				noun := "the remote version"
+				if len(args) > 1 {
+					noun = "the remote versions"
+				}
+				prompt = fmt.Sprintf("Force push %s will overwrite %s. Continue? [y/N] ",
+					strings.Join(quoted, ", "), noun)
+			}
+			fmt.Print(prompt)
 			reader := bufio.NewReader(os.Stdin)
 			answer, _ := reader.ReadString('\n')
 			if strings.TrimSpace(strings.ToLower(answer)) != "y" {
@@ -246,6 +289,24 @@ in opposite directions.`,
 				// Leave marker + dir intact; retry next sync.
 				transient = append(transient, action)
 			}
+		}
+
+		// Scope filter: when positional args were given, narrow the upload
+		// pass to just those skills. Mirror, rename detection, and the
+		// moved/orphan classifier above all ran across every detected skill
+		// so their warnings still surface — only the upload pass narrows.
+		if len(args) > 0 {
+			requested := make(map[string]bool, len(args))
+			for _, a := range args {
+				requested[a] = true
+			}
+			var scoped []skillEntry
+			for _, s := range skills {
+				if requested[s.name] {
+					scoped = append(scoped, s)
+				}
+			}
+			skills = scoped
 		}
 
 		// Print initial progress lines
