@@ -40,6 +40,29 @@ func detectAddCollision(dirName, incomingSkillID string, state *SyncState) (stri
 	return "", false
 }
 
+// detectAddSilentLink reports whether installing `dirName` should silently
+// claim an existing local dir because its bytes already match the remote
+// skill's. Mirrors the "linked" branch of decidePullActions — same data,
+// same intent, same outcome (write marker, no download, no warning).
+func detectAddSilentLink(dirName string, remoteFiles map[string][]byte) (string, bool) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", false
+	}
+	remoteHash := computeMerkleHash(remoteFiles)
+	for _, a := range agents {
+		globalPath := resolveGlobalDir(home, a.GlobalDir)
+		dir := filepath.Join(globalPath, dirName)
+		if _, err := os.Stat(filepath.Join(dir, "SKILL.md")); err != nil {
+			continue
+		}
+		if computeMerkleHash(readSkillFiles(dir)) == remoteHash {
+			return dir, true
+		}
+	}
+	return "", false
+}
+
 // writeConflictToTmp persists the incoming skill files to
 // /tmp/airskills-conflicts/<dirName>/ so the user (or their agent) can
 // reconcile against the local copy. Returns the path to the SKILL.md

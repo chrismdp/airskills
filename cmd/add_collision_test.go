@@ -59,6 +59,54 @@ func TestDetectAddCollision_DifferentSkillIsConflict(t *testing.T) {
 	}
 }
 
+func TestDetectAddSilentLink_BytesMatch(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("USERPROFILE", tmp)
+	skillMD := []byte("---\nname: foo\ndescription: bar\n---\nbody\n")
+	for _, a := range agents {
+		dir := filepath.Join(resolveGlobalDir(tmp, a.GlobalDir), "foo")
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			t.Fatal(err)
+		}
+		os.WriteFile(filepath.Join(dir, "SKILL.md"), skillMD, 0644)
+	}
+	remote := map[string][]byte{"SKILL.md": skillMD}
+	dir, silent := detectAddSilentLink("foo", remote)
+	if !silent {
+		t.Fatalf("expected silent link, got false (dir=%q)", dir)
+	}
+	if dir == "" {
+		t.Fatal("expected non-empty local dir path")
+	}
+}
+
+func TestDetectAddSilentLink_BytesDiffer(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("USERPROFILE", tmp)
+	for _, a := range agents {
+		dir := filepath.Join(resolveGlobalDir(tmp, a.GlobalDir), "foo")
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			t.Fatal(err)
+		}
+		os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte("local"), 0644)
+	}
+	remote := map[string][]byte{"SKILL.md": []byte("remote")}
+	if _, silent := detectAddSilentLink("foo", remote); silent {
+		t.Fatal("expected no silent link when bytes differ")
+	}
+}
+
+func TestDetectAddSilentLink_NoLocalDir(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("USERPROFILE", tmp)
+	if _, silent := detectAddSilentLink("foo", map[string][]byte{"SKILL.md": []byte("x")}); silent {
+		t.Fatal("expected no silent link when no local dir exists")
+	}
+}
+
 func TestWriteConflictToTmp(t *testing.T) {
 	files := map[string][]byte{
 		"SKILL.md":   []byte("incoming"),

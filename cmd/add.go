@@ -154,8 +154,41 @@ var addCmd = &cobra.Command{
 		// Collision check: if a different skill already lives at this dir
 		// name, write the incoming SKILL.md to /tmp and bail. We never
 		// silently overwrite — the user (or their agent) decides how to
-		// reconcile.
+		// reconcile. Exception: if local bytes already match the remote,
+		// silent-link (parity with pull's "linked" path) — no warning,
+		// just claim the marker.
 		if existing, conflict := detectAddCollision(dirName, result.ID, syncState); conflict {
+			if _, silent := detectAddSilentLink(dirName, files); silent {
+				syncState.Skills[dirName] = &SyncEntry{
+					SkillID:     result.ID,
+					Version:     result.Version,
+					ContentHash: computeMerkleHash(files),
+					Tool:        "claude-code",
+					OwnerKind:   ownerKind,
+					OwnerSlug:   ownerSlug,
+					Source: &skillSource{
+						Owner:       username,
+						Slug:        slug,
+						ID:          result.ID,
+						ContentHash: computeMerkleHash(files),
+					},
+				}
+				saveSyncState(syncState)
+				fmt.Printf("\n  %s %s/%s %s\n", green("·"), ownerSlug, result.Slug, dim("linked (bytes match server, no download needed)"))
+				telemetry.Capture("cli_add", map[string]interface{}{
+					"owner":         username,
+					"slug":          slug,
+					"skill_id":      result.ID,
+					"agents":        0,
+					"authenticated": authHeader != "",
+					"silent_link":   true,
+				})
+				printAgentNextSteps(os.Stdout, []agentNextStep{
+					{Cmd: "airskills status", Why: "confirm the skill is now tracked"},
+					{Cmd: "airskills sync", Why: "pull any other remote skills onto this machine"},
+				})
+				return nil
+			}
 			tmpPath, writeErr := writeConflictToTmp(dirName, files)
 			if writeErr != nil {
 				return fmt.Errorf("could not save incoming skill to tmp: %w", writeErr)
