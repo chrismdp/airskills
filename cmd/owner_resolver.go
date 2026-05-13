@@ -63,3 +63,36 @@ func (r *ownerResolver) resolve(skill *apiSkill) (kind, slug string) {
 	}
 	return "", ""
 }
+
+// sourceFor returns the marker `Source` block for a non-owned skill, or
+// nil when the caller owns the skill. Source tells future syncs that
+// this skill came from elsewhere, so push knows to fork-then-suggest
+// rather than push-to-upstream. See
+// platform/doc/changes/cli-org-member-suggest-via-shadow-fork.md.
+//
+// Owner slug we record is the upstream owner: org slug for org skills,
+// empty for another user's personal skill (we don't have their username
+// without a separate lookup — slug + ID still pin the upstream and the
+// fork-suggest path doesn't need Owner). Returns nil for:
+//   - caller-owned skills (no Source needed)
+//   - skills whose owner we cannot identify and there's no useful slug
+//     to record — leave Source nil rather than write a half-record.
+func (r *ownerResolver) sourceFor(skill *apiSkill) *skillSource {
+	if skill == nil {
+		return nil
+	}
+	r.initOnce.Do(r.init)
+	if skill.OwnerId != nil && r.userID != "" && skill.OwnerId.String() == r.userID {
+		return nil // caller owns the skill — no Source
+	}
+	var owner string
+	if skill.OrgId != nil {
+		owner = r.orgsByID[skill.OrgId.String()]
+	}
+	return &skillSource{
+		Owner:       owner,
+		Slug:        skill.Slug,
+		ID:          skill.Id.String(),
+		ContentHash: strDeref(skill.ContentHash),
+	}
+}

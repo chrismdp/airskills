@@ -48,6 +48,23 @@ type pendingSuggestionPrompt struct {
 	source           *skillSource
 }
 
+// pendingShadowFork captures the inputs the drain pass needs to fork an
+// edit-on-upstream skill into the caller's namespace, upload the local
+// content to the fork, and submit a suggestion against the upstream.
+// See cli-org-member-suggest-via-shadow-fork.md (Option B). The prompt
+// + sequential API calls live in the drain pass so stdin and the user
+// summary aren't racing across goroutines.
+type pendingShadowFork struct {
+	name        string
+	dir         string
+	archive     []byte
+	contentHash string
+	archiveSize int64
+	source      *skillSource
+	prevMarker  *SyncEntry
+	progressIdx int
+}
+
 var pushForce bool
 var pushOrg string
 
@@ -328,6 +345,7 @@ caller asked about something else.`,
 		var wg sync.WaitGroup
 		var warnings []string
 		var pendingPrompts []pendingSuggestionPrompt
+		var pendingShadowForks []pendingShadowFork
 		sem := make(chan struct{}, 5) // max 5 concurrent uploads
 
 		// Free tier limits (checked client-side as guidance, server enforces)
@@ -436,6 +454,65 @@ caller asked about something else.`,
 					}
 					lines[i].status = "unchanged"
 					lines[i].pct = 1
+					renderProgress(lines)
+					return
+				}
+
+				// Shadow-fork detection: marker points at the upstream skill
+				// directly (org-member sync, or a non-owned skill whose marker
+				// pre-dates Source population in pull.go). A local edit means
+				// we must fork into the caller's namespace and submit a
+				// suggestion, NOT overwrite the upstream. See
+				// platform/doc/changes/cli-org-member-suggest-via-shadow-fork.md.
+				//
+				// Discriminator: marker.SkillID == marker.Source.ID. A real
+				// fork (created by `airskills add` while logged in, or by a
+				// prior shadow-fork pass) has a distinct SkillID and continues
+				// down the normal upload path with the existing suggest prompt.
+				if s.marker != nil && s.marker.Source != nil &&
+					s.marker.SkillID != "" && s.marker.SkillID == s.marker.Source.ID {
+					if s.marker.SuggestionID != "" {
+						// Edit-while-pending: leave the upstream alone. Amending
+						// an existing suggestion is out of scope for this ticket;
+						// surface a warning so the user knows nothing happened.
+						mu.Lock()
+						warnings = append(warnings, fmt.Sprintf(
+							"%s: a suggestion to %s/%s is still pending — local edits NOT pushed. Wait for the owner to accept/decline, then re-edit.",
+							s.name, s.marker.Source.Owner, s.marker.Source.Slug))
+						mu.Unlock()
+						lines[i].status = "pending suggestion"
+						lines[i].pct = 1
+						renderProgress(lines)
+						return
+					}
+					if s.marker.SuggestDeclined {
+						mu.Lock()
+						warnings = append(warnings, fmt.Sprintf(
+							"%s: a previous suggestion was declined — local edits kept locally, not re-suggested. Use `airskills push --force` to overwrite (not yet supported for non-owned skills).",
+							s.name))
+						mu.Unlock()
+						lines[i].status = "declined"
+						lines[i].pct = 1
+						renderProgress(lines)
+						return
+					}
+					// Collect for sequential prompt + fork + upload + suggest
+					// after wg.Wait so we don't race goroutines on stdin or
+					// the (sequential) caller-side rename + suggestion APIs.
+					mu.Lock()
+					pendingShadowForks = append(pendingShadowForks, pendingShadowFork{
+						name:        s.name,
+						dir:         s.dir,
+						archive:     archive,
+						contentHash: contentHash,
+						archiveSize: archiveSize,
+						source:      s.marker.Source,
+						prevMarker:  s.marker,
+						progressIdx: i,
+					})
+					mu.Unlock()
+					lines[i].status = "fork-suggest"
+					lines[i].pct = 0.5
 					renderProgress(lines)
 					return
 				}
@@ -750,6 +827,15 @@ caller asked about something else.`,
 
 		wg.Wait()
 
+		// Shadow-fork drain: for each non-owned skill the user has edited,
+		// fork the upstream into the caller's namespace, upload the edit
+		// to the fork, and submit a suggestion. Sequential because each
+		// step (prompt, three API calls per skill) is serial — and racing
+		// stdin across goroutines is not acceptable.
+		if len(pendingShadowForks) > 0 {
+			drainShadowForks(client, pendingShadowForks, syncState, &mu, &created, &createdNames, &warnings)
+		}
+
 		// Drain sequentially so goroutines don't race on stdin. In a headless
 		// session we can't prompt, so print agent-focused instructions instead
 		// and leave the entry unmarked — the next interactive push will ask.
@@ -1033,6 +1119,146 @@ func readSkillFiles(dir string) map[string][]byte {
 // Without this, a `mv ~/.claude/skills/X ~/.claude/skills/Y` while
 // `~/.cursor/skills/X` still exists would silently push Y as a brand-new
 // skill on the server, leaving the original X skill orphaned.
+// drainShadowForks executes the fork-then-suggest flow for each non-owned
+// skill the user has edited locally. Each entry runs sequentially: fork
+// the upstream into the caller's namespace, upload the edited bytes to
+// the fork, submit a suggestion against the upstream, then rewrite the
+// marker so the local dir is now tracked to the fork. Source stays
+// pointing at the upstream so subsequent edits keep going through the
+// suggest path and the (separate) incorporate-upstream-changes ticket
+// has the link it needs.
+//
+// Best-effort across failures: if createSkill works but the upload or
+// suggestion call fails, the marker still records the new fork id —
+// otherwise the next push would re-fork and accumulate duplicate rows.
+// Errors are surfaced via the shared warnings slice.
+func drainShadowForks(
+	client *apiClient,
+	queue []pendingShadowFork,
+	syncState *SyncState,
+	mu *sync.Mutex,
+	created *int64,
+	createdNames *[]string,
+	warnings *[]string,
+) {
+	// One profile fetch per push run, shared across queue entries — we
+	// need the caller's username for the summary line and the rewritten
+	// marker.
+	profile, profileErr := client.getMe()
+	var callerUsername string
+	if profileErr == nil && profile != nil {
+		callerUsername = profile.Username
+	}
+
+	reader := bufio.NewReader(os.Stdin)
+
+	for _, p := range queue {
+		fmt.Printf("\n  %s — local edit on a skill from %s/%s\n", p.name, p.source.Owner, p.source.Slug)
+		fmt.Printf("    Forking your version to %s/%s and submitting a suggestion to %s/%s.\n",
+			fallback(callerUsername, "your namespace"), p.source.Slug, p.source.Owner, p.source.Slug)
+
+		if isTTY {
+			fmt.Print("    Continue? [Y/n] ")
+			answer, _ := reader.ReadString('\n')
+			answer = strings.TrimSpace(strings.ToLower(answer))
+			if answer == "n" || answer == "no" {
+				mu.Lock()
+				if entry, ok := syncState.Skills[p.name]; ok {
+					entry.SuggestDeclined = true
+				}
+				*warnings = append(*warnings, fmt.Sprintf(
+					"%s: fork+suggest skipped (user declined). Local edit kept; re-run push to retry.",
+					p.name))
+				mu.Unlock()
+				continue
+			}
+		}
+
+		// 1. Create the fork in the caller's namespace.
+		fork, err := client.createSkill(p.source.Slug, "", []string{"claude-code"}, p.source.ID, "")
+		if err != nil {
+			mu.Lock()
+			*warnings = append(*warnings, fmt.Sprintf(
+				"%s: could not fork into your namespace: %v. Local edit kept; nothing pushed upstream.",
+				p.name, err))
+			mu.Unlock()
+			continue
+		}
+
+		// 2. Upload local content to the fork. expectedHash is empty —
+		// the fork is brand-new and has no prior hash to conflict on.
+		updated, _, archiveErr := client.putArchive(fork.Id.String(), p.archive, "", p.contentHash)
+
+		// 3. Submit the suggestion. base_content_hash is the upstream
+		// baseline we last sync'd (stored on the marker's Source).
+		suggestion, suggestErr := client.createSuggestion(
+			fork.Id.String(), p.source.ID, p.source.ContentHash, "")
+
+		// 4. Rewrite the marker even on partial failure — the fork now
+		// exists server-side and must be tracked, otherwise the next
+		// push would re-fork.
+		mu.Lock()
+		entry := syncState.Skills[p.name]
+		if entry == nil {
+			entry = &SyncEntry{Tool: "claude-code"}
+		}
+		entry.SkillID = fork.Id.String()
+		entry.OwnerKind = "user"
+		if callerUsername != "" {
+			entry.OwnerSlug = callerUsername
+		}
+		entry.Source = p.source // unchanged — keeps the upstream link for future syncs
+		entry.ContentHash = p.contentHash
+		if updated != nil {
+			entry.Version = updated.Version
+			if updated.ContentHash != "" {
+				entry.ContentHash = updated.ContentHash
+			}
+		} else {
+			entry.Version = fork.Version
+		}
+		if suggestion != nil {
+			entry.SuggestionID = suggestion.Id.String()
+		}
+		entry.SuggestDeclined = false
+		entry.Deleted = false
+		entry.MovedTo = ""
+		syncState.Skills[p.name] = entry
+
+		if archiveErr != nil {
+			*warnings = append(*warnings, fmt.Sprintf(
+				"%s: fork created but upload failed: %v. Re-run push to retry the upload.",
+				p.name, archiveErr))
+		}
+		if suggestErr != nil {
+			*warnings = append(*warnings, fmt.Sprintf(
+				"%s: fork uploaded but suggestion failed: %v. The fork is tracked; retry later.",
+				p.name, suggestErr))
+		}
+
+		atomic.AddInt64(created, 1)
+		*createdNames = append(*createdNames, p.name)
+		mu.Unlock()
+
+		if archiveErr == nil && suggestErr == nil {
+			fmt.Printf("  %s %s forked to %s/%s + suggested to %s/%s\n",
+				green("✓"), p.name,
+				fallback(callerUsername, "your namespace"), p.source.Slug,
+				p.source.Owner, p.source.Slug)
+		}
+	}
+}
+
+// fallback returns first if non-empty, otherwise second. Used for human
+// summary lines where the caller's username might be unknown (the
+// /api/v1/me lookup failed) and we still want a readable sentence.
+func fallback(first, second string) string {
+	if first != "" {
+		return first
+	}
+	return second
+}
+
 func propagatePartialRenames(localSkills map[string]string, syncState *SyncState) {
 	for newName, dir := range localSkills {
 		if _, tracked := syncState.Skills[newName]; tracked {

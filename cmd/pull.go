@@ -184,6 +184,12 @@ func runPull(cmd *cobra.Command, args []string) error {
 			if p.marker != nil {
 				p.marker.ContentHash = strDeref(p.skill.ContentHash)
 				p.marker.Version = p.skill.Version
+				// Backfill Source for non-owned markers written by pre-fix
+				// CLI versions: the next pull will refresh it. Leave existing
+				// Source alone if it's already populated.
+				if p.marker.Source == nil {
+					p.marker.Source = owners.sourceFor(&p.skill)
+				}
 			}
 			autoResolved++
 			if verbose {
@@ -208,6 +214,7 @@ func runPull(cmd *cobra.Command, args []string) error {
 				Tool:        "claude-code",
 				OwnerKind:   ownerKind,
 				OwnerSlug:   ownerSlug,
+				Source:      owners.sourceFor(&p.skill),
 			}
 			autoResolved++
 			fmt.Printf("  %s %s %s\n", green("·"), p.skill.Name, dim("linked (bytes match server, no download)"))
@@ -279,6 +286,7 @@ func runPull(cmd *cobra.Command, args []string) error {
 				Tool:        "claude-code",
 				OwnerKind:   ownerKind,
 				OwnerSlug:   ownerSlug,
+				Source:      owners.sourceFor(&p.skill),
 			}
 
 			// Reconcile old dir
@@ -342,6 +350,7 @@ func runPull(cmd *cobra.Command, args []string) error {
 			Tool:        "claude-code",
 			OwnerKind:   ownerKind,
 			OwnerSlug:   ownerSlug,
+			Source:      owners.sourceFor(&p.skill),
 		}
 
 		if p.reason == "updated" {
@@ -606,9 +615,23 @@ func notifyResolvedSuggestions(client *apiClient, syncState *SyncState) {
 //   - untracked + no local: "new"
 func decidePullActions(remoteSkills []apiSkill, localSkills map[string]string, syncState *SyncState) ([]pullEntry, []string) {
 	skillIdToName := map[string]string{}
+	// Upstream skill IDs that are already represented by a local fork.
+	// After cli-org-member-suggest-via-shadow-fork.md, push may have
+	// forked an org-member skill into the caller's namespace and
+	// suggested; the local dir is now tracked to the fork (SkillID),
+	// not the upstream (Source.ID). The upstream still shows up in the
+	// caller's effective skillset listing — we want to skip it, not
+	// re-install it as a duplicate or flag it as "untracked-conflict"
+	// against the fork's bytes. The "upstream changed, want to
+	// incorporate?" UX is a separate ticket
+	// (cli-non-owned-skills-incorporate-upstream-changes.md).
+	forkedUpstreamIDs := map[string]bool{}
 	for name, entry := range syncState.Skills {
 		if entry.SkillID != "" {
 			skillIdToName[entry.SkillID] = name
+		}
+		if entry.Source != nil && entry.SkillID != "" && entry.SkillID != entry.Source.ID {
+			forkedUpstreamIDs[entry.Source.ID] = true
 		}
 	}
 
@@ -616,6 +639,9 @@ func decidePullActions(remoteSkills []apiSkill, localSkills map[string]string, s
 	var warnings []string
 
 	for _, remote := range remoteSkills {
+		if forkedUpstreamIDs[remote.Id.String()] {
+			continue
+		}
 		trackedName := ""
 		if name, ok := skillIdToName[remote.Id.String()]; ok {
 			trackedName = name

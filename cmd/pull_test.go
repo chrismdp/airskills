@@ -321,3 +321,56 @@ func TestPullAutoDetectSkipsTransferredSkills(t *testing.T) {
 		t.Errorf("expected 0 actions for Deleted skill, got %d: %+v", len(actions), actions)
 	}
 }
+
+// TestPullSkipsUpstreamOfLocalFork verifies the dedupe added in
+// cli-org-member-suggest-via-shadow-fork.md: once push has forked an
+// org-member skill into the caller's namespace and rewritten the marker,
+// the upstream still appears in the caller's effective skillset listing.
+// Pull should skip it — the fork is the canonical local install.
+// (Without this filter, pull would flag the upstream as
+// "untracked-conflict" because the local dir contains the fork's bytes,
+// not the upstream's.)
+func TestPullSkipsUpstreamOfLocalFork(t *testing.T) {
+	upstreamID := testUUID("upstream-id")
+	forkID := testUUID("fork-id")
+
+	state := &SyncState{Version: 1, Skills: map[string]*SyncEntry{
+		"shared-skill": {
+			SkillID:     forkID.String(),
+			Version:     "1.0.1",
+			ContentHash: "fork-hash",
+			Tool:        "claude-code",
+			OwnerKind:   "user",
+			OwnerSlug:   "callerslug",
+			Source: &skillSource{
+				Owner:       "upstream-org",
+				Slug:        "shared-skill",
+				ID:          upstreamID.String(),
+				ContentHash: "upstream-hash",
+			},
+		},
+	}}
+
+	dir := t.TempDir()
+	skillDir := filepath.Join(dir, "shared-skill")
+	os.MkdirAll(skillDir, 0755)
+	os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("forked body"), 0644)
+
+	remote := []apiSkill{
+		{Id: upstreamID, Name: "shared-skill", Version: "1.0.0", ContentHash: strPtr("upstream-hash")},
+		{Id: forkID, Name: "shared-skill", Version: "1.0.1", ContentHash: strPtr("fork-hash")},
+	}
+	local := map[string]string{"shared-skill": skillDir}
+
+	actions, _ := decidePullActions(remote, local, state)
+
+	// The upstream MUST be filtered out — no action for it. The fork is
+	// tracked and in sync with the marker, so its action is "no-op"
+	// (filtered out at the remoteHash == marker.ContentHash check).
+	for _, a := range actions {
+		if a.skill.Id == upstreamID {
+			t.Errorf("upstream (id=%s) should have been filtered, got action %q",
+				upstreamID, a.reason)
+		}
+	}
+}

@@ -745,3 +745,236 @@ func TestPushRejectsUnknownSkill(t *testing.T) {
 		t.Errorf("error %q should name the unknown skill", err.Error())
 	}
 }
+
+// TestPushShadowForksOnOrgMemberEdit verifies the fork-then-suggest flow
+// added in cli-org-member-suggest-via-shadow-fork.md.
+//
+// Setup: caller has a marker for an org-member skill whose marker.SkillID
+// equals marker.Source.ID (the org's skill — pulled into the local dir
+// via the org default skillset). User edits the file. Push detects the
+// shadow-fork condition: creates a personal fork via POST /api/v1/skills
+// with forked_from=upstream, uploads the local content to the fork, and
+// submits a suggestion against the upstream.
+//
+// Asserts the right API calls are made AND the marker is rewritten to
+// point at the new fork with Source still pointing at upstream.
+func TestPushShadowForksOnOrgMemberEdit(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	oldIsTTY := isTTY
+	isTTY = false // headless — auto-proceed without prompting
+	t.Cleanup(func() { isTTY = oldIsTTY })
+
+	upstreamID := "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa01"
+	forkID := "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa02"
+	suggestionID := "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa03"
+
+	skillDir := filepath.Join(home, ".claude", "skills", "shared-skill")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	editedBody := []byte("---\nname: shared-skill\ndescription: test\n---\n\nedited body\n")
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), editedBody, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	state := &SyncState{Version: 1, Skills: map[string]*SyncEntry{
+		"shared-skill": {
+			SkillID:     upstreamID, // tracking upstream directly — shadow-fork condition
+			Version:     "1.0.0",
+			ContentHash: "upstream-baseline-hash", // differs from edited bytes
+			Tool:        "claude-code",
+			OwnerKind:   "org",
+			OwnerSlug:   "upstream-org",
+			Source: &skillSource{
+				Owner:       "upstream-org",
+				Slug:        "shared-skill",
+				ID:          upstreamID,
+				ContentHash: "upstream-baseline-hash",
+			},
+		},
+	}}
+	if err := saveSyncState(state); err != nil {
+		t.Fatal(err)
+	}
+
+	var createSkillCalls, archiveCalls, suggestionCalls int
+	var lastForkedFrom, lastSuggesterID, lastOwnerSkillID, lastBaseHash string
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/skills":
+			// Upstream skill IS in the caller's effective set (org-membership).
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{"skills":[{"id":%q,"name":"shared-skill","slug":"shared-skill","version":"1.0.0","content_hash":"upstream-baseline-hash","tool_formats":["claude-code"],"visibility":"private","dependency_count":0,"org_id":"00000000-0000-0000-0000-000000000001"}]}`, upstreamID)
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/me":
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `{"id":"00000000-0000-0000-0000-000000000099","username":"callerslug"}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/skills":
+			createSkillCalls++
+			var body map[string]interface{}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			if ff, ok := body["forked_from"].(string); ok {
+				lastForkedFrom = ff
+			}
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{"id":%q,"name":"shared-skill","slug":"shared-skill","version":"1.0.1","content_hash":""}`, forkID)
+		case r.Method == http.MethodPut && r.URL.Path == "/api/v1/skills/"+forkID+"/archive":
+			archiveCalls++
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{"id":%q,"version":"1.0.2","content_hash":"new-fork-hash"}`, forkID)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/suggestions":
+			suggestionCalls++
+			var body map[string]interface{}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			if v, ok := body["suggester_skill_id"].(string); ok {
+				lastSuggesterID = v
+			}
+			if v, ok := body["owner_skill_id"].(string); ok {
+				lastOwnerSkillID = v
+			}
+			if v, ok := body["base_content_hash"].(string); ok {
+				lastBaseHash = v
+			}
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{"id":%q,"status":"pending"}`, suggestionID)
+		default:
+			t.Logf("unexpected request: %s %s", r.Method, r.URL.String())
+			http.Error(w, "not handled", 404)
+		}
+	}))
+	defer srv.Close()
+
+	writeTestConfigAndToken(t, home, srv.URL)
+
+	cmd := &cobra.Command{Use: "push"}
+	_ = captureStdout(t, func() {
+		if err := pushCmd.RunE(cmd, nil); err != nil {
+			t.Fatalf("push: %v", err)
+		}
+	})
+
+	if createSkillCalls != 1 {
+		t.Errorf("createSkill called %d times, want 1", createSkillCalls)
+	}
+	if lastForkedFrom != upstreamID {
+		t.Errorf("createSkill forked_from = %q, want %q", lastForkedFrom, upstreamID)
+	}
+	if archiveCalls != 1 {
+		t.Errorf("putArchive called %d times against fork, want 1", archiveCalls)
+	}
+	if suggestionCalls != 1 {
+		t.Errorf("createSuggestion called %d times, want 1", suggestionCalls)
+	}
+	if lastSuggesterID != forkID {
+		t.Errorf("suggester_skill_id = %q, want fork %q", lastSuggesterID, forkID)
+	}
+	if lastOwnerSkillID != upstreamID {
+		t.Errorf("owner_skill_id = %q, want upstream %q", lastOwnerSkillID, upstreamID)
+	}
+	if lastBaseHash != "upstream-baseline-hash" {
+		t.Errorf("base_content_hash = %q, want %q", lastBaseHash, "upstream-baseline-hash")
+	}
+
+	final := loadSyncState()
+	entry := final.Skills["shared-skill"]
+	if entry == nil {
+		t.Fatal("marker missing after push")
+	}
+	if entry.SkillID != forkID {
+		t.Errorf("marker SkillID = %q, want fork %q", entry.SkillID, forkID)
+	}
+	if entry.OwnerSlug != "callerslug" {
+		t.Errorf("marker OwnerSlug = %q, want callerslug", entry.OwnerSlug)
+	}
+	if entry.OwnerKind != "user" {
+		t.Errorf("marker OwnerKind = %q, want user", entry.OwnerKind)
+	}
+	if entry.SuggestionID != suggestionID {
+		t.Errorf("marker SuggestionID = %q, want %q", entry.SuggestionID, suggestionID)
+	}
+	if entry.Source == nil || entry.Source.ID != upstreamID {
+		t.Errorf("marker Source should still point at upstream, got %+v", entry.Source)
+	}
+}
+
+// TestPushShadowForkUnchangedDoesNothing verifies that when a marker is in
+// shadow-fork shape (SkillID == Source.ID) but the local content matches
+// the marker's baseline hash, push does NOT fire a fork — there's no
+// edit to suggest.
+func TestPushShadowForkUnchangedDoesNothing(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	oldIsTTY := isTTY
+	isTTY = false
+	t.Cleanup(func() { isTTY = oldIsTTY })
+
+	upstreamID := "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa01"
+
+	skillDir := filepath.Join(home, ".claude", "skills", "shared-skill")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := []byte("---\nname: shared-skill\ndescription: test\n---\n\nbody\n")
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	matchingHash := computeMerkleHash(readSkillFiles(skillDir))
+
+	state := &SyncState{Version: 1, Skills: map[string]*SyncEntry{
+		"shared-skill": {
+			SkillID:     upstreamID,
+			Version:     "1.0.0",
+			ContentHash: matchingHash, // matches local — no edit
+			Tool:        "claude-code",
+			OwnerKind:   "org",
+			OwnerSlug:   "upstream-org",
+			Source: &skillSource{
+				Owner: "upstream-org", Slug: "shared-skill",
+				ID: upstreamID, ContentHash: matchingHash,
+			},
+		},
+	}}
+	if err := saveSyncState(state); err != nil {
+		t.Fatal(err)
+	}
+
+	var createCalls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/skills":
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{"skills":[{"id":%q,"name":"shared-skill","slug":"shared-skill","version":"1.0.0","content_hash":%q,"tool_formats":["claude-code"],"visibility":"private","dependency_count":0,"org_id":"00000000-0000-0000-0000-000000000001"}]}`, upstreamID, matchingHash)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/skills":
+			createCalls++
+			w.WriteHeader(http.StatusInternalServerError)
+		default:
+			http.Error(w, "not handled", 404)
+		}
+	}))
+	defer srv.Close()
+
+	writeTestConfigAndToken(t, home, srv.URL)
+
+	cmd := &cobra.Command{Use: "push"}
+	_ = captureStdout(t, func() {
+		if err := pushCmd.RunE(cmd, nil); err != nil {
+			t.Fatalf("push: %v", err)
+		}
+	})
+
+	if createCalls != 0 {
+		t.Errorf("no-edit push fired %d createSkill calls (want 0) — shadow-fork triggered on clean content", createCalls)
+	}
+
+	final := loadSyncState()
+	entry := final.Skills["shared-skill"]
+	if entry.SkillID != upstreamID {
+		t.Errorf("marker SkillID changed to %q (expected unchanged %q)", entry.SkillID, upstreamID)
+	}
+	if entry.SuggestionID != "" {
+		t.Errorf("marker has SuggestionID %q — no suggestion should have been created", entry.SuggestionID)
+	}
+}
