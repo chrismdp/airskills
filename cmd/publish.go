@@ -24,7 +24,8 @@ var publishCmd = &cobra.Command{
 			return err
 		}
 
-		// Find the skill by name
+		// Ownership query: publish only applies to skills in the caller's
+		// personal namespace, not org-distributed effective-set skills.
 		skills, err := client.listSkills("personal")
 		if err != nil {
 			return fmt.Errorf("fetching skills: %w", err)

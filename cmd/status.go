@@ -44,7 +44,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	suggCh := make(chan int, 1)
 
 	go func() {
-		skills, err := client.listSkills("personal")
+		skills, _, err := client.listPersonalSkillsInSkillset("")
 		skillsCh <- skillsResult{skills, err}
 	}()
 
@@ -264,9 +264,9 @@ func classifyForStatus(remoteSkills []apiSkill, localSkills map[string]string, s
 
 // printStatusGroup prints a detail block for one action category, e.g.
 //
-//	  to push (2):
-//	    my-skill
-//	    other-skill
+//	to push (2):
+//	  my-skill
+//	  other-skill
 //
 // Silent when names is empty — keeps the output compact for the common
 // "nothing in this bucket" case.

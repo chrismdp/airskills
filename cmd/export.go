@@ -57,7 +57,7 @@ func runExport(cmd *cobra.Command, args []string) error {
 	format, _ := cmd.Flags().GetString("format")
 	output, _ := cmd.Flags().GetString("output")
 
-	skills, err := client.listSkills("")
+	skills, _, err := client.listPersonalSkillsInSkillset("")
 	if err != nil {
 		return fmt.Errorf("fetching skills: %w", err)
 	}

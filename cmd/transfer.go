@@ -143,6 +143,8 @@ To restore the old slug, run 'airskills restore <old-slug>'.`,
 // and any org-owned skills they can see.
 func findSkillByName(c *apiClient, name string) (*apiSkill, error) {
 	for _, scope := range []string{"personal", "org"} {
+		// Ownership query: transfer source lookup must search skills the
+		// caller can move from their personal namespace or org ownership.
 		skills, err := c.listSkills(scope)
 		if err != nil {
 			return nil, fmt.Errorf("fetching %s skills: %w", scope, err)

@@ -27,7 +27,7 @@ var historyCmd = &cobra.Command{
 			return err
 		}
 
-		skills, err := client.listSkills("personal")
+		skills, _, err := client.listPersonalSkillsInSkillset("")
 		if err != nil {
 			return fmt.Errorf("fetching skills: %w", err)
 		}

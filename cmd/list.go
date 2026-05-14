@@ -57,10 +57,12 @@ Use --deleted to show soft-deleted skills.`,
 			return nil
 		}
 
+		var skills []apiSkill
 		if scope == "" {
-			scope = "personal"
+			skills, _, err = client.listPersonalSkillsInSkillset("")
+		} else {
+			skills, err = client.listSkills(scope)
 		}
-		skills, err := client.listSkills(scope)
 		if err != nil {
 			return fmt.Errorf("fetching skills: %w", err)
 		}
