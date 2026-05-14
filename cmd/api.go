@@ -237,6 +237,69 @@ func (c *apiClient) createSkillset(slug, name, description string) (*apitypes.Sk
 	return &ss, nil
 }
 
+// listOrgSkillsets fetches skillsets owned by an org namespace.
+func (c *apiClient) listOrgSkillsets(orgSlug string) ([]apitypes.SkillsetListItem, error) {
+	body, err := c.get("/api/v1/skillsets/" + url.PathEscape(orgSlug))
+	if err != nil {
+		return nil, err
+	}
+	var skillsets []apitypes.SkillsetListItem
+	if err := json.Unmarshal(body, &skillsets); err != nil {
+		return nil, err
+	}
+	return skillsets, nil
+}
+
+// createOrgSkillset creates a skillset owned by an org namespace.
+func (c *apiClient) createOrgSkillset(orgSlug, slug, name, description string) (*apitypes.Skillset, error) {
+	payload := map[string]string{
+		"slug":        slug,
+		"name":        name,
+		"description": description,
+	}
+	body, err := c.post("/api/v1/skillsets/"+url.PathEscape(orgSlug), payload)
+	if err != nil {
+		return nil, err
+	}
+	var ss apitypes.Skillset
+	if err := json.Unmarshal(body, &ss); err != nil {
+		return nil, err
+	}
+	return &ss, nil
+}
+
+func (c *apiClient) deleteOrgSkillset(orgSlug, skillsetSlug string) error {
+	return c.del("/api/v1/skillsets/" + url.PathEscape(orgSlug) + "/" + url.PathEscape(skillsetSlug))
+}
+
+func (c *apiClient) addSkillToOrgSkillset(orgSlug, skillsetSlug, skillOwner, skillSlug string) error {
+	path := fmt.Sprintf(
+		"/api/v1/skillsets/%s/%s/skills/%s/%s",
+		url.PathEscape(orgSlug),
+		url.PathEscape(skillsetSlug),
+		url.PathEscape(skillOwner),
+		url.PathEscape(skillSlug),
+	)
+	body, status, err := c.put(path, map[string]string{})
+	if err != nil {
+		return err
+	}
+	if status >= 400 {
+		return fmt.Errorf("API error (%d): %s", status, string(body))
+	}
+	return nil
+}
+
+func (c *apiClient) removeSkillFromOrgSkillset(orgSlug, skillsetSlug, skillOwner, skillSlug string) error {
+	return c.del(fmt.Sprintf(
+		"/api/v1/skillsets/%s/%s/skills/%s/%s",
+		url.PathEscape(orgSlug),
+		url.PathEscape(skillsetSlug),
+		url.PathEscape(skillOwner),
+		url.PathEscape(skillSlug),
+	))
+}
+
 // deletePersonalSkillset hits the owner-scoped DELETE route for the
 // caller's own skillsets. Owner slug = the caller's username (fetched
 // here to keep callers simple).

@@ -22,6 +22,8 @@ var orgCmd = &cobra.Command{
 
 Example:
   airskills org list                              # show every org you belong to
+  airskills org skillset list --org acme          # list org skillsets
+  airskills org skillset create core --org acme   # create an org skillset
   airskills org member skillsets alice            # list alice's skillsets
   airskills org member skillsets alice --set a,b  # replace alice's set
   airskills org member skillsets alice --add foo  # add one
@@ -394,6 +396,7 @@ func init() {
 	orgMemberSkillsetsCmd.Flags().StringVar(&orgMemberOrgFlag, "org", "", "Org slug to target (required if you belong to multiple orgs)")
 
 	orgMemberCmd.AddCommand(orgMemberSkillsetsCmd)
+	orgCmd.AddCommand(orgSkillsetCmd)
 	orgCmd.AddCommand(orgListCmd)
 	orgCmd.AddCommand(orgMemberCmd)
 	rootCmd.AddCommand(orgCmd)
