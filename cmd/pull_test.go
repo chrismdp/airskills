@@ -374,3 +374,105 @@ func TestPullSkipsUpstreamOfLocalFork(t *testing.T) {
 		}
 	}
 }
+
+func TestPullClassifiesCleanForkWhenUpstreamAdvanced(t *testing.T) {
+	upstreamID := testUUID("upstream-id")
+	forkID := testUUID("fork-id")
+
+	dir := t.TempDir()
+	skillDir := filepath.Join(dir, "shared-skill")
+	os.MkdirAll(skillDir, 0755)
+	body := []byte("fork body")
+	os.WriteFile(filepath.Join(skillDir, "SKILL.md"), body, 0644)
+	localHash := computeMerkleHash(readSkillFiles(skillDir))
+
+	state := &SyncState{Version: 1, Skills: map[string]*SyncEntry{
+		"shared-skill": {
+			SkillID:     forkID.String(),
+			Version:     "1.0.1",
+			ContentHash: localHash,
+			Tool:        "claude-code",
+			OwnerKind:   "user",
+			OwnerSlug:   "callerslug",
+			Source: &skillSource{
+				Owner:       "upstream-org",
+				Slug:        "shared-skill",
+				ID:          upstreamID.String(),
+				ContentHash: "upstream-old-hash",
+			},
+		},
+	}}
+
+	remote := []apiSkill{
+		{
+			Id: upstreamID, Name: "shared-skill", Version: "1.0.2",
+			ContentHash: strPtr("upstream-new-hash"),
+		},
+		{
+			Id: forkID, Name: "shared-skill", Version: "1.0.1",
+			ContentHash: strPtr(localHash), ForkedFrom: &upstreamID,
+			UpstreamContentHash: strPtr("upstream-new-hash"),
+		},
+	}
+
+	actions, _ := decidePullActions(remote, map[string]string{"shared-skill": skillDir}, state)
+	if len(actions) != 1 {
+		t.Fatalf("expected one upstream incorporate action, got %+v", actions)
+	}
+	if actions[0].reason != "upstream-updated" {
+		t.Fatalf("expected reason upstream-updated, got %q", actions[0].reason)
+	}
+	if actions[0].skill.Id != forkID {
+		t.Fatalf("expected action against fork so pull_upstream can advance it, got %s", actions[0].skill.Id)
+	}
+}
+
+func TestPullClassifiesEditedForkWhenUpstreamAdvanced(t *testing.T) {
+	upstreamID := testUUID("upstream-id")
+	forkID := testUUID("fork-id")
+
+	dir := t.TempDir()
+	skillDir := filepath.Join(dir, "shared-skill")
+	os.MkdirAll(skillDir, 0755)
+	os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("locally edited fork body"), 0644)
+
+	state := &SyncState{Version: 1, Skills: map[string]*SyncEntry{
+		"shared-skill": {
+			SkillID:     forkID.String(),
+			Version:     "1.0.1",
+			ContentHash: "fork-old-hash",
+			Tool:        "claude-code",
+			OwnerKind:   "user",
+			OwnerSlug:   "callerslug",
+			Source: &skillSource{
+				Owner:       "upstream-org",
+				Slug:        "shared-skill",
+				ID:          upstreamID.String(),
+				ContentHash: "upstream-old-hash",
+			},
+		},
+	}}
+
+	remote := []apiSkill{
+		{
+			Id: upstreamID, Name: "shared-skill", Version: "1.0.2",
+			ContentHash: strPtr("upstream-new-hash"),
+		},
+		{
+			Id: forkID, Name: "shared-skill", Version: "1.0.1",
+			ContentHash: strPtr("fork-old-hash"), ForkedFrom: &upstreamID,
+			UpstreamContentHash: strPtr("upstream-new-hash"),
+		},
+	}
+
+	actions, _ := decidePullActions(remote, map[string]string{"shared-skill": skillDir}, state)
+	if len(actions) != 1 {
+		t.Fatalf("expected one upstream-advanced action, got %+v", actions)
+	}
+	if actions[0].reason != "upstream-advanced" {
+		t.Fatalf("expected reason upstream-advanced, got %q", actions[0].reason)
+	}
+	if actions[0].skill.Id != forkID {
+		t.Fatalf("expected fork action, got %s", actions[0].skill.Id)
+	}
+}

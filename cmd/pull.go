@@ -63,6 +63,16 @@ type pullEntry struct {
 	marker   *SyncEntry
 }
 
+type incomingDetail struct {
+	name              string
+	localDir          string
+	upstreamOwner     string
+	upstreamSlug      string
+	upstreamHash      string
+	upstreamVersion   string
+	pendingSuggestion bool
+}
+
 func runPull(cmd *cobra.Command, args []string) error {
 	if pullForceFlag {
 		return runPullForce(cmd, args)
@@ -125,15 +135,6 @@ func runPull(cmd *cobra.Command, args []string) error {
 		fmt.Printf("  %s %s\n", dim("Skillset:"), resolvedSlug)
 	}
 
-	// Resolve upstream updates on forked skills before deciding actions.
-	for i := range remoteSkills {
-		if skillHasUpstreamUpdate(remoteSkills[i]) {
-			if updated, err := client.pullUpstream(remoteSkills[i].Id.String()); err == nil {
-				remoteSkills[i].ContentHash = updated.ContentHash
-				remoteSkills[i].Version = updated.Version
-			}
-		}
-	}
 	movedSourceNotices := collectMovedSourceNotices(client, syncState, remoteSkills)
 
 	owners := newOwnerResolver(client)
@@ -171,9 +172,10 @@ func runPull(cmd *cobra.Command, args []string) error {
 		fmt.Printf("  %s %d skills\n", dim("·"), len(lines))
 	}
 
-	var pulled, updated, diverged, failed, autoResolved int
+	var pulled, updated, diverged, failed, autoResolved, incoming int
 	var pulledNames []string
 	var divergedDetails []conflictDetail
+	var incomingDetails []incomingDetail
 	var updateDetails []updateDetail
 
 	// Unique conflict dir per sync run
@@ -185,6 +187,7 @@ func runPull(cmd *cobra.Command, args []string) error {
 			if p.marker != nil {
 				p.marker.ContentHash = strDeref(p.skill.ContentHash)
 				p.marker.Version = p.skill.Version
+				markSourceUpstreamIncorporated(p.marker, p.skill)
 				// Backfill Source for non-owned markers written by pre-fix
 				// CLI versions: the next pull will refresh it. Leave existing
 				// Source alone if it's already populated.
@@ -197,6 +200,23 @@ func runPull(cmd *cobra.Command, args []string) error {
 				fmt.Printf("  %s %s  %s\n", dim("-"), p.skill.Name, dim("auto-resolved (bytes match)"))
 			}
 			lines[i].status = "done"
+			lines[i].pct = 1
+			renderProgress(lines)
+			continue
+		}
+
+		if p.reason == "upstream-advanced" {
+			incoming++
+			incomingDetails = append(incomingDetails, incomingDetail{
+				name:              p.skill.Name,
+				localDir:          p.localDir,
+				upstreamOwner:     p.marker.Source.Owner,
+				upstreamSlug:      p.marker.Source.Slug,
+				upstreamHash:      currentUpstreamHash(p.marker, p.skill),
+				upstreamVersion:   p.skill.Version,
+				pendingSuggestion: p.marker.SuggestionID != "",
+			})
+			lines[i].status = "incoming"
 			lines[i].pct = 1
 			renderProgress(lines)
 			continue
@@ -228,6 +248,17 @@ func runPull(cmd *cobra.Command, args []string) error {
 		lines[i].status = "downloading"
 		lines[i].pct = 0.5
 		renderProgress(lines)
+
+		if p.reason == "upstream-updated" && p.marker != nil && p.marker.Source != nil && p.skill.Id.String() != p.marker.Source.ID {
+			if advanced, err := client.pullUpstream(p.skill.Id.String()); err == nil {
+				p.skill = *advanced
+			} else {
+				lines[i].status = "failed"
+				renderProgress(lines)
+				failed++
+				continue
+			}
+		}
 
 		files, err := downloadSkillFiles(client, p.skill.Id.String())
 		if err != nil || len(files) == 0 {
@@ -353,8 +384,12 @@ func runPull(cmd *cobra.Command, args []string) error {
 			OwnerSlug:   ownerSlug,
 			Source:      owners.sourceFor(&p.skill),
 		}
+		if p.reason == "upstream-updated" && p.marker != nil && p.marker.Source != nil {
+			syncState.Skills[dirName].Source = p.marker.Source
+			markSourceUpstreamIncorporated(syncState.Skills[dirName], p.skill)
+		}
 
-		if p.reason == "updated" {
+		if p.reason == "updated" || p.reason == "upstream-updated" {
 			// Collect update info for summary
 			oldVersion := ""
 			if p.marker != nil {
@@ -364,6 +399,9 @@ func runPull(cmd *cobra.Command, args []string) error {
 				name:       p.skill.Name,
 				oldVersion: oldVersion,
 				newVersion: p.skill.Version,
+			}
+			if p.reason == "upstream-updated" {
+				detail.messages = append(detail.messages, "incorporated upstream changes")
 			}
 
 			// Fetch commit messages since last known version
@@ -400,7 +438,7 @@ func runPull(cmd *cobra.Command, args []string) error {
 			fmt.Printf("  %s %s %s → %s\n", cyan("↓"), u.name, u.oldVersion, u.newVersion)
 		}
 	}
-	fmt.Printf("\n%d pulled, %d updated, %d diverged, %d auto-resolved, %d failed", pulled, updated, diverged, autoResolved, failed)
+	fmt.Printf("\n%d pulled, %d updated, %d incoming, %d diverged, %d auto-resolved, %d failed", pulled, updated, incoming, diverged, autoResolved, failed)
 	if len(missingWarnings) > 0 {
 		fmt.Printf(", %d missing locally", len(missingWarnings))
 	}
@@ -433,6 +471,24 @@ func runPull(cmd *cobra.Command, args []string) error {
 			})
 		}
 		fmt.Print(conflictResolutionMessage(entries, !isTTY))
+	}
+	if len(incomingDetails) > 0 {
+		fmt.Println("\n--- Incoming upstream changes ---")
+		for _, d := range incomingDetails {
+			source := d.upstreamOwner + "/" + d.upstreamSlug
+			if d.upstreamOwner == "" {
+				source = d.upstreamSlug
+			}
+			fmt.Printf("  %s %s: upstream changes available from %s\n", yellow("!"), d.name, source)
+			fmt.Printf("     Your version: %s\n", d.localDir)
+			if d.upstreamVersion != "" {
+				fmt.Printf("     Upstream: %s @ %s (%s)\n", source, d.upstreamVersion, shortHash(d.upstreamHash))
+			}
+			if d.pendingSuggestion {
+				fmt.Println("     Pending suggestion may need rebasing before the owner can accept it.")
+			}
+			fmt.Printf("     Review with: airskills incoming %s\n", d.name)
+		}
 	}
 
 	notifyResolvedSuggestions(client, syncState)
@@ -603,6 +659,62 @@ func notifyResolvedSuggestions(client *apiClient, syncState *SyncState) {
 	}
 }
 
+func sourceBaselineHash(source *skillSource) string {
+	if source == nil {
+		return ""
+	}
+	if source.UpstreamContentHash != "" {
+		return source.UpstreamContentHash
+	}
+	return source.ContentHash
+}
+
+func sourceUpstreamID(source *skillSource) string {
+	if source == nil {
+		return ""
+	}
+	if source.UpstreamSkillID != "" {
+		return source.UpstreamSkillID
+	}
+	return source.ID
+}
+
+func currentUpstreamHash(marker *SyncEntry, remote apiSkill) string {
+	if marker == nil || marker.Source == nil {
+		return ""
+	}
+	if remote.UpstreamContentHash != nil && *remote.UpstreamContentHash != "" {
+		return *remote.UpstreamContentHash
+	}
+	if remote.Id.String() == sourceUpstreamID(marker.Source) {
+		return strDeref(remote.ContentHash)
+	}
+	return ""
+}
+
+func upstreamAdvanced(marker *SyncEntry, remote apiSkill) bool {
+	baseline := sourceBaselineHash(marker.Source)
+	current := currentUpstreamHash(marker, remote)
+	return baseline != "" && current != "" && baseline != current
+}
+
+func markSourceUpstreamIncorporated(marker *SyncEntry, remote apiSkill) {
+	if marker == nil || marker.Source == nil {
+		return
+	}
+	hash := currentUpstreamHash(marker, remote)
+	if hash == "" {
+		hash = strDeref(remote.ContentHash)
+	}
+	marker.Source.UpstreamSkillID = sourceUpstreamID(marker.Source)
+	if marker.Source.UpstreamSkillID == "" {
+		marker.Source.UpstreamSkillID = remote.Id.String()
+	}
+	marker.Source.UpstreamContentHash = hash
+	marker.Source.UpstreamVersion = remote.Version
+	marker.Source.ContentHash = hash
+}
+
 // decidePullActions inspects remote, local, and sync state to decide which
 // remote skills to download. It is the pure decision core of runPull, with
 // no network calls. The hashLocal helper reads disk for divergence checks.
@@ -644,12 +756,12 @@ func decidePullActions(remoteSkills []apiSkill, localSkills map[string]string, s
 	var warnings []string
 
 	for _, remote := range remoteSkills {
-		if forkedUpstreamIDs[remote.Id.String()] {
-			continue
-		}
 		trackedName := ""
 		if name, ok := skillIdToName[remote.Id.String()]; ok {
 			trackedName = name
+		}
+		if forkedUpstreamIDs[remote.Id.String()] && trackedName == "" {
+			continue
 		}
 
 		if trackedName != "" {
@@ -675,6 +787,16 @@ func decidePullActions(remoteSkills []apiSkill, localSkills map[string]string, s
 			}
 
 			marker := syncState.Skills[trackedName]
+			if marker.Source != nil && upstreamAdvanced(marker, remote) {
+				localFiles := readSkillFiles(localDir)
+				localHash := computeMerkleHash(localFiles)
+				reason := "upstream-advanced"
+				if localHash == marker.ContentHash {
+					reason = "upstream-updated"
+				}
+				actions = append(actions, pullEntry{skill: remote, reason: reason, localDir: localDir, marker: marker})
+				continue
+			}
 			remoteHash := strDeref(remote.ContentHash)
 			if remoteHash == "" || marker.ContentHash == "" || remoteHash == marker.ContentHash {
 				continue

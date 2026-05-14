@@ -19,13 +19,16 @@ import (
 )
 
 type skillSource struct {
-	Owner        string `json:"owner"`                   // username of the original author
-	Slug         string `json:"slug"`                    // original skill slug
-	ID           string `json:"id"`                      // original skill ID from the server
-	ContentHash  string `json:"content_hash,omitempty"`  // sha256 of original content at add time
-	SkillsetSlug string `json:"skillset_slug,omitempty"` // org skillset slug (non-empty for org-distributed skills)
-	GitHubURL    string `json:"github_url,omitempty"`    // GitHub repo URL (for skills imported from GitHub)
-	GitHubSkill  string `json:"github_skill,omitempty"`  // skill subdirectory within the GitHub repo (for multi-skill repos)
+	Owner               string `json:"owner"`                           // username of the original author
+	Slug                string `json:"slug"`                            // original skill slug
+	ID                  string `json:"id"`                              // original skill ID from the server
+	ContentHash         string `json:"content_hash,omitempty"`          // legacy upstream hash at add/sync time
+	UpstreamSkillID     string `json:"upstream_skill_id,omitempty"`     // upstream skill ID, explicit alias for ID
+	UpstreamContentHash string `json:"upstream_content_hash,omitempty"` // upstream hash last incorporated
+	UpstreamVersion     string `json:"upstream_version,omitempty"`      // display-only upstream version last seen
+	SkillsetSlug        string `json:"skillset_slug,omitempty"`         // org skillset slug (non-empty for org-distributed skills)
+	GitHubURL           string `json:"github_url,omitempty"`            // GitHub repo URL (for skills imported from GitHub)
+	GitHubSkill         string `json:"github_skill,omitempty"`          // skill subdirectory within the GitHub repo (for multi-skill repos)
 }
 
 type conflictInfo struct {
@@ -67,6 +70,7 @@ type pendingShadowFork struct {
 
 var pushForce bool
 var pushOrg string
+var pushForceSuggest bool
 
 var pushCmd = &cobra.Command{
 	Use:   "push [skill...]",
@@ -233,9 +237,11 @@ caller asked about something else.`,
 			}
 		}
 		remoteByName := map[string]*apiSkill{}
+		remoteByID := map[string]*apiSkill{}
 		effectiveSkillIDs := map[string]bool{}
 		for i := range remoteSkills {
 			remoteByName[remoteSkills[i].Name] = &remoteSkills[i]
+			remoteByID[remoteSkills[i].Id.String()] = &remoteSkills[i]
 			effectiveSkillIDs[remoteSkills[i].Id.String()] = true
 		}
 
@@ -458,6 +464,20 @@ caller asked about something else.`,
 					lines[i].pct = 1
 					renderProgress(lines)
 					return
+				}
+
+				if s.marker != nil && s.marker.Source != nil && !pushForceSuggest {
+					if remote := remoteForUpstreamCheck(s.marker, remoteByID); remote != nil && upstreamAdvanced(s.marker, *remote) {
+						mu.Lock()
+						warnings = append(warnings, fmt.Sprintf(
+							"%s: upstream changes available — run airskills incoming %s first, or use --force-suggest to submit anyway.",
+							s.name, s.name))
+						mu.Unlock()
+						lines[i].status = "incoming"
+						lines[i].pct = 1
+						renderProgress(lines)
+						return
+					}
 				}
 
 				// Shadow-fork detection: marker points at the upstream skill
@@ -1066,9 +1086,22 @@ func movedDestinationInEffectiveSet(a skippedAction, remoteSkills []apiSkill, or
 
 func init() {
 	pushCmd.Flags().BoolVar(&pushForce, "force", false, "Skip conflict check (use after resolving conflicts)")
+	pushCmd.Flags().BoolVar(&pushForceSuggest, "force-suggest", false, "Submit a suggestion even when upstream has changed")
 	pushCmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "Show per-skill progress")
 	pushCmd.Flags().StringVar(&pushOrg, "org", "", "Create new skills under this org (org admins only)")
 	rootCmd.AddCommand(pushCmd)
+}
+
+func remoteForUpstreamCheck(marker *SyncEntry, remoteByID map[string]*apiSkill) *apiSkill {
+	if marker == nil || marker.Source == nil {
+		return nil
+	}
+	if marker.SkillID != "" {
+		if remote := remoteByID[marker.SkillID]; remote != nil {
+			return remote
+		}
+	}
+	return remoteByID[sourceUpstreamID(marker.Source)]
 }
 
 func createTarGz(dir string) ([]byte, error) {

@@ -95,12 +95,12 @@ var addCmd = &cobra.Command{
 		}
 
 		var result struct {
-			Type         string          `json:"type"`
-			ID           string          `json:"id"`
-			Name         string          `json:"name"`
-			Slug         string          `json:"slug"`
-			Content      string          `json:"content"`
-			Version      string          `json:"version"`
+			Type         string                   `json:"type"`
+			ID           string                   `json:"id"`
+			Name         string                   `json:"name"`
+			Slug         string                   `json:"slug"`
+			Content      string                   `json:"content"`
+			Version      string                   `json:"version"`
 			CurrentOwner *apitypes.OwnerNamespace `json:"current_owner"`
 		}
 		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
@@ -167,10 +167,13 @@ var addCmd = &cobra.Command{
 					OwnerKind:   ownerKind,
 					OwnerSlug:   ownerSlug,
 					Source: &skillSource{
-						Owner:       username,
-						Slug:        slug,
-						ID:          result.ID,
-						ContentHash: computeMerkleHash(files),
+						Owner:               username,
+						Slug:                slug,
+						ID:                  result.ID,
+						ContentHash:         computeMerkleHash(files),
+						UpstreamSkillID:     result.ID,
+						UpstreamContentHash: computeMerkleHash(files),
+						UpstreamVersion:     result.Version,
 					},
 				}
 				saveSyncState(syncState)
@@ -230,7 +233,7 @@ var addCmd = &cobra.Command{
 		home, _ := os.UserHomeDir()
 		primaryDir := filepath.Join(home, ".claude", "skills", dirName)
 		os.MkdirAll(primaryDir, 0755)
-		originalContent, _ := os.ReadFile(filepath.Join(primaryDir, "SKILL.md"))
+		upstreamHash := computeMerkleHash(files)
 
 		entry := &SyncEntry{
 			Version:   result.Version,
@@ -238,10 +241,13 @@ var addCmd = &cobra.Command{
 			OwnerKind: ownerKind,
 			OwnerSlug: ownerSlug,
 			Source: &skillSource{
-				Owner:       username,
-				Slug:        slug,
-				ID:          result.ID,
-				ContentHash: sha256Hex(originalContent),
+				Owner:               username,
+				Slug:                slug,
+				ID:                  result.ID,
+				ContentHash:         upstreamHash,
+				UpstreamSkillID:     result.ID,
+				UpstreamContentHash: upstreamHash,
+				UpstreamVersion:     result.Version,
 			},
 		}
 

@@ -82,17 +82,31 @@ func (r *ownerResolver) sourceFor(skill *apiSkill) *skillSource {
 		return nil
 	}
 	r.initOnce.Do(r.init)
-	if skill.OwnerId != nil && r.userID != "" && skill.OwnerId.String() == r.userID {
+	if skill.OwnerId != nil && r.userID != "" && skill.OwnerId.String() == r.userID && skill.ForkedFrom == nil {
 		return nil // caller owns the skill — no Source
+	}
+	if skill.ForkedFrom != nil {
+		upstreamHash := strDeref(skill.UpstreamContentHash)
+		return &skillSource{
+			Slug:                skill.Slug,
+			ID:                  skill.ForkedFrom.String(),
+			ContentHash:         upstreamHash,
+			UpstreamSkillID:     skill.ForkedFrom.String(),
+			UpstreamContentHash: upstreamHash,
+			UpstreamVersion:     skill.Version,
+		}
 	}
 	var owner string
 	if skill.OrgId != nil {
 		owner = r.orgsByID[skill.OrgId.String()]
 	}
 	return &skillSource{
-		Owner:       owner,
-		Slug:        skill.Slug,
-		ID:          skill.Id.String(),
-		ContentHash: strDeref(skill.ContentHash),
+		Owner:               owner,
+		Slug:                skill.Slug,
+		ID:                  skill.Id.String(),
+		ContentHash:         strDeref(skill.ContentHash),
+		UpstreamSkillID:     skill.Id.String(),
+		UpstreamContentHash: strDeref(skill.ContentHash),
+		UpstreamVersion:     skill.Version,
 	}
 }

@@ -1066,3 +1066,81 @@ func TestPushShadowForkUnchangedDoesNothing(t *testing.T) {
 		t.Errorf("marker has SuggestionID %q — no suggestion should have been created", entry.SuggestionID)
 	}
 }
+
+func TestPushBlocksSuggestionWhenUpstreamAdvanced(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	oldIsTTY := isTTY
+	isTTY = false
+	t.Cleanup(func() { isTTY = oldIsTTY })
+
+	upstreamID := "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa01"
+	forkID := "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa02"
+
+	skillDir := filepath.Join(home, ".claude", "skills", "shared-skill")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("locally edited\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	state := &SyncState{Version: 1, Skills: map[string]*SyncEntry{
+		"shared-skill": {
+			SkillID:     forkID,
+			Version:     "1.0.1",
+			ContentHash: "fork-old-hash",
+			Tool:        "claude-code",
+			OwnerKind:   "user",
+			OwnerSlug:   "callerslug",
+			Source: &skillSource{
+				Owner:       "upstream-org",
+				Slug:        "shared-skill",
+				ID:          upstreamID,
+				ContentHash: "upstream-old-hash",
+			},
+		},
+	}}
+	if err := saveSyncState(state); err != nil {
+		t.Fatal(err)
+	}
+
+	var archiveCalls, suggestionCalls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/skills":
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{"skills":[{"id":%q,"name":"shared-skill","slug":"shared-skill","version":"1.0.1","content_hash":"fork-old-hash","tool_formats":["claude-code"],"visibility":"private","dependency_count":0,"forked_from":%q,"upstream_content_hash":"upstream-new-hash"}]}`, forkID, upstreamID)
+		case r.Method == http.MethodPut && r.URL.Path == "/api/v1/skills/"+forkID+"/archive":
+			archiveCalls++
+			w.WriteHeader(http.StatusInternalServerError)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/suggestions":
+			suggestionCalls++
+			w.WriteHeader(http.StatusInternalServerError)
+		default:
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `[]`)
+		}
+	}))
+	defer srv.Close()
+
+	writeTestConfigAndToken(t, home, srv.URL)
+
+	cmd := &cobra.Command{Use: "push"}
+	out := captureStdout(t, func() {
+		if err := pushCmd.RunE(cmd, nil); err != nil {
+			t.Fatalf("push: %v", err)
+		}
+	})
+
+	if archiveCalls != 0 {
+		t.Fatalf("archive upload called %d times; stale push should be blocked", archiveCalls)
+	}
+	if suggestionCalls != 0 {
+		t.Fatalf("suggestion called %d times; stale suggestion should be blocked", suggestionCalls)
+	}
+	if !strings.Contains(out, "airskills incoming shared-skill") {
+		t.Fatalf("expected incoming hint, got:\n%s", out)
+	}
+}
