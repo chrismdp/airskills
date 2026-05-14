@@ -36,7 +36,7 @@ divergence and decided the remote copy is the truth. The mirror flag is
 'push --force', which means "my local wins, take it as-is". Both flags
 express the same intent — "I'm about to overwrite the other side, do it
 anyway" — pointed in opposite directions.`,
-	RunE:  runPull,
+	RunE: runPull,
 }
 
 type conflictDetail struct {
@@ -134,6 +134,7 @@ func runPull(cmd *cobra.Command, args []string) error {
 			}
 		}
 	}
+	movedSourceNotices := collectMovedSourceNotices(client, syncState, remoteSkills)
 
 	owners := newOwnerResolver(client)
 
@@ -410,6 +411,10 @@ func runPull(cmd *cobra.Command, args []string) error {
 		for _, w := range missingWarnings {
 			fmt.Printf("  %s %s\n", yellow("!"), w)
 		}
+	}
+	if len(movedSourceNotices) > 0 {
+		fmt.Println("\n--- Transferred upstreams ---")
+		printMovedSourceNotices(movedSourceNotices)
 	}
 
 	if len(divergedDetails) > 0 {

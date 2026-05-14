@@ -1099,6 +1099,51 @@
           "bundle_skills"
         ]
       },
+      "ResolveTransferredResponse": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string",
+            "enum": [
+              "skill transferred"
+            ]
+          },
+          "moved_to": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "org"
+                ]
+              },
+              "slug": {
+                "type": "string",
+                "description": "Destination owner username or org slug."
+              },
+              "skill_slug": {
+                "type": "string",
+                "description": "Destination skill slug."
+              },
+              "skill_id": {
+                "type": "string",
+                "format": "uuid"
+              }
+            },
+            "required": [
+              "kind",
+              "slug",
+              "skill_slug",
+              "skill_id"
+            ],
+            "description": "Present only when the caller has RLS access to the transferred destination."
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
       "SkillsetListItem": {
         "allOf": [
           {
@@ -3150,6 +3195,16 @@
           },
           "404": {
             "description": "Username/org not found, or no skill/bundle at that slug."
+          },
+          "410": {
+            "description": "Skill was transferred; destination included only when readable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResolveTransferredResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -3282,6 +3337,138 @@
         }
       }
     },
+    "/api/v1/skillsets/{owner}": {
+      "get": {
+        "summary": "List skillsets by owner",
+        "description": "Lists skillsets owned by a user or org namespace. Org members can read org-owned skillsets; org admins and owners can create them.",
+        "tags": [
+          "skillsets"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Username or org slug — they share a namespace."
+            },
+            "required": true,
+            "description": "Username or org slug — they share a namespace.",
+            "name": "owner",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Skillsets with skill counts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SkillsetListItem"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "404": {
+            "description": "Owner not found, or caller is not a member."
+          }
+        }
+      },
+      "post": {
+        "summary": "Create a skillset by owner",
+        "description": "Creates a skillset in a user or org namespace. User owners can create personal skillsets; org admins and owners can create org skillsets.",
+        "tags": [
+          "skillsets"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Username or org slug — they share a namespace."
+            },
+            "required": true,
+            "description": "Username or org slug — they share a namespace.",
+            "name": "owner",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  },
+                  "slug": {
+                    "type": "string",
+                    "maxLength": 128
+                  },
+                  "description": {
+                    "type": "string",
+                    "maxLength": 2048
+                  },
+                  "set_default": {
+                    "type": "boolean"
+                  },
+                  "auto_absorb": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "name"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Skillset"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed or invalid slug."
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "403": {
+            "description": "Caller cannot manage this owner namespace."
+          },
+          "404": {
+            "description": "Owner not found."
+          },
+          "409": {
+            "description": "Slug already exists in this namespace."
+          }
+        }
+      }
+    },
     "/api/v1/skillsets/{owner}/{slug}": {
       "get": {
         "summary": "Get a skillset by owner/slug",
@@ -3372,6 +3559,11 @@
                 "type": "object",
                 "properties": {
                   "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  },
+                  "slug": {
                     "type": "string",
                     "minLength": 1,
                     "maxLength": 128

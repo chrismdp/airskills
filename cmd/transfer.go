@@ -27,8 +27,9 @@ Examples:
 
 Transfer is a deliberate, consumer-visible move — soft-delete + create.
 The old <old-owner>/<slug> is archived; requests to it return 410 Gone
-(no redirect). Anyone who installed the skill via 'airskills add' sees
-"upstream archived" on their next pull and keeps their local copy.
+(no redirect). Consumers with access see the new location and can choose
+whether to follow it; consumers without access see "upstream archived"
+and keep their local copy.
 
 To restore the old slug, run 'airskills restore <old-slug>'.`,
 	Args: cobra.ExactArgs(1),
@@ -79,8 +80,10 @@ To restore the old slug, run 'airskills restore <old-slug>'.`,
 			} else {
 				fmt.Printf("  Move to:   your personal namespace\n")
 			}
-			fmt.Printf("\n  Old links keep working via a redirect, but the canonical URL\n")
-			fmt.Printf("  changes.\n\n")
+			fmt.Printf("\n  This is a permanent move: the old URL returns 410 Gone.\n")
+			fmt.Printf("  Consumers with access will be shown the new location and\n")
+			fmt.Printf("  can choose whether to follow it; consumers without access\n")
+			fmt.Printf("  see \"upstream archived\" and keep their local copy.\n\n")
 			fmt.Print("  Continue? [y/N] ")
 
 			reader := bufio.NewReader(os.Stdin)

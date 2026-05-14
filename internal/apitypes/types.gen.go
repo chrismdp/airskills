@@ -246,6 +246,39 @@ func (e RefResolveResultStatus) Valid() bool {
 	}
 }
 
+// Defines values for ResolveTransferredResponseError.
+const (
+	SkillTransferred ResolveTransferredResponseError = "skill transferred"
+)
+
+// Valid indicates whether the value is a known member of the ResolveTransferredResponseError enum.
+func (e ResolveTransferredResponseError) Valid() bool {
+	switch e {
+	case SkillTransferred:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ResolveTransferredResponseMovedToKind.
+const (
+	ResolveTransferredResponseMovedToKindOrg  ResolveTransferredResponseMovedToKind = "org"
+	ResolveTransferredResponseMovedToKindUser ResolveTransferredResponseMovedToKind = "user"
+)
+
+// Valid indicates whether the value is a known member of the ResolveTransferredResponseMovedToKind enum.
+func (e ResolveTransferredResponseMovedToKind) Valid() bool {
+	switch e {
+	case ResolveTransferredResponseMovedToKindOrg:
+		return true
+	case ResolveTransferredResponseMovedToKindUser:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ResolvedBundleResponseType.
 const (
 	Bundle ResolvedBundleResponseType = "bundle"
@@ -961,6 +994,29 @@ type RefreshTokenRequest struct {
 	RefreshToken string `json:"refresh_token"`
 }
 
+// ResolveTransferredResponse defines model for ResolveTransferredResponse.
+type ResolveTransferredResponse struct {
+	Error ResolveTransferredResponseError `json:"error"`
+
+	// MovedTo Present only when the caller has RLS access to the transferred destination.
+	MovedTo *struct {
+		Kind    ResolveTransferredResponseMovedToKind `json:"kind"`
+		SkillId openapi_types.UUID                    `json:"skill_id"`
+
+		// SkillSlug Destination skill slug.
+		SkillSlug string `json:"skill_slug"`
+
+		// Slug Destination owner username or org slug.
+		Slug string `json:"slug"`
+	} `json:"moved_to,omitempty"`
+}
+
+// ResolveTransferredResponseError defines model for ResolveTransferredResponse.Error.
+type ResolveTransferredResponseError string
+
+// ResolveTransferredResponseMovedToKind defines model for ResolveTransferredResponse.MovedTo.Kind.
+type ResolveTransferredResponseMovedToKind string
+
 // ResolvedBundleResponse defines model for ResolvedBundleResponse.
 type ResolvedBundleResponse struct {
 	// BundleSkills Joined skill rows; deprecated — bundles are being phased out for skillsets.
@@ -1575,12 +1631,22 @@ type PostApiV1SkillsetsJSONBody struct {
 	Slug        *string `json:"slug,omitempty"`
 }
 
+// PostApiV1SkillsetsOwnerJSONBody defines parameters for PostApiV1SkillsetsOwner.
+type PostApiV1SkillsetsOwnerJSONBody struct {
+	AutoAbsorb  *bool   `json:"auto_absorb,omitempty"`
+	Description *string `json:"description,omitempty"`
+	Name        string  `json:"name"`
+	SetDefault  *bool   `json:"set_default,omitempty"`
+	Slug        *string `json:"slug,omitempty"`
+}
+
 // PatchApiV1SkillsetsOwnerSlugJSONBody defines parameters for PatchApiV1SkillsetsOwnerSlug.
 type PatchApiV1SkillsetsOwnerSlugJSONBody struct {
 	AutoAbsorbNewSkills *bool   `json:"auto_absorb_new_skills,omitempty"`
 	Description         *string `json:"description,omitempty"`
 	Name                *string `json:"name,omitempty"`
 	SetDefault          *bool   `json:"set_default,omitempty"`
+	Slug                *string `json:"slug,omitempty"`
 }
 
 // GetApiV1SuggestionsParams defines parameters for GetApiV1Suggestions.
@@ -1692,6 +1758,9 @@ type PostApiV1SkillsIdVersionsJSONRequestBody PostApiV1SkillsIdVersionsJSONBody
 
 // PostApiV1SkillsetsJSONRequestBody defines body for PostApiV1Skillsets for application/json ContentType.
 type PostApiV1SkillsetsJSONRequestBody PostApiV1SkillsetsJSONBody
+
+// PostApiV1SkillsetsOwnerJSONRequestBody defines body for PostApiV1SkillsetsOwner for application/json ContentType.
+type PostApiV1SkillsetsOwnerJSONRequestBody PostApiV1SkillsetsOwnerJSONBody
 
 // PatchApiV1SkillsetsOwnerSlugJSONRequestBody defines body for PatchApiV1SkillsetsOwnerSlug for application/json ContentType.
 type PatchApiV1SkillsetsOwnerSlugJSONRequestBody PatchApiV1SkillsetsOwnerSlugJSONBody
