@@ -35,9 +35,8 @@ Works with 19 AI agents.
 Hit a bug or got feedback?  airskills feedback --include-logs
 
 Docs: https://airskills.ai/docs`,
-	// Don't print usage on runtime errors (e.g. "skill not found").
-	// Cobra still prints usage on argument-parse errors, which is correct.
-	SilenceUsage: true,
+	// Print usage on argument-parse errors (e.g. missing required args).
+	SilenceUsage: false,
 	// Don't let cobra print "Error: ..." — Execute() prints the error itself
 	// in a single, prefix-free line. Without this we double-print.
 	SilenceErrors: true,
