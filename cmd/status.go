@@ -83,7 +83,8 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	hr := <-healthCh
 	pendingSuggestions := <-suggCh
 
-	buckets := classifyForStatus(sr.skills, localSkills, syncState)
+	hashLocal := func(p string) string { return computeMerkleHash(readSkillFiles(p)) }
+	buckets := classifyForStatus(sr.skills, localSkills, syncState, hashLocal)
 	toPush, toPull, toUpdate, upstream, untracked := buckets.toPush, buckets.toPull, buckets.toUpdate, buckets.upstream, buckets.untracked
 
 	needPush := len(toPush)
@@ -200,12 +201,12 @@ type statusBuckets struct {
 // classifyForStatus is pure — no I/O — so it's unit-testable. The status
 // command needs five buckets:
 //
-//   - toPush:    local skill, no remote
+//   - toPush:    local skill, no remote; OR tracked skill with local changes
 //   - toPull:    remote skill, no local
 //   - toUpdate:  tracked, marker hash differs from remote hash
 //   - upstream:  remote has an upstream update available (sourced)
 //   - untracked: remote skill, local exists, no marker — needs reconciling
-func classifyForStatus(remoteSkills []apiSkill, localSkills map[string]string, syncState *SyncState) statusBuckets {
+func classifyForStatus(remoteSkills []apiSkill, localSkills map[string]string, syncState *SyncState, hashLocal func(string) string) statusBuckets {
 	skillIdToName := map[string]string{}
 	if syncState != nil {
 		for name, entry := range syncState.Skills {
@@ -251,6 +252,29 @@ func classifyForStatus(remoteSkills []apiSkill, localSkills map[string]string, s
 	for name := range localSkills {
 		if !remoteByName[name] {
 			b.toPush = append(b.toPush, name)
+		}
+	}
+
+	// Detect locally-modified tracked skills. If a tracked skill's local
+	// content hash differs from the marker hash, it needs pushing — even
+	// though the remote knows about it. The previous implementation only
+	// caught new-skills-never-pushed (not-on-remote) and missed local edits
+	// to skills that already exist on the server.
+	if syncState != nil && hashLocal != nil {
+		for name, entry := range syncState.Skills {
+			if entry == nil || entry.ContentHash == "" {
+				continue
+			}
+			if _, exists := localSkills[name]; !exists {
+				continue
+			}
+			// Already in toPush (not on remote) — don't duplicate
+			if remoteByName[name] {
+				localHash := hashLocal(localSkills[name])
+				if localHash != entry.ContentHash {
+					b.toPush = append(b.toPush, name)
+				}
+			}
 		}
 	}
 

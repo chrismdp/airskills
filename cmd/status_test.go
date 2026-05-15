@@ -29,7 +29,7 @@ func TestClassifyForStatusFlagsTrackedOnServerNoMarker(t *testing.T) {
 	}
 	state := &SyncState{Skills: map[string]*SyncEntry{}}
 
-	got := classifyForStatus(remote, local, state)
+	got := classifyForStatus(remote, local, state, nil)
 	if !reflect.DeepEqual(got.untracked, []string{"foo"}) {
 		t.Fatalf("untracked = %v, want [foo]", got.untracked)
 	}
@@ -56,7 +56,7 @@ func TestClassifyForStatusBuckets(t *testing.T) {
 		"tracked-changed": {SkillID: testUUID("id-tracked-changed").String(), ContentHash: "h-old"},
 	}}
 
-	got := classifyForStatus(remote, local, state)
+	got := classifyForStatus(remote, local, state, nil)
 	if !reflect.DeepEqual(got.toPush, []string{"local-only"}) {
 		t.Errorf("toPush = %v, want [local-only]", got.toPush)
 	}
