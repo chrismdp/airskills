@@ -15,6 +15,7 @@ func init() {
 	exportCmd.Flags().StringP("output", "o", "", "Output path (default: ./<name>.zip or ./<name>/)")
 	exportCmd.Flags().StringP("format", "f", "zip", "Export format: zip (ChatGPT/Cowork/Claude.ai) or dir (Claude Code plugin)")
 	exportCmd.Flags().Bool("all", false, "Export all skills from your account")
+	exportCmd.Flags().String("commit", "", "Export a specific version by commit ID (default: latest)")
 	rootCmd.AddCommand(exportCmd)
 }
 
@@ -56,6 +57,11 @@ func runExport(cmd *cobra.Command, args []string) error {
 
 	format, _ := cmd.Flags().GetString("format")
 	output, _ := cmd.Flags().GetString("output")
+	commitID, _ := cmd.Flags().GetString("commit")
+
+	if commitID != "" && exportAll {
+		return fmt.Errorf("--commit and --all can't be used together")
+	}
 
 	skills, _, err := client.listPersonalSkillsInSkillset("")
 	if err != nil {
@@ -103,9 +109,17 @@ func runExport(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("skill %q not found in your account", name)
 	}
 
-	files, err := downloadSkillFiles(client, target.Id.String())
-	if err != nil {
-		return fmt.Errorf("downloading skill files: %w", err)
+	var files map[string][]byte
+	if commitID != "" {
+		files, err = client.getVersionContent(target.Id.String(), commitID)
+		if err != nil {
+			return fmt.Errorf("downloading version %s: %w", commitID, err)
+		}
+	} else {
+		files, err = downloadSkillFiles(client, target.Id.String())
+		if err != nil {
+			return fmt.Errorf("downloading skill files: %w", err)
+		}
 	}
 
 	dir := "."

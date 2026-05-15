@@ -56,8 +56,20 @@ Single Go binary, no runtime dependencies. Cobra for CLI commands. Config and to
 - `cmd/hash.go` — Merkle content hash (must match server-side computation)
 - `cmd/agents.go` — agent detection, skill scanning, file installation
 - `cmd/add.go` — install public skills without auth, tar extraction
-- `cmd/export.go` — export skills, download files from archive endpoint
+- `cmd/export.go` — export skills, download files from archive endpoint, --commit flag for specific versions
+- `cmd/diff.go` — diff local skills against server version, checks all agent copies
 - `install.sh` — curl installer, served via `airskills.ai/install.sh`
+
+### Content hash
+
+**API types are generated, never hand-written.** The `internal/apitypes/types.gen.go` file is produced by `oapi-codegen` from the platform's OpenAPI spec (`lib/openapi-zod.ts`). Regenerate after a spec change:
+
+```bash
+PLATFORM_REPO=../platform bash scripts/codegen.sh   # dev: dumps live spec
+bash scripts/codegen.sh                              # CI: uses fixtures/openapi.json
+```
+
+Never add hand-written structs for API responses — always update the spec and regenerate. The CI `codegen-drift` gate blocks merges when the generated types are out of sync.
 
 ### Content hash
 
