@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 )
 
 type movedSourceNotice struct {
@@ -63,6 +64,16 @@ func collectMovedSourceNotices(client *apiClient, state *SyncState, remoteSkills
 		}
 		notices = append(notices, notice)
 	}
+	// state.Skills is a map — iteration order is randomized per run.
+	// Sort so output is deterministic: actionable (non-hidden) notices
+	// first since those need user attention, then alphabetical within
+	// each group.
+	sort.Slice(notices, func(i, j int) bool {
+		if notices[i].hidden != notices[j].hidden {
+			return !notices[i].hidden
+		}
+		return notices[i].localName < notices[j].localName
+	})
 	return notices
 }
 
