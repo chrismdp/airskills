@@ -195,6 +195,68 @@ func TestDetectOpenClawAgent(t *testing.T) {
 	}
 }
 
+// TestInstallSkillToHermes verifies that airskills installs skills to
+// the Hermes Agent's global skill directory (~/.hermes/skills/) when it is
+// detected. Hermes ships from NousResearch and treats ~/.hermes/skills/ as
+// the primary source of truth for skill definitions.
+func TestInstallSkillToHermes(t *testing.T) {
+	tmpHome := t.TempDir()
+	setTestHome(t, tmpHome)
+
+	// Only create the Hermes parent dir — no other agents installed.
+	os.MkdirAll(filepath.Join(tmpHome, ".hermes", "skills"), 0755)
+
+	files := map[string][]byte{
+		"SKILL.md": []byte("# Hermes Test\nHello from Hermes"),
+	}
+
+	installed, err := installSkillToAgents("test-skill", files)
+	if err != nil {
+		t.Fatalf("installSkillToAgents: %v", err)
+	}
+
+	if len(installed) == 0 {
+		t.Fatalf("expected hermes to be detected and skill installed, got 0 installs")
+	}
+
+	content, err := os.ReadFile(filepath.Join(tmpHome, ".hermes", "skills", "test-skill", "SKILL.md"))
+	if err != nil {
+		t.Fatalf("missing SKILL.md in Hermes: %v", err)
+	}
+	if string(content) != "# Hermes Test\nHello from Hermes" {
+		t.Errorf("hermes content = %q", string(content))
+	}
+}
+
+// TestDetectHermesAgent verifies that an ~/.hermes directory triggers
+// detection of the hermes agent entry.
+func TestDetectHermesAgent(t *testing.T) {
+	tmpHome := t.TempDir()
+	setTestHome(t, tmpHome)
+
+	// No Hermes dir — should not detect.
+	detected := detectInstalledAgents()
+	for _, a := range detected {
+		if a.Key == "hermes" {
+			t.Errorf("should not detect hermes without ~/.hermes present")
+		}
+	}
+
+	// Create ~/.hermes — detection should now find it.
+	os.MkdirAll(filepath.Join(tmpHome, ".hermes"), 0755)
+	detected = detectInstalledAgents()
+	found := false
+	for _, a := range detected {
+		if a.Key == "hermes" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected hermes to be detected after creating ~/.hermes")
+	}
+}
+
 // TestMirrorPropagatesEditFromNonFirstDir covers the core requirement: when a
 // skill exists in two detected agent dirs and the user has edited the copy
 // that isn't first in the agent registry, the edit still wins and is mirrored

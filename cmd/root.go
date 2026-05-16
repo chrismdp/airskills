@@ -30,7 +30,7 @@ Get started:
   airskills add u/s    Install a public skill
   airskills status     Check for updates
 
-Works with 19 AI agents.
+Works with 21 AI agents.
 
 Hit a bug or got feedback?  airskills feedback --include-logs
 
