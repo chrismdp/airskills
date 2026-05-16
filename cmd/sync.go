@@ -14,6 +14,18 @@ import (
 
 var syncVerbose bool
 
+// syncActiveMirrorConflicts is non-nil for the duration of a `sync` run.
+// Push populates it from its `mirrorLocalSkills` call; pull reads from
+// it and skips its own mirror call. This guarantees mirror runs exactly
+// once per sync — push runs it pre-push as the consistency check, and
+// pull doesn't re-run it post-push (which previously inverted under the
+// just-advanced marker and silently reverted local edits — see
+// doc/changes/cli-mirror-overwrites-edit-after-push.md).
+//
+// Standalone `airskills push` and `airskills pull` leave this nil, so
+// each runs its own mirror.
+var syncActiveMirrorConflicts map[string]bool
+
 // The default guide skill that gets auto-installed on first sync.
 const guideOwner = "chrismdp"
 const guideSlug = "airskills-guide"
@@ -105,6 +117,11 @@ var syncCmd = &cobra.Command{
 	Long:  "Uploads local skills to your account (if logged in), then downloads remote skills to this machine.",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		verbose = syncVerbose
+
+		// Mark this process as inside a sync invocation. Push will populate
+		// the conflict set; pull will reuse it and skip its own mirror.
+		syncActiveMirrorConflicts = map[string]bool{}
+		defer func() { syncActiveMirrorConflicts = nil }()
 
 		// Check if we can authenticate (handles no token, expired token, failed refresh)
 		_, authErr := newAPIClientAuto()

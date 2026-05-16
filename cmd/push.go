@@ -168,12 +168,20 @@ caller asked about something else.`,
 
 		// Propagate any local edit across every detected agent dir before we
 		// scan, so push sees a consistent view. Slugs whose copies can't be
-		// safely reconciled are reported and skipped below.
+		// safely reconciled are reported and skipped below. When sync is
+		// the caller, share the conflict set with the pull step that
+		// follows so pull doesn't re-run mirror (which previously inverted
+		// under the just-advanced marker).
 		_, mirrorConflicts := mirrorLocalSkills(syncState)
 		printMirrorConflicts(mirrorConflicts)
 		mirrorConflictSet := map[string]bool{}
 		for _, c := range mirrorConflicts {
 			mirrorConflictSet[c.slug] = true
+		}
+		if syncActiveMirrorConflicts != nil {
+			for slug := range mirrorConflictSet {
+				syncActiveMirrorConflicts[slug] = true
+			}
 		}
 
 		// Scan all detected agent directories for skills

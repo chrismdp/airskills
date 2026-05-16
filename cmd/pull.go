@@ -90,11 +90,23 @@ func runPull(cmd *cobra.Command, args []string) error {
 	// so pull's divergence check works regardless of which copy was edited.
 	// Slugs whose copies can't be reconciled are skipped to avoid clobbering
 	// the user's in-progress work.
-	_, mirrorConflicts := mirrorLocalSkills(syncState)
-	printMirrorConflicts(mirrorConflicts)
+	//
+	// When invoked from `sync`, push has already run mirror and populated
+	// syncActiveMirrorConflicts; reuse that set and skip mirror here so we
+	// don't re-evaluate against a post-push marker (which previously
+	// inverted the heuristic and silently reverted local edits — see
+	// doc/changes/cli-mirror-overwrites-edit-after-push.md).
 	mirrorConflictSet := map[string]bool{}
-	for _, c := range mirrorConflicts {
-		mirrorConflictSet[c.slug] = true
+	if syncActiveMirrorConflicts != nil {
+		for slug := range syncActiveMirrorConflicts {
+			mirrorConflictSet[slug] = true
+		}
+	} else {
+		_, mirrorConflicts := mirrorLocalSkills(syncState)
+		printMirrorConflicts(mirrorConflicts)
+		for _, c := range mirrorConflicts {
+			mirrorConflictSet[c.slug] = true
+		}
 	}
 
 	localSkills, err := scanSkillsFromAgents()

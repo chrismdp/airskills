@@ -466,14 +466,21 @@ func mirrorLocalSkills(syncState *SyncState) ([]mirrorChange, []mirrorConflict) 
 //
 //   - Single distinct hash → that hash wins.
 //   - Marker disambiguates a 2-way split (exactly one group matches the
-//     sync-state marker) → the non-marker group is the edit.
-//   - Otherwise → newest SKILL.md mtime wins. This handles the case where
-//     a prior mirror ran and fanned content out to a secondary agent dir,
-//     and the user has since edited the original: the stale mirrored copy
-//     has an older mtime, so the intentional edit wins.
+//     sync-state marker) → newest-touched group wins. This must work
+//     regardless of whether the marker is the *pre-edit baseline* (the
+//     non-marker group is the user's edit and will have a newer mtime)
+//     or the *post-edit confirmation* (the marker group is what was
+//     just pushed and has a newer mtime than stale siblings that
+//     haven't been mirrored forward yet). The naive "non-marker is the
+//     edit" rule inverts in the post-push case and silently overwrites
+//     the edit with the stale content — see
+//     doc/changes/cli-mirror-overwrites-edit-after-push.md.
+//   - Otherwise → newest SKILL.md mtime across all paths wins. Handles
+//     the stale-mirror-vs-fresh-edit case where the marker matches
+//     neither group.
 //
-// Returns "" only when the heuristics all fail (no stat-able paths), in
-// which case the caller reports a conflict and skips.
+// Returns "" only when no paths are stat-able, in which case the caller
+// reports a conflict and skips.
 func pickAuthoritativeHash(
 	paths []string,
 	hashByPath map[string]string,
@@ -486,12 +493,25 @@ func pickAuthoritativeHash(
 		}
 	}
 	if len(hashGroups) == 2 && markerHash != "" {
-		if _, ok := hashGroups[markerHash]; ok {
+		if markerPaths, ok := hashGroups[markerHash]; ok {
+			var otherHash string
 			for h := range hashGroups {
 				if h != markerHash {
-					return h
+					otherHash = h
 				}
 			}
+			markerMtime := newestSkillMtime(markerPaths)
+			otherMtime := newestSkillMtime(hashGroups[otherHash])
+			if !markerMtime.IsZero() && !otherMtime.IsZero() {
+				if markerMtime.After(otherMtime) {
+					return markerHash
+				}
+				return otherHash
+			}
+			// Mtimes unavailable for one or both groups — fall back to
+			// the legacy "non-marker is the edit" rule for the
+			// pre-push case. Better than silently dropping the slug.
+			return otherHash
 		}
 	}
 	newestPath := ""
@@ -510,6 +530,22 @@ func pickAuthoritativeHash(
 		return ""
 	}
 	return hashByPath[newestPath]
+}
+
+// newestSkillMtime returns the most recent SKILL.md mtime across the
+// given skill directory paths. Zero value if none are stat-able.
+func newestSkillMtime(skillPaths []string) time.Time {
+	var newest time.Time
+	for _, p := range skillPaths {
+		info, err := os.Stat(filepath.Join(p, "SKILL.md"))
+		if err != nil {
+			continue
+		}
+		if newest.IsZero() || info.ModTime().After(newest) {
+			newest = info.ModTime()
+		}
+	}
+	return newest
 }
 
 // replaceSkillDir writes files into target, deleting any existing non-marker

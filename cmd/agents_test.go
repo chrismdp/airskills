@@ -462,6 +462,65 @@ func TestMirrorStaleSecondaryCopyLosesToFreshPrimaryEdit(t *testing.T) {
 	}
 }
 
+// TestMirrorDoesNotRevertEditAfterPushAdvancedMarker reproduces the bug in
+// cli-mirror-overwrites-edit-after-push: after push uploads the user's edit
+// and optimistically advances the marker to the new hash, pull's mirror step
+// runs against (claude=H_new edit, cursor=H_old stale, marker=H_new). The
+// 2-group + marker heuristic in pickAuthoritativeHash returns the non-marker
+// hash, which is now the stale group — and mirror silently overwrites the
+// user's edit with the stale content.
+//
+// Correct behaviour: the edit must survive. Either H_new wins (preferred —
+// mirror H_new into the stale dirs) or the case is reported as a conflict.
+// What must NOT happen is silently flattening claude back to H_old.
+func TestMirrorDoesNotRevertEditAfterPushAdvancedMarker(t *testing.T) {
+	tmpHome := t.TempDir()
+	setTestHome(t, tmpHome)
+
+	claudePath := filepath.Join(tmpHome, ".claude", "skills", "foo", "SKILL.md")
+	cursorPath := filepath.Join(tmpHome, ".cursor", "skills", "foo", "SKILL.md")
+
+	// cursor stays at the old (stale) content; backdate its mtime so the
+	// fresh edit in claude is unambiguously newer regardless of filesystem
+	// mtime resolution.
+	writeSkillFile(t, cursorPath, "# old")
+	staleTime := time.Now().Add(-1 * time.Hour)
+	if err := os.Chtimes(cursorPath, staleTime, staleTime); err != nil {
+		t.Fatalf("chtimes: %v", err)
+	}
+	// claude holds the fresh edit. Push has just uploaded this hash and
+	// optimistically advanced the marker to it.
+	writeSkillFile(t, claudePath, "# edited")
+
+	// Marker reflects the post-push state — it's been advanced to H_new
+	// (the edit's hash), because push uploaded claude's contents and
+	// optimistically updated the marker.
+	editedHash := computeMerkleHash(map[string][]byte{"SKILL.md": []byte("# edited")})
+	state := &SyncState{
+		Version: 1,
+		Skills: map[string]*SyncEntry{
+			"foo": {SkillID: testUUID("skill-1").String(), Version: "1.0.0", ContentHash: editedHash, Tool: "claude-code"},
+		},
+	}
+
+	_, conflicts := mirrorLocalSkills(state)
+	if len(conflicts) != 0 {
+		t.Fatalf("unexpected conflicts: %+v", conflicts)
+	}
+
+	// The user's edit must still be on disk in claude.
+	claude, _ := os.ReadFile(claudePath)
+	if string(claude) != "# edited" {
+		t.Errorf("claude copy = %q, want '# edited' (mirror silently reverted the edit)", string(claude))
+	}
+	// And the stale cursor copy should have been brought forward, not the
+	// other way around.
+	cursor, _ := os.ReadFile(cursorPath)
+	if string(cursor) != "# edited" {
+		t.Errorf("cursor copy = %q, want '# edited' (mirror failed to propagate edit)", string(cursor))
+	}
+}
+
 // TestMirrorAllCopiesIdenticalNoOp verifies that when every copy already
 // matches, mirror reports no changes (and no conflicts).
 func TestMirrorAllCopiesIdenticalNoOp(t *testing.T) {
