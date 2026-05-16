@@ -51,8 +51,12 @@ func runSelfUpdate(cmd *cobra.Command, args []string) error {
 // verbose=true matches today's manual `self-update` output (chatty
 // stdout, multiple status lines). verbose=false is the auto-mode
 // notification format used by maybeAutoUpdate(): two terse stderr
-// lines on success, one on failure. Auto-mode also uses a tighter
-// 10s HTTP timeout so a slow network doesn't add 30s to every command.
+// lines on success, one on failure. Both modes share a 5-minute HTTP
+// timeout — generous enough for slow consumer connections to pull the
+// ~3MB release tarball + checksums end-to-end without "deadline
+// exceeded" failures. The risk of a slow connection adding seconds to
+// a command is acceptable; users on slow links would otherwise be
+// permanently stuck below the server's CLI version floor.
 //
 // trigger ("manual" or "auto") tags the three telemetry events fired
 // from this function: cli_self_update_started, cli_self_update_completed,
@@ -63,10 +67,7 @@ func runSelfUpdate(cmd *cobra.Command, args []string) error {
 // Auto-update fires *before* the user's command runs, never after,
 // so it cannot interfere with a mid-flight skill-state mutation.
 func performUpdate(currentVersion string, verbose bool, trigger string) (string, error) {
-	timeout := 30 * time.Second
-	if !verbose {
-		timeout = 10 * time.Second
-	}
+	timeout := 5 * time.Minute
 	client := &http.Client{Timeout: timeout}
 
 	if verbose {
