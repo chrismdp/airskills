@@ -40,6 +40,23 @@ var agents = []agentDef{
 	{"hermes", "Hermes Agent", ".agents/skills", ".hermes/skills"},
 }
 
+// projectSkillsDir returns the absolute path to $CWD/.agents/skills if it
+// already exists. This is the standard repo-local Agent Skills path from
+// agentskills.io — when a repo has opted in by creating it, airskills
+// mirrors skills into it like any other detected agent dir. Returns "" if
+// the directory does not exist; airskills must never create it.
+func projectSkillsDir() string {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	p := filepath.Join(cwd, ".agents", "skills")
+	if info, err := os.Stat(p); err == nil && info.IsDir() {
+		return p
+	}
+	return ""
+}
+
 // detectInstalledAgents returns agents whose global skills directory exists
 func detectInstalledAgents() []agentDef {
 	home, err := os.UserHomeDir()
@@ -104,6 +121,19 @@ func installSkillToAgents(slug string, files map[string][]byte) ([]string, error
 		}
 
 		installed = append(installed, fmt.Sprintf("  → %-16s %s", a.Name, skillDir))
+	}
+
+	if projectDir := projectSkillsDir(); projectDir != "" && !seen[projectDir] {
+		seen[projectDir] = true
+		skillDir := filepath.Join(projectDir, slug)
+		if err := os.MkdirAll(skillDir, 0755); err == nil {
+			for name, content := range files {
+				target := filepath.Join(skillDir, name)
+				os.MkdirAll(filepath.Dir(target), 0755)
+				_ = os.WriteFile(target, content, fileMode(content))
+			}
+			installed = append(installed, fmt.Sprintf("  → %-16s %s", "Project", skillDir))
+		}
 	}
 
 	return installed, nil
@@ -222,6 +252,24 @@ func scanSkillsFromAgents() (map[string]string, error) {
 		}
 	}
 
+	if projectDir := projectSkillsDir(); projectDir != "" && !seen[projectDir] {
+		seen[projectDir] = true
+		entries, err := os.ReadDir(projectDir)
+		if err == nil {
+			for _, e := range entries {
+				if !e.IsDir() {
+					continue
+				}
+				skillMd := filepath.Join(projectDir, e.Name(), "SKILL.md")
+				if _, err := os.Stat(skillMd); err == nil {
+					if _, exists := skills[e.Name()]; !exists {
+						skills[e.Name()] = filepath.Join(projectDir, e.Name())
+					}
+				}
+			}
+		}
+	}
+
 	return skills, nil
 }
 
@@ -272,6 +320,24 @@ func scanSkillsAllPaths() (map[string][]string, []string, error) {
 				continue
 			}
 			slugToPaths[e.Name()] = append(slugToPaths[e.Name()], skillDir)
+		}
+	}
+
+	if projectDir := projectSkillsDir(); projectDir != "" && !seenGlobal[projectDir] {
+		seenGlobal[projectDir] = true
+		detectedGlobalDirs = append(detectedGlobalDirs, projectDir)
+		entries, err := os.ReadDir(projectDir)
+		if err == nil {
+			for _, e := range entries {
+				if !e.IsDir() {
+					continue
+				}
+				skillDir := filepath.Join(projectDir, e.Name())
+				if _, err := os.Stat(filepath.Join(skillDir, "SKILL.md")); err != nil {
+					continue
+				}
+				slugToPaths[e.Name()] = append(slugToPaths[e.Name()], skillDir)
+			}
 		}
 	}
 

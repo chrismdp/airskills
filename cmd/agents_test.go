@@ -195,6 +195,93 @@ func TestDetectOpenClawAgent(t *testing.T) {
 	}
 }
 
+// TestInstallSkillToProjectAgentsDirIfExists verifies that when the current
+// working directory has a pre-existing .agents/skills/ folder (the standard
+// agentskills.io repo-local path), installSkillToAgents mirrors the skill
+// into it alongside the detected global agent dirs.
+//
+// The project dir is only written when it already exists — airskills must
+// never create .agents/skills/ in a repo on its own.
+func TestInstallSkillToProjectAgentsDirIfExists(t *testing.T) {
+	tmpHome := t.TempDir()
+	setTestHome(t, tmpHome)
+	os.MkdirAll(filepath.Join(tmpHome, ".claude", "skills"), 0755)
+
+	tmpCwd := t.TempDir()
+	t.Chdir(tmpCwd)
+	os.MkdirAll(filepath.Join(tmpCwd, ".agents", "skills"), 0755)
+
+	files := map[string][]byte{"SKILL.md": []byte("# proj")}
+	if _, err := installSkillToAgents("proj-skill", files); err != nil {
+		t.Fatalf("installSkillToAgents: %v", err)
+	}
+
+	content, err := os.ReadFile(filepath.Join(tmpCwd, ".agents", "skills", "proj-skill", "SKILL.md"))
+	if err != nil {
+		t.Fatalf("expected skill written to project .agents/skills: %v", err)
+	}
+	if string(content) != "# proj" {
+		t.Errorf("project content = %q", string(content))
+	}
+}
+
+// TestInstallSkillSkipsProjectAgentsDirIfMissing verifies that airskills never
+// creates .agents/skills/ in a repo that hasn't opted in by creating that
+// directory itself.
+func TestInstallSkillSkipsProjectAgentsDirIfMissing(t *testing.T) {
+	tmpHome := t.TempDir()
+	setTestHome(t, tmpHome)
+	os.MkdirAll(filepath.Join(tmpHome, ".claude", "skills"), 0755)
+
+	tmpCwd := t.TempDir()
+	t.Chdir(tmpCwd)
+	// Deliberately do NOT create .agents/skills.
+
+	files := map[string][]byte{"SKILL.md": []byte("# proj")}
+	if _, err := installSkillToAgents("proj-skill", files); err != nil {
+		t.Fatalf("installSkillToAgents: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(tmpCwd, ".agents")); err == nil {
+		t.Errorf("airskills must not create .agents/ in cwd when it did not already exist")
+	}
+}
+
+// TestMirrorPropagatesEditFromProjectAgentsDir verifies that an edit to a
+// skill in $CWD/.agents/skills/ is mirrored back into the global agent dirs
+// the same way an edit in any other detected dir would be.
+func TestMirrorPropagatesEditFromProjectAgentsDir(t *testing.T) {
+	tmpHome := t.TempDir()
+	setTestHome(t, tmpHome)
+
+	tmpCwd := t.TempDir()
+	t.Chdir(tmpCwd)
+
+	claudePath := filepath.Join(tmpHome, ".claude", "skills", "foo", "SKILL.md")
+	projectPath := filepath.Join(tmpCwd, ".agents", "skills", "foo", "SKILL.md")
+
+	writeSkillFile(t, claudePath, "# old")
+	writeSkillFile(t, projectPath, "# edited in project")
+
+	markerHash := computeMerkleHash(map[string][]byte{"SKILL.md": []byte("# old")})
+	state := &SyncState{
+		Version: 1,
+		Skills: map[string]*SyncEntry{
+			"foo": {SkillID: testUUID("skill-1").String(), Version: "1.0.0", ContentHash: markerHash, Tool: "claude-code"},
+		},
+	}
+
+	_, conflicts := mirrorLocalSkills(state)
+	if len(conflicts) != 0 {
+		t.Fatalf("unexpected conflicts: %+v", conflicts)
+	}
+
+	claude, _ := os.ReadFile(claudePath)
+	if string(claude) != "# edited in project" {
+		t.Errorf("claude copy = %q, want '# edited in project'", string(claude))
+	}
+}
+
 // TestInstallSkillToHermes verifies that airskills installs skills to
 // the Hermes Agent's global skill directory (~/.hermes/skills/) when it is
 // detected. Hermes ships from NousResearch and treats ~/.hermes/skills/ as
