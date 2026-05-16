@@ -334,6 +334,26 @@ caller asked about something else.`,
 			skills = scoped
 		}
 
+		// Pre-filter unchanged so the progress counter reflects what we're
+		// actually about to push. Without this, "77/77 skills" gets printed
+		// for a run where nothing changed — the unchanged check inside each
+		// goroutine still fires correctly, but the user sees the full local
+		// count. Only filter tracked, non-deleted skills with a known hash;
+		// new skills (no marker) and shadow-fork / deleted markers must go
+		// through the goroutine so their full logic still runs.
+		var unchangedCount int
+		var pending []skillEntry
+		for _, s := range skills {
+			if s.marker != nil && !s.marker.Deleted && s.marker.ContentHash != "" {
+				if computeMerkleHash(readSkillFiles(s.dir)) == s.marker.ContentHash {
+					unchangedCount++
+					continue
+				}
+			}
+			pending = append(pending, s)
+		}
+		skills = pending
+
 		// Print initial progress lines
 		lines := make([]progressLine, len(skills))
 		for i, s := range skills {
@@ -343,7 +363,7 @@ caller asked about something else.`,
 			for _, l := range lines {
 				fmt.Printf("  %-20s  %s  %s\n", l.name, renderBar(0), "waiting")
 			}
-		} else if isTTY {
+		} else if isTTY && len(skills) > 0 {
 			fmt.Printf("  %s %d skills\n", dim("·"), len(skills))
 		}
 
@@ -938,6 +958,9 @@ caller asked about something else.`,
 		}
 		if len(transient) > 0 {
 			parts = append(parts, dim(fmt.Sprintf("%d couldn't verify", len(transient))))
+		}
+		if unchangedCount > 0 {
+			parts = append(parts, dim(fmt.Sprintf("%d unchanged", unchangedCount)))
 		}
 		if len(parts) == 0 {
 			parts = append(parts, dim("all unchanged"))

@@ -131,7 +131,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		parts = append(parts, cyan(fmt.Sprintf("↓ %d to pull", needPull)))
 	}
 	if needUpdate > 0 {
-		parts = append(parts, yellow(fmt.Sprintf("~ %d changed", needUpdate)))
+		parts = append(parts, yellow(fmt.Sprintf("~ %d on server", needUpdate)))
 	}
 	if upstreamUpdates > 0 {
 		parts = append(parts, cyan(fmt.Sprintf("⬆ %d upstream", upstreamUpdates)))
@@ -158,7 +158,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	if !quiet {
 		printStatusGroup("to push", toPush, yellow)
 		printStatusGroup("to pull", toPull, cyan)
-		printStatusGroup("changed", toUpdate, yellow)
+		printStatusGroup("on server", toUpdate, yellow)
 		printStatusGroup("upstream", upstream, cyan)
 		printStatusGroup("untracked", untracked, yellow)
 	}
