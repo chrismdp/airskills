@@ -693,11 +693,20 @@ func TestMirrorRemovesStaleFilesInTarget(t *testing.T) {
 	claudeDir := filepath.Join(tmpHome, ".claude", "skills", "foo")
 	cursorDir := filepath.Join(tmpHome, ".cursor", "skills", "foo")
 
-	// Source (claude) has only SKILL.md.
-	writeSkillFile(t, filepath.Join(claudeDir, "SKILL.md"), "# new")
-	// Target (cursor) still has an old helper file.
+	// Target (cursor) holds the stale marker-matching version. Backdate
+	// it so the edit in claude is unambiguously newer regardless of how
+	// quickly the filesystem applies mtimes — mirror's 2-group + marker
+	// branch now uses newest mtime to disambiguate.
 	writeSkillFile(t, filepath.Join(cursorDir, "SKILL.md"), "# old")
 	writeSkillFile(t, filepath.Join(cursorDir, "helper.sh"), "#!/bin/sh\n")
+	staleTime := time.Now().Add(-1 * time.Hour)
+	for _, f := range []string{"SKILL.md", "helper.sh"} {
+		if err := os.Chtimes(filepath.Join(cursorDir, f), staleTime, staleTime); err != nil {
+			t.Fatalf("chtimes: %v", err)
+		}
+	}
+	// Source (claude) has only SKILL.md — the fresh edit.
+	writeSkillFile(t, filepath.Join(claudeDir, "SKILL.md"), "# new")
 
 	markerHash := computeMerkleHash(map[string][]byte{
 		"SKILL.md":  []byte("# old"),
