@@ -1,8 +1,15 @@
 package cmd
 
 import (
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/spf13/cobra"
 )
 
 // TestIncomingCommandIsGone is the spec's "command surface gone" test:
@@ -62,5 +69,89 @@ func TestPendingReviewSummaryUsesAddForce(t *testing.T) {
 	// branch — its absence is a useful collapse-format canary.
 	if strings.Contains(out, "ASK THE USER") {
 		t.Errorf("expected collapsed one-liner output, got the old multi-paragraph form:\n%s", out)
+	}
+}
+
+// TestPullPersistsRestoreHintWhenNothingToDownload exists because v0.6.25
+// shipped with a bug: runPull's "all up to date" early-return skipped
+// saveSyncState, so a mirror-side mutation like RestoreHintShown=true was
+// only kept in memory and the hint re-fired every sync. Reproduces the
+// scenario via a httptest server returning the skill unchanged.
+func TestPullPersistsRestoreHintWhenNothingToDownload(t *testing.T) {
+	resetMirrorHintMemo()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	oldTTY := isTTY
+	isTTY = false
+	t.Cleanup(func() { isTTY = oldTTY })
+
+	skillID := testUUID("restore-hint-test").String()
+	skillBytes := []byte("---\nname: hint-test\ndescription: x\n---\nbody\n")
+	skillHash := computeMerkleHash(map[string][]byte{"SKILL.md": skillBytes})
+
+	// Install the same skill into two agent dirs, write a marker that
+	// tracks it. Then hand-`rm` the .claude copy — mirror should refill
+	// from .cursor on the next pull.
+	for _, agentDir := range []string{".claude/skills", ".cursor/skills"} {
+		dir := filepath.Join(home, agentDir, "hint-test")
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), skillBytes, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	state := &SyncState{Version: 1, Skills: map[string]*SyncEntry{
+		"hint-test": {
+			SkillID:     skillID,
+			Version:     "1.0.0",
+			ContentHash: skillHash,
+			Tool:        "claude-code",
+			OwnerKind:   "user",
+			OwnerSlug:   "test-user",
+		},
+	}}
+	if err := saveSyncState(state); err != nil {
+		t.Fatal(err)
+	}
+
+	// Hand-`rm` one copy so mirror has something to restore.
+	if err := os.RemoveAll(filepath.Join(home, ".claude", "skills", "hint-test")); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/v1/skills":
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{"skills":[{"id":%q,"name":"hint-test","slug":"hint-test","version":"1.0.0","content_hash":%q,"tool_formats":["claude-code"],"visibility":"private","dependency_count":0}]}`, skillID, skillHash)
+		default:
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `[]`)
+		}
+	}))
+	defer srv.Close()
+	writeTestConfigAndToken(t, home, srv.URL)
+
+	_ = captureStdout(t, func() {
+		if err := runPull(&cobra.Command{Use: "pull"}, nil); err != nil {
+			t.Fatalf("runPull: %v", err)
+		}
+	})
+
+	// The .claude copy should be back AND the marker should have
+	// RestoreHintShown=true on disk so the next sync stays quiet.
+	if _, err := os.Stat(filepath.Join(home, ".claude", "skills", "hint-test", "SKILL.md")); err != nil {
+		t.Fatalf("expected mirror to restore .claude copy: %v", err)
+	}
+	persisted := loadSyncState()
+	entry := persisted.Skills["hint-test"]
+	if entry == nil {
+		t.Fatal("marker for hint-test missing after pull")
+	}
+	if !entry.RestoreHintShown {
+		t.Fatal("RestoreHintShown not persisted after pull's 'all up to date' early-return — regression of v0.6.25 bug")
 	}
 }

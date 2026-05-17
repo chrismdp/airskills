@@ -179,6 +179,11 @@ func runPull(cmd *cobra.Command, args []string) error {
 	}
 
 	if len(toPull) == 0 && len(missingWarnings) == 0 {
+		// Mirror may have mutated syncState even when there's nothing
+		// to download — e.g. it sets RestoreHintShown on a marker when
+		// it refills a hand-`rm`d agent dir. Persist before returning
+		// or those mutations are lost and the hint re-fires next sync.
+		saveSyncState(syncState)
 		fmt.Printf("  %s all up to date\n", green("✓"))
 		return nil
 	}
