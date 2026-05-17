@@ -374,20 +374,14 @@ type mirrorRestoreHint struct {
 // doesn't print the same warning twice.
 var mirrorWarnedSlugs = map[string]bool{}
 
-// mirrorRestoreHintShownSlugs is the in-process fallback memo for restore
-// hints on slugs with no marker (hand-created skills that have never been
-// tracked). Marker-bearing slugs persist the same signal on
-// SyncEntry.RestoreHintShown so the hint stays quiet across processes.
-var mirrorRestoreHintShownSlugs = map[string]bool{}
-
 // printMirrorRestoreHints emits a one-line educational nudge for each slug
 // where mirror refilled a previously-empty agent dir this run. Hand-`rm`
 // is not a supported delete signal — sync restores it. Tell the user how
 // to actually delete the skill across all agents.
 //
-// Caller is responsible for saving sync state if any hint was emitted —
-// marker-bearing slugs have their RestoreHintShown flag flipped in
-// mirrorLocalSkills so the hint doesn't re-fire next sync.
+// The hint fires every time mirror restores, no memoisation. Repeated
+// reminders are the price of the simpler model; the user runs `airskills
+// rm` once and the noise stops.
 func printMirrorRestoreHints(hints []mirrorRestoreHint) {
 	for _, h := range hints {
 		fmt.Fprintf(os.Stderr, "  %s %s restored to %s\n", yellow("!"), h.slug, h.target)
@@ -445,11 +439,11 @@ func printMirrorConflicts(conflicts []mirrorConflict) {
 //
 // When mirror writes content into a previously-empty target dir (the slug
 // was missing from that agent), the slug is also surfaced as a
-// mirrorRestoreHint so the caller can educate the user — hand-`rm` is not
-// a supported delete signal. Hints are memoised per slug: marker-bearing
-// slugs flip syncState.Skills[slug].RestoreHintShown so the hint stays
-// quiet until the user runs `airskills rm`; un-markered slugs use the
-// in-process mirrorRestoreHintShownSlugs map.
+// mirrorRestoreHint so the caller can educate the user — hand-`rm` is
+// not a supported delete signal. The hint fires every time mirror
+// restores; we deliberately don't memoise. Repeated reminders are the
+// price of the simpler model, and it lines up with "the warning shows
+// every sync until the user runs airskills rm."
 //
 // Returns the list of slugs actually touched, the list of conflicting
 // slugs (so callers can print a warning and skip them during push/pull),
@@ -520,27 +514,11 @@ func mirrorLocalSkills(syncState *SyncState) ([]mirrorChange, []mirrorConflict, 
 		changes = append(changes, change)
 
 		if restoredInto != "" {
-			if marker != nil {
-				if marker.RestoreHintShown {
-					// already shown on this machine; stay quiet until
-					// airskills rm drops the marker
-				} else {
-					marker.RestoreHintShown = true
-					hints = append(hints, mirrorRestoreHint{
-						slug:      slug,
-						target:    restoredInto,
-						isNonFork: markerIsNonFork(marker),
-					})
-				}
-			} else {
-				if !mirrorRestoreHintShownSlugs[slug] {
-					mirrorRestoreHintShownSlugs[slug] = true
-					hints = append(hints, mirrorRestoreHint{
-						slug:   slug,
-						target: restoredInto,
-					})
-				}
-			}
+			hints = append(hints, mirrorRestoreHint{
+				slug:      slug,
+				target:    restoredInto,
+				isNonFork: markerIsNonFork(marker),
+			})
 		}
 	}
 

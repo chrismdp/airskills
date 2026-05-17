@@ -823,12 +823,11 @@ func TestMigrateToNamespacedDirsOrgSkill(t *testing.T) {
 	}
 }
 
-// resetMirrorHintMemo clears the package-level in-process and warned-slug
-// caches so tests don't leak state into each other.
+// resetMirrorHintMemo clears the package-level warned-slug cache so
+// tests don't leak state into each other. Kept as a single hook even
+// though mirror no longer memoises restore hints (the cache for
+// mirrorConflict warnings still matters across tests).
 func resetMirrorHintMemo() {
-	for k := range mirrorRestoreHintShownSlugs {
-		delete(mirrorRestoreHintShownSlugs, k)
-	}
 	for k := range mirrorWarnedSlugs {
 		delete(mirrorWarnedSlugs, k)
 	}
@@ -874,10 +873,6 @@ func TestMirrorHandRmRestoresAndQueuesHint(t *testing.T) {
 	if _, err := os.Stat(claudePath); err != nil {
 		t.Errorf("expected claude copy restored: %v", err)
 	}
-
-	if !state.Skills["foo"].RestoreHintShown {
-		t.Errorf("expected marker.RestoreHintShown=true after first hint")
-	}
 }
 
 // TestMirrorEditFanOutEmitsNoHint covers the contrasting case: slug in
@@ -906,9 +901,6 @@ func TestMirrorEditFanOutEmitsNoHint(t *testing.T) {
 	_, _, hints := mirrorLocalSkills(state)
 	if len(hints) != 0 {
 		t.Errorf("expected no hints when fanning edit over stale content, got %+v", hints)
-	}
-	if state.Skills["foo"].RestoreHintShown {
-		t.Errorf("RestoreHintShown must not flip in edit-fan-out case")
 	}
 }
 
@@ -950,11 +942,12 @@ func TestMirrorComboHandRmAndEditOnSiblingQueuesHint(t *testing.T) {
 	}
 }
 
-// TestMirrorMarkerPersistedHintMemoisation: the hint fires once, then
-// stays quiet on the next mirror run even when the same restore
-// condition still holds. After airskills rm drops the marker, a re-add
-// + re-hand-rm correctly re-fires.
-func TestMirrorMarkerPersistedHintMemoisation(t *testing.T) {
+// TestMirrorRestoreHintFiresEveryTime: the hint is deliberately not
+// memoised. Each hand-`rm`-then-sync cycle re-emits it. Repeated
+// reminders are the price of the simpler model — the hint stays
+// noisy until the user runs `airskills rm`, which removes both
+// copies and drops the marker.
+func TestMirrorRestoreHintFiresEveryTime(t *testing.T) {
 	resetMirrorHintMemo()
 	tmpHome := t.TempDir()
 	setTestHome(t, tmpHome)
@@ -976,28 +969,19 @@ func TestMirrorMarkerPersistedHintMemoisation(t *testing.T) {
 		t.Fatalf("first run: want 1 hint, got %d", len(hints))
 	}
 
-	// Simulate the second sync: hand-rm again (claude exists from the
-	// restore, so re-rm it to recreate the empty-target condition).
-	os.RemoveAll(filepath.Join(tmpHome, ".claude", "skills", "foo"))
-	_, _, hints = mirrorLocalSkills(state)
-	if len(hints) != 0 {
-		t.Errorf("second run: want 0 hints (marker memo), got %d: %+v", len(hints), hints)
-	}
-
-	// User runs `airskills rm foo` — marker dropped. Re-add + re-hand-rm.
-	delete(state.Skills, "foo")
-	state.Skills["foo"] = &SyncEntry{SkillID: testUUID("skill-1").String(), Version: "1.0.0", ContentHash: markerHash, Tool: "claude-code"}
+	// Hand-`rm` again — hint should re-fire, not be suppressed.
 	os.RemoveAll(filepath.Join(tmpHome, ".claude", "skills", "foo"))
 	_, _, hints = mirrorLocalSkills(state)
 	if len(hints) != 1 {
-		t.Errorf("post-rm re-add: want 1 hint again, got %d", len(hints))
+		t.Errorf("second run: want 1 hint (no memoisation), got %d", len(hints))
 	}
 }
 
-// TestMirrorInProcessHintMemoisationForUntrackedSlugs: hand-created
-// slug with no marker — the in-process map memoises so the hint fires
-// once per process even though there's nothing to persist.
-func TestMirrorInProcessHintMemoisationForUntrackedSlugs(t *testing.T) {
+// TestMirrorRestoreHintFiresForUntrackedSlug: hand-created slugs (no
+// marker) get the same treatment as tracked ones. Untracked-slug
+// hint has isNonFork=false (markerIsNonFork returns false for nil
+// marker).
+func TestMirrorRestoreHintFiresForUntrackedSlug(t *testing.T) {
 	resetMirrorHintMemo()
 	tmpHome := t.TempDir()
 	setTestHome(t, tmpHome)
@@ -1010,16 +994,10 @@ func TestMirrorInProcessHintMemoisationForUntrackedSlugs(t *testing.T) {
 
 	_, _, hints := mirrorLocalSkills(state)
 	if len(hints) != 1 || hints[0].slug != "bar" {
-		t.Fatalf("first run: want 1 hint for bar, got %+v", hints)
+		t.Fatalf("want 1 hint for bar, got %+v", hints)
 	}
-
-	// Re-run without re-rming — second run sees the previously-empty
-	// dir is now filled, so it won't trigger again regardless of memo.
-	// Force the empty-target condition again to test the memo only.
-	os.RemoveAll(filepath.Join(tmpHome, ".claude", "skills", "bar"))
-	_, _, hints = mirrorLocalSkills(state)
-	if len(hints) != 0 {
-		t.Errorf("second run: in-process memo should suppress, got %+v", hints)
+	if hints[0].isNonFork {
+		t.Errorf("untracked slug (nil marker) should not flag isNonFork")
 	}
 }
 

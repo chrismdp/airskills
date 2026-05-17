@@ -32,12 +32,6 @@ type SyncEntry struct {
 	// prevent removing the old dir. Pushes are blocked for deleted markers.
 	Deleted bool   `json:"deleted,omitempty"`
 	MovedTo string `json:"moved_to,omitempty"` // new dir name after transfer
-	// RestoreHintShown records that mirror has already emitted the
-	// "manually-deleted folder restored — use airskills rm" educational
-	// hint for this slug on this machine. Stops the hint firing every
-	// sync for agents that run airskills after every edit. Cleared on
-	// airskills rm (which drops the whole marker).
-	RestoreHintShown bool `json:"restore_hint_shown,omitempty"`
 }
 
 // SyncState holds sync metadata for all tracked skills.
