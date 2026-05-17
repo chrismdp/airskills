@@ -358,21 +358,38 @@ func newAPIClientAuto() (*apiClient, error) {
 		}
 
 		// Auto-refresh expired tokens while holding the token lock so concurrent
-		// CLI processes re-read the rotated token instead of burning the same
-		// refresh token twice.
+		// CLI processes serialise on it. The server no longer rotates the
+		// refresh token on each call (rotation broke multi-device login by
+		// mutually evicting machines that shared the same token), so concurrent
+		// refreshes are now safe — both get back the same refresh token.
 		if time.Now().Unix() > loaded.ExpiresAt {
 			if loaded.RefreshToken == "" {
+				telemetry.Capture("cli_refresh_failed", map[string]interface{}{
+					"reason": "no_refresh_token",
+				})
 				return fmt.Errorf("session expired — run 'airskills login'")
 			}
+			telemetry.Capture("cli_refresh_attempted", nil)
 			refreshed, err := refreshAccessToken(cfg.APIURL, loaded.RefreshToken)
 			if err != nil {
+				telemetry.Capture("cli_refresh_failed", map[string]interface{}{
+					"error": err.Error(),
+				})
 				return fmt.Errorf("session expired and refresh failed (%s) — run 'airskills login'", err)
 			}
 			loaded = refreshed
 			if err := config.SaveToken(loaded); err != nil {
-				// Non-fatal — continue with in-memory token for this request.
-				// Next run will re-refresh (slightly wasteful but correct).
-				_ = err
+				// SaveToken failure used to be swallowed. That was safe when
+				// the server rotated tokens (next run could re-refresh from
+				// disk and get a fresh token). Now the server returns the
+				// SAME refresh token, so a save failure just means the file
+				// wasn't updated — the existing on-disk token is still
+				// valid. Log and continue.
+				telemetry.Capture("cli_refresh_save_failed", map[string]interface{}{
+					"error": err.Error(),
+				})
+			} else {
+				telemetry.Capture("cli_refresh_succeeded", nil)
 			}
 		}
 		token = loaded
