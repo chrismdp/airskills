@@ -271,7 +271,7 @@ func TestMirrorPropagatesEditFromProjectAgentsDir(t *testing.T) {
 		},
 	}
 
-	_, conflicts := mirrorLocalSkills(state)
+	_, conflicts, _ := mirrorLocalSkills(state)
 	if len(conflicts) != 0 {
 		t.Fatalf("unexpected conflicts: %+v", conflicts)
 	}
@@ -368,7 +368,7 @@ func TestMirrorPropagatesEditFromNonFirstDir(t *testing.T) {
 		},
 	}
 
-	_, conflicts := mirrorLocalSkills(state)
+	_, conflicts, _ := mirrorLocalSkills(state)
 	if len(conflicts) != 0 {
 		t.Fatalf("unexpected conflicts: %+v", conflicts)
 	}
@@ -400,7 +400,7 @@ func TestMirrorCreatesInMissingDetectedDir(t *testing.T) {
 
 	state := &SyncState{Version: 1, Skills: map[string]*SyncEntry{}}
 
-	_, conflicts := mirrorLocalSkills(state)
+	_, conflicts, _ := mirrorLocalSkills(state)
 	if len(conflicts) != 0 {
 		t.Fatalf("unexpected conflicts: %+v", conflicts)
 	}
@@ -446,7 +446,7 @@ func TestMirrorStaleSecondaryCopyLosesToFreshPrimaryEdit(t *testing.T) {
 		},
 	}
 
-	_, conflicts := mirrorLocalSkills(state)
+	_, conflicts, _ := mirrorLocalSkills(state)
 	if len(conflicts) != 0 {
 		t.Fatalf("unexpected conflicts: %+v", conflicts)
 	}
@@ -503,7 +503,7 @@ func TestMirrorDoesNotRevertEditAfterPushAdvancedMarker(t *testing.T) {
 		},
 	}
 
-	_, conflicts := mirrorLocalSkills(state)
+	_, conflicts, _ := mirrorLocalSkills(state)
 	if len(conflicts) != 0 {
 		t.Fatalf("unexpected conflicts: %+v", conflicts)
 	}
@@ -534,7 +534,7 @@ func TestMirrorAllCopiesIdenticalNoOp(t *testing.T) {
 
 	state := &SyncState{Version: 1, Skills: map[string]*SyncEntry{}}
 
-	changes, conflicts := mirrorLocalSkills(state)
+	changes, conflicts, _ := mirrorLocalSkills(state)
 	if len(conflicts) != 0 {
 		t.Fatalf("unexpected conflicts: %+v", conflicts)
 	}
@@ -719,7 +719,7 @@ func TestMirrorRemovesStaleFilesInTarget(t *testing.T) {
 		},
 	}
 
-	_, conflicts := mirrorLocalSkills(state)
+	_, conflicts, _ := mirrorLocalSkills(state)
 	if len(conflicts) != 0 {
 		t.Fatalf("unexpected conflicts: %+v", conflicts)
 	}
@@ -820,5 +820,295 @@ func TestMigrateToNamespacedDirsOrgSkill(t *testing.T) {
 	// Must not have created an owner-namespaced key.
 	if _, ok := syncState.Skills["acme-corp-deploy"]; ok {
 		t.Error("owner-namespaced key 'acme-corp-deploy' should not exist — skillset takes precedence")
+	}
+}
+
+// resetMirrorHintMemo clears the package-level in-process and warned-slug
+// caches so tests don't leak state into each other.
+func resetMirrorHintMemo() {
+	for k := range mirrorRestoreHintShownSlugs {
+		delete(mirrorRestoreHintShownSlugs, k)
+	}
+	for k := range mirrorWarnedSlugs {
+		delete(mirrorWarnedSlugs, k)
+	}
+}
+
+// TestMirrorHandRmRestoresAndQueuesHint covers the spec's primary
+// restore-and-educate case: a slug installed in two agent dirs, the
+// user hand-`rm`s one, sync runs mirror — the deleted dir is restored
+// (the existing fan-out behaviour) AND a hint fires steering the user
+// to airskills rm.
+func TestMirrorHandRmRestoresAndQueuesHint(t *testing.T) {
+	resetMirrorHintMemo()
+	tmpHome := t.TempDir()
+	setTestHome(t, tmpHome)
+
+	cursorPath := filepath.Join(tmpHome, ".cursor", "skills", "foo", "SKILL.md")
+	writeSkillFile(t, cursorPath, "# content")
+
+	// .claude/skills/ parent exists (detected agent) but the skill dir
+	// itself is missing — this is the post-hand-rm state.
+	os.MkdirAll(filepath.Join(tmpHome, ".claude", "skills"), 0755)
+
+	markerHash := computeMerkleHash(map[string][]byte{"SKILL.md": []byte("# content")})
+	state := &SyncState{
+		Version: 1,
+		Skills: map[string]*SyncEntry{
+			"foo": {SkillID: testUUID("skill-1").String(), Version: "1.0.0", ContentHash: markerHash, Tool: "claude-code"},
+		},
+	}
+
+	_, conflicts, hints := mirrorLocalSkills(state)
+	if len(conflicts) != 0 {
+		t.Fatalf("unexpected conflicts: %+v", conflicts)
+	}
+	if len(hints) != 1 || hints[0].slug != "foo" {
+		t.Fatalf("expected one restore hint for foo, got %+v", hints)
+	}
+	if hints[0].isNonFork {
+		t.Errorf("owned-skill marker should not flag isNonFork")
+	}
+
+	claudePath := filepath.Join(tmpHome, ".claude", "skills", "foo", "SKILL.md")
+	if _, err := os.Stat(claudePath); err != nil {
+		t.Errorf("expected claude copy restored: %v", err)
+	}
+
+	if !state.Skills["foo"].RestoreHintShown {
+		t.Errorf("expected marker.RestoreHintShown=true after first hint")
+	}
+}
+
+// TestMirrorEditFanOutEmitsNoHint covers the contrasting case: slug in
+// two dirs, one edited, mirror fans the edit forward — but the target
+// already had content (it wasn't empty), so no restore hint fires.
+func TestMirrorEditFanOutEmitsNoHint(t *testing.T) {
+	resetMirrorHintMemo()
+	tmpHome := t.TempDir()
+	setTestHome(t, tmpHome)
+
+	claudePath := filepath.Join(tmpHome, ".claude", "skills", "foo", "SKILL.md")
+	cursorPath := filepath.Join(tmpHome, ".cursor", "skills", "foo", "SKILL.md")
+	writeSkillFile(t, cursorPath, "# stale")
+	staleTime := time.Now().Add(-1 * time.Hour)
+	_ = os.Chtimes(cursorPath, staleTime, staleTime)
+	writeSkillFile(t, claudePath, "# fresh edit")
+
+	markerHash := computeMerkleHash(map[string][]byte{"SKILL.md": []byte("# stale")})
+	state := &SyncState{
+		Version: 1,
+		Skills: map[string]*SyncEntry{
+			"foo": {SkillID: testUUID("skill-1").String(), Version: "1.0.0", ContentHash: markerHash, Tool: "claude-code"},
+		},
+	}
+
+	_, _, hints := mirrorLocalSkills(state)
+	if len(hints) != 0 {
+		t.Errorf("expected no hints when fanning edit over stale content, got %+v", hints)
+	}
+	if state.Skills["foo"].RestoreHintShown {
+		t.Errorf("RestoreHintShown must not flip in edit-fan-out case")
+	}
+}
+
+// TestMirrorComboHandRmAndEditOnSiblingQueuesHint: hand-rm one dir AND
+// edit a sibling at the same time. The fresh edit wins by mtime and
+// fans into the deleted dir's empty slot — hint should fire.
+func TestMirrorComboHandRmAndEditOnSiblingQueuesHint(t *testing.T) {
+	resetMirrorHintMemo()
+	tmpHome := t.TempDir()
+	setTestHome(t, tmpHome)
+
+	cursorPath := filepath.Join(tmpHome, ".cursor", "skills", "foo", "SKILL.md")
+	writeSkillFile(t, cursorPath, "# fresh edit on cursor")
+	os.MkdirAll(filepath.Join(tmpHome, ".claude", "skills"), 0755)
+
+	// Marker references the pre-edit baseline; cursor is the edit;
+	// claude is hand-rm'd (no SKILL.md present).
+	markerHash := computeMerkleHash(map[string][]byte{"SKILL.md": []byte("# pre-edit baseline")})
+	state := &SyncState{
+		Version: 1,
+		Skills: map[string]*SyncEntry{
+			"foo": {SkillID: testUUID("skill-1").String(), Version: "1.0.0", ContentHash: markerHash, Tool: "claude-code"},
+		},
+	}
+
+	_, conflicts, hints := mirrorLocalSkills(state)
+	if len(conflicts) != 0 {
+		t.Fatalf("unexpected conflicts: %+v", conflicts)
+	}
+	if len(hints) != 1 || hints[0].slug != "foo" {
+		t.Fatalf("expected one hint for foo, got %+v", hints)
+	}
+	claude, err := os.ReadFile(filepath.Join(tmpHome, ".claude", "skills", "foo", "SKILL.md"))
+	if err != nil {
+		t.Fatalf("expected claude restored: %v", err)
+	}
+	if string(claude) != "# fresh edit on cursor" {
+		t.Errorf("claude got %q, want fresh edit", string(claude))
+	}
+}
+
+// TestMirrorMarkerPersistedHintMemoisation: the hint fires once, then
+// stays quiet on the next mirror run even when the same restore
+// condition still holds. After airskills rm drops the marker, a re-add
+// + re-hand-rm correctly re-fires.
+func TestMirrorMarkerPersistedHintMemoisation(t *testing.T) {
+	resetMirrorHintMemo()
+	tmpHome := t.TempDir()
+	setTestHome(t, tmpHome)
+
+	cursorPath := filepath.Join(tmpHome, ".cursor", "skills", "foo", "SKILL.md")
+	writeSkillFile(t, cursorPath, "# content")
+	os.MkdirAll(filepath.Join(tmpHome, ".claude", "skills"), 0755)
+
+	markerHash := computeMerkleHash(map[string][]byte{"SKILL.md": []byte("# content")})
+	state := &SyncState{
+		Version: 1,
+		Skills: map[string]*SyncEntry{
+			"foo": {SkillID: testUUID("skill-1").String(), Version: "1.0.0", ContentHash: markerHash, Tool: "claude-code"},
+		},
+	}
+
+	_, _, hints := mirrorLocalSkills(state)
+	if len(hints) != 1 {
+		t.Fatalf("first run: want 1 hint, got %d", len(hints))
+	}
+
+	// Simulate the second sync: hand-rm again (claude exists from the
+	// restore, so re-rm it to recreate the empty-target condition).
+	os.RemoveAll(filepath.Join(tmpHome, ".claude", "skills", "foo"))
+	_, _, hints = mirrorLocalSkills(state)
+	if len(hints) != 0 {
+		t.Errorf("second run: want 0 hints (marker memo), got %d: %+v", len(hints), hints)
+	}
+
+	// User runs `airskills rm foo` — marker dropped. Re-add + re-hand-rm.
+	delete(state.Skills, "foo")
+	state.Skills["foo"] = &SyncEntry{SkillID: testUUID("skill-1").String(), Version: "1.0.0", ContentHash: markerHash, Tool: "claude-code"}
+	os.RemoveAll(filepath.Join(tmpHome, ".claude", "skills", "foo"))
+	_, _, hints = mirrorLocalSkills(state)
+	if len(hints) != 1 {
+		t.Errorf("post-rm re-add: want 1 hint again, got %d", len(hints))
+	}
+}
+
+// TestMirrorInProcessHintMemoisationForUntrackedSlugs: hand-created
+// slug with no marker — the in-process map memoises so the hint fires
+// once per process even though there's nothing to persist.
+func TestMirrorInProcessHintMemoisationForUntrackedSlugs(t *testing.T) {
+	resetMirrorHintMemo()
+	tmpHome := t.TempDir()
+	setTestHome(t, tmpHome)
+
+	cursorPath := filepath.Join(tmpHome, ".cursor", "skills", "bar", "SKILL.md")
+	writeSkillFile(t, cursorPath, "# content")
+	os.MkdirAll(filepath.Join(tmpHome, ".claude", "skills"), 0755)
+
+	state := &SyncState{Version: 1, Skills: map[string]*SyncEntry{}}
+
+	_, _, hints := mirrorLocalSkills(state)
+	if len(hints) != 1 || hints[0].slug != "bar" {
+		t.Fatalf("first run: want 1 hint for bar, got %+v", hints)
+	}
+
+	// Re-run without re-rming — second run sees the previously-empty
+	// dir is now filled, so it won't trigger again regardless of memo.
+	// Force the empty-target condition again to test the memo only.
+	os.RemoveAll(filepath.Join(tmpHome, ".claude", "skills", "bar"))
+	_, _, hints = mirrorLocalSkills(state)
+	if len(hints) != 0 {
+		t.Errorf("second run: in-process memo should suppress, got %+v", hints)
+	}
+}
+
+// TestMirrorNonForkRestoreHintUsesKeepRemote: a marker whose SkillID
+// matches its Source.ID (plain `airskills add`, never forked) should
+// yield a hint with isNonFork=true so the printer routes to
+// `--keep-remote` wording.
+func TestMirrorNonForkRestoreHintUsesKeepRemote(t *testing.T) {
+	resetMirrorHintMemo()
+	tmpHome := t.TempDir()
+	setTestHome(t, tmpHome)
+
+	cursorPath := filepath.Join(tmpHome, ".cursor", "skills", "upstream-foo", "SKILL.md")
+	writeSkillFile(t, cursorPath, "# upstream")
+	os.MkdirAll(filepath.Join(tmpHome, ".claude", "skills"), 0755)
+
+	upstreamID := testUUID("upstream-foo").String()
+	markerHash := computeMerkleHash(map[string][]byte{"SKILL.md": []byte("# upstream")})
+	state := &SyncState{
+		Version: 1,
+		Skills: map[string]*SyncEntry{
+			"upstream-foo": {
+				SkillID:     upstreamID,
+				Version:     "1.0.0",
+				ContentHash: markerHash,
+				Tool:        "claude-code",
+				Source: &skillSource{
+					Owner: "alice",
+					Slug:  "foo",
+					ID:    upstreamID,
+				},
+			},
+		},
+	}
+
+	_, _, hints := mirrorLocalSkills(state)
+	if len(hints) != 1 {
+		t.Fatalf("want 1 hint, got %d", len(hints))
+	}
+	if !hints[0].isNonFork {
+		t.Errorf("non-fork sourced skill should set isNonFork=true")
+	}
+}
+
+// TestDecidePullActionsReturnsDivergedSlugs: when a tracked skill has
+// both sides changed (diverged) or an untracked local conflict, the
+// slug name appears in the third return value so callers can register
+// it in the shared sync conflict set BEFORE the download loop runs.
+func TestDecidePullActionsReturnsDivergedSlugs(t *testing.T) {
+	tmpHome := t.TempDir()
+	setTestHome(t, tmpHome)
+
+	divergedPath := filepath.Join(tmpHome, ".claude", "skills", "diverged-skill")
+	writeSkillFile(t, filepath.Join(divergedPath, "SKILL.md"), "# local edit")
+
+	untrackedPath := filepath.Join(tmpHome, ".claude", "skills", "untracked-skill")
+	writeSkillFile(t, filepath.Join(untrackedPath, "SKILL.md"), "# local untracked")
+
+	local := map[string]string{
+		"diverged-skill":  divergedPath,
+		"untracked-skill": untrackedPath,
+	}
+
+	divergedID := testUUID("diverged-skill").String()
+	untrackedID := testUUID("untracked-skill").String()
+	remoteDivergedHash := "remote-diverged-hash"
+	remoteUntrackedHash := "remote-untracked-hash"
+	remote := []apiSkill{
+		{Id: testUUID("diverged-skill"), Name: "diverged-skill", Version: "2", ContentHash: &remoteDivergedHash},
+		{Id: testUUID("untracked-skill"), Name: "untracked-skill", Version: "1", ContentHash: &remoteUntrackedHash},
+	}
+
+	state := &SyncState{
+		Version: 1,
+		Skills: map[string]*SyncEntry{
+			"diverged-skill": {SkillID: divergedID, Version: "1", ContentHash: "original-marker-hash", Tool: "claude-code"},
+		},
+	}
+	_ = untrackedID
+
+	_, _, divergedSlugs := decidePullActions(remote, local, state)
+	wantSet := map[string]bool{"diverged-skill": true, "untracked-skill": true}
+	gotSet := map[string]bool{}
+	for _, s := range divergedSlugs {
+		gotSet[s] = true
+	}
+	for k := range wantSet {
+		if !gotSet[k] {
+			t.Errorf("divergedSlugs missing %q (got %v)", k, divergedSlugs)
+		}
 	}
 }

@@ -67,7 +67,15 @@ func loadIncomingCandidates() (*apiClient, *SyncState, []incomingCandidate, erro
 		return nil, nil, nil, err
 	}
 	state := loadSyncState()
-	_, mirrorConflicts := mirrorLocalSkills(state)
+	// Resolve partial renames before mirror so a hand-`mv` on one agent
+	// dir is propagated rather than restored by mirror's fan-out (the
+	// push path already does this; mirror in pull-side contexts needs
+	// the same guard).
+	if scanned, scanErr := scanSkillsFromAgents(); scanErr == nil {
+		propagatePartialRenames(scanned, state)
+	}
+	_, mirrorConflicts, restoreHints := mirrorLocalSkills(state)
+	printMirrorRestoreHints(restoreHints)
 	skip := map[string]bool{}
 	for _, c := range mirrorConflicts {
 		skip[c.slug] = true
@@ -91,7 +99,7 @@ func loadIncomingCandidates() (*apiClient, *SyncState, []incomingCandidate, erro
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	actions, _ := decidePullActions(remote, localSkills, state)
+	actions, _, _ := decidePullActions(remote, localSkills, state)
 	var candidates []incomingCandidate
 	for _, a := range actions {
 		if a.reason == "upstream-advanced" || a.reason == "upstream-updated" {

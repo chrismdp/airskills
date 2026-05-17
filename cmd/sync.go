@@ -14,17 +14,20 @@ import (
 
 var syncVerbose bool
 
-// syncActiveMirrorConflicts is non-nil for the duration of a `sync` run.
-// Push populates it from its `mirrorLocalSkills` call; pull reads from
-// it and skips its own mirror call. This guarantees mirror runs exactly
-// once per sync — push runs it pre-push as the consistency check, and
-// pull doesn't re-run it post-push (which previously inverted under the
-// just-advanced marker and silently reverted local edits — see
-// doc/changes/cli-mirror-overwrites-edit-after-push.md).
+// syncActiveConflicts is non-nil for the duration of a `sync` run and
+// tracks every slug that must be skipped this sync — both mirror
+// conflicts (divergent local copies) AND pull divergences (3-way splits
+// detected by decidePullActions). Pull populates it; push reads from
+// it and skips both its own mirror call and any matching upload. This
+// guarantees mirror runs exactly once per sync (pull runs it pre-pull
+// after pull's rename pass) and that a 3-way divergence produces
+// exactly one conflict dir — pull's, not a second one from push's 409
+// path. See platform/doc/changes/cli-mirror-cannot-distinguish-delete-from-never-installed.md
+// for the order flip rationale.
 //
 // Standalone `airskills push` and `airskills pull` leave this nil, so
 // each runs its own mirror.
-var syncActiveMirrorConflicts map[string]bool
+var syncActiveConflicts map[string]bool
 
 // The default guide skill that gets auto-installed on first sync.
 const guideOwner = "chrismdp"
@@ -118,10 +121,11 @@ var syncCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		verbose = syncVerbose
 
-		// Mark this process as inside a sync invocation. Push will populate
-		// the conflict set; pull will reuse it and skip its own mirror.
-		syncActiveMirrorConflicts = map[string]bool{}
-		defer func() { syncActiveMirrorConflicts = nil }()
+		// Mark this process as inside a sync invocation. Pull populates the
+		// conflict set (mirror + divergence); push reads from it and skips
+		// both its own mirror call and any matching upload.
+		syncActiveConflicts = map[string]bool{}
+		defer func() { syncActiveConflicts = nil }()
 
 		// Check if we can authenticate (handles no token, expired token, failed refresh)
 		_, authErr := newAPIClientAuto()
@@ -141,25 +145,28 @@ var syncCmd = &cobra.Command{
 			}
 		}
 
+		// Auto-install the guide and check GitHub-sourced skills BEFORE
+		// pull so pull's classifier sees the post-install state. Both are
+		// silent no-ops when there's nothing to do. autoInstallGuide is
+		// gated on canPush (it writes to the user's server account).
 		if canPush {
-			fmt.Printf("%s %s\n", cyan("▲"), "Push")
+			autoInstallGuide()
+		}
+		syncGitHubSkills()
+
+		fmt.Printf("%s %s\n", cyan("▼"), "Pull")
+		if err := runPull(cmd, args); err != nil {
+			return err
+		}
+
+		if canPush {
+			fmt.Printf("\n%s %s\n", cyan("▲"), "Push")
 			if err := pushCmd.RunE(cmd, args); err != nil {
 				return err
 			}
-
-			// Auto-install the airskills guide on first sync (silently)
-			autoInstallGuide()
 		} else {
-			fmt.Printf("%s %s\n", dim("▲"), dim("Push skipped (not logged in)"))
+			fmt.Printf("\n%s %s\n", dim("▲"), dim("Push skipped (not logged in)"))
 			fmt.Printf("  %s\n", dim("Log in to push your skills, back up, and share: airskills login"))
-		}
-
-		// Check GitHub-sourced skills for upstream updates
-		syncGitHubSkills()
-
-		fmt.Printf("\n%s %s\n", cyan("▼"), "Pull")
-		if err := runPull(cmd, args); err != nil {
-			return err
 		}
 
 		// Surface sourced skills whose upstream has moved past the

@@ -19,6 +19,12 @@ var rmCmd = &cobra.Command{
 	Short: "Remove a skill locally and on the server",
 	Long: `Removes a skill from this machine and from your airskills.ai account.
 
+Use this instead of 'rm -rf ~/.claude/skills/<name>'. Hand-deleting an
+agent dir is silently restored by the next 'airskills sync' — sync's
+mirror fans the skill back out from any sibling agent dir that still
+has a copy, by design (it's the same mechanism that makes hand-edits
+propagate across agents).
+
 By default deletes both the local directory (across all detected agents)
 and the remote skill, then drops the entry from sync state. Use --keep-remote
 to delete only locally, or --keep-local to delete only on the server.`,

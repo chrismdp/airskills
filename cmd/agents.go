@@ -358,10 +358,47 @@ type mirrorConflict struct {
 	paths []string // every local path for the slug, for the user to diff/merge
 }
 
+// mirrorRestoreHint describes a slug for which mirror just refilled a
+// previously-empty agent dir. Surfaced as a one-line educational nudge —
+// hand-`rm` of an agent dir is not a supported delete signal; users should
+// run `airskills rm` instead. See
+// platform/doc/changes/cli-mirror-cannot-distinguish-delete-from-never-installed.md.
+type mirrorRestoreHint struct {
+	slug       string
+	target     string // the dir mirror restored content into
+	isNonFork  bool   // sourced skill the user does not own → use --keep-remote
+}
+
 // mirrorWarnedSlugs tracks which conflict slugs have already been reported to
 // the user in this process, so `sync` (which runs push then pull back-to-back)
 // doesn't print the same warning twice.
 var mirrorWarnedSlugs = map[string]bool{}
+
+// mirrorRestoreHintShownSlugs is the in-process fallback memo for restore
+// hints on slugs with no marker (hand-created skills that have never been
+// tracked). Marker-bearing slugs persist the same signal on
+// SyncEntry.RestoreHintShown so the hint stays quiet across processes.
+var mirrorRestoreHintShownSlugs = map[string]bool{}
+
+// printMirrorRestoreHints emits a one-line educational nudge for each slug
+// where mirror refilled a previously-empty agent dir this run. Hand-`rm`
+// is not a supported delete signal — sync restores it. Tell the user how
+// to actually delete the skill across all agents.
+//
+// Caller is responsible for saving sync state if any hint was emitted —
+// marker-bearing slugs have their RestoreHintShown flag flipped in
+// mirrorLocalSkills so the hint doesn't re-fire next sync.
+func printMirrorRestoreHints(hints []mirrorRestoreHint) {
+	for _, h := range hints {
+		fmt.Fprintf(os.Stderr, "  %s %s restored to %s\n", yellow("!"), h.slug, h.target)
+		if h.isNonFork {
+			fmt.Fprintf(os.Stderr, "      To delete this skill across all agents, run: airskills rm %s --keep-remote\n", h.slug)
+		} else {
+			fmt.Fprintf(os.Stderr, "      To delete this skill across all agents, run: airskills rm %s\n", h.slug)
+		}
+		fmt.Fprintf(os.Stderr, "      Hand-deleting a single agent dir is silently restored by sync.\n")
+	}
+}
 
 // printMirrorConflicts warns the user about divergent local skill copies.
 // In a TTY the message nudges the user to re-run inside an agent; in a
@@ -406,16 +443,26 @@ func printMirrorConflicts(conflicts []mirrorConflict) {
 //   - anything else (two versions, neither matches the marker; three or more
 //     versions) → reported as a conflict and left untouched
 //
-// Returns the list of slugs actually touched and the list of conflicting
-// slugs so callers can print a warning and skip them during push/pull.
-func mirrorLocalSkills(syncState *SyncState) ([]mirrorChange, []mirrorConflict) {
+// When mirror writes content into a previously-empty target dir (the slug
+// was missing from that agent), the slug is also surfaced as a
+// mirrorRestoreHint so the caller can educate the user — hand-`rm` is not
+// a supported delete signal. Hints are memoised per slug: marker-bearing
+// slugs flip syncState.Skills[slug].RestoreHintShown so the hint stays
+// quiet until the user runs `airskills rm`; un-markered slugs use the
+// in-process mirrorRestoreHintShownSlugs map.
+//
+// Returns the list of slugs actually touched, the list of conflicting
+// slugs (so callers can print a warning and skip them during push/pull),
+// and any fresh restore hints.
+func mirrorLocalSkills(syncState *SyncState) ([]mirrorChange, []mirrorConflict, []mirrorRestoreHint) {
 	slugToPaths, detectedDirs, err := scanSkillsAllPaths()
 	if err != nil || len(detectedDirs) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	var changes []mirrorChange
 	var conflicts []mirrorConflict
+	var hints []mirrorRestoreHint
 
 	for slug, paths := range slugToPaths {
 		filesByPath := make(map[string]map[string][]byte, len(paths))
@@ -429,9 +476,11 @@ func mirrorLocalSkills(syncState *SyncState) ([]mirrorChange, []mirrorConflict) 
 			hashGroups[h] = append(hashGroups[h], p)
 		}
 
+		var marker *SyncEntry
 		var markerHash string
 		if syncState != nil {
 			if e, ok := syncState.Skills[slug]; ok && e != nil {
+				marker = e
 				markerHash = e.ContentHash
 			}
 		}
@@ -446,19 +495,70 @@ func mirrorLocalSkills(syncState *SyncState) ([]mirrorChange, []mirrorConflict) 
 		authorFiles := filesByPath[authorPath]
 
 		change := mirrorChange{slug: slug}
+		var restoredInto string
 		for _, dir := range detectedDirs {
 			target := filepath.Join(dir, slug)
 			if existingHash, ok := hashByPath[target]; ok && existingHash == authorHash {
 				continue
 			}
+			// "Previously empty target" = no SKILL.md was discovered at
+			// this path by scanSkillsAllPaths; hashByPath has no entry.
+			// Distinguishes restore (hand-rm or first-time install in a
+			// new agent) from edit fan-out, where the target had stale
+			// bytes that need overwriting.
+			previouslyEmpty := false
+			if _, seen := hashByPath[target]; !seen {
+				previouslyEmpty = true
+			}
 			if err := replaceSkillDir(target, authorFiles); err == nil {
 				change.written = append(change.written, target)
+				if previouslyEmpty && restoredInto == "" {
+					restoredInto = target
+				}
 			}
 		}
 		changes = append(changes, change)
+
+		if restoredInto != "" {
+			if marker != nil {
+				if marker.RestoreHintShown {
+					// already shown on this machine; stay quiet until
+					// airskills rm drops the marker
+				} else {
+					marker.RestoreHintShown = true
+					hints = append(hints, mirrorRestoreHint{
+						slug:      slug,
+						target:    restoredInto,
+						isNonFork: markerIsNonFork(marker),
+					})
+				}
+			} else {
+				if !mirrorRestoreHintShownSlugs[slug] {
+					mirrorRestoreHintShownSlugs[slug] = true
+					hints = append(hints, mirrorRestoreHint{
+						slug:   slug,
+						target: restoredInto,
+					})
+				}
+			}
+		}
 	}
 
-	return changes, conflicts
+	return changes, conflicts, hints
+}
+
+// markerIsNonFork reports whether the marker tracks a sourced skill that
+// the user does not own (a plain `airskills add` install, no local fork
+// created yet). For these, plain `airskills rm` would 403 against the
+// upstream owner — the hint must steer to `--keep-remote` instead.
+func markerIsNonFork(m *SyncEntry) bool {
+	if m == nil || m.Source == nil {
+		return false
+	}
+	if m.SkillID == "" {
+		return true
+	}
+	return m.SkillID == m.Source.ID || m.SkillID == m.Source.UpstreamSkillID
 }
 
 // pickAuthoritativeHash chooses which version of a slug's content should

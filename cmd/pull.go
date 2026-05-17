@@ -86,26 +86,30 @@ func runPull(cmd *cobra.Command, args []string) error {
 
 	syncState := loadSyncState()
 
-	// Propagate local edits across every detected agent dir before scanning,
-	// so pull's divergence check works regardless of which copy was edited.
-	// Slugs whose copies can't be reconciled are skipped to avoid clobbering
-	// the user's in-progress work.
+	// Resolve partial renames BEFORE mirror. A manual `mv` in one agent
+	// dir leaves the same skill living under two names; if mirror runs
+	// first, it cross-pollinates both names across every agent and the
+	// rename signal is lost. Mirror itself then propagates edits across
+	// agent dirs and surfaces a hint when it refills a previously-empty
+	// dir (sync restores hand-`rm`d folders by design — see
+	// platform/doc/changes/cli-mirror-cannot-distinguish-delete-from-never-installed.md).
 	//
-	// When invoked from `sync`, push has already run mirror and populated
-	// syncActiveMirrorConflicts; reuse that set and skip mirror here so we
-	// don't re-evaluate against a post-push marker (which previously
-	// inverted the heuristic and silently reverted local edits — see
-	// doc/changes/cli-mirror-overwrites-edit-after-push.md).
+	// Pull populates syncActiveConflicts when invoked from `sync` so the
+	// push step that follows can skip both mirror (already run) and any
+	// upload that would collide with a divergence pull detected below.
+	if scanned, scanErr := scanSkillsFromAgents(); scanErr == nil {
+		propagatePartialRenames(scanned, syncState)
+	}
 	mirrorConflictSet := map[string]bool{}
-	if syncActiveMirrorConflicts != nil {
-		for slug := range syncActiveMirrorConflicts {
-			mirrorConflictSet[slug] = true
-		}
-	} else {
-		_, mirrorConflicts := mirrorLocalSkills(syncState)
-		printMirrorConflicts(mirrorConflicts)
-		for _, c := range mirrorConflicts {
-			mirrorConflictSet[c.slug] = true
+	_, mirrorConflicts, restoreHints := mirrorLocalSkills(syncState)
+	printMirrorConflicts(mirrorConflicts)
+	printMirrorRestoreHints(restoreHints)
+	for _, c := range mirrorConflicts {
+		mirrorConflictSet[c.slug] = true
+	}
+	if syncActiveConflicts != nil {
+		for slug := range mirrorConflictSet {
+			syncActiveConflicts[slug] = true
 		}
 	}
 
@@ -151,7 +155,18 @@ func runPull(cmd *cobra.Command, args []string) error {
 
 	owners := newOwnerResolver(client)
 
-	toPull, missingWarnings := decidePullActions(remoteSkills, localSkills, syncState)
+	toPull, missingWarnings, divergedSlugs := decidePullActions(remoteSkills, localSkills, syncState)
+
+	// Register pull-detected divergences in the shared sync conflict
+	// set BEFORE the action loop. A download failure mid-loop must
+	// still leave the slug flagged so the push step that follows in
+	// `sync` skips it — otherwise a 3-way diverge would produce two
+	// conflict dirs (one here, one from push's 409 path).
+	if syncActiveConflicts != nil {
+		for _, slug := range divergedSlugs {
+			syncActiveConflicts[slug] = true
+		}
+	}
 
 	// Drop any actions for slugs that have unresolved local divergence —
 	// we already warned the user above, and we must not clobber their
@@ -742,7 +757,13 @@ func markSourceUpstreamIncorporated(marker *SyncEntry, remote apiSkill) {
 //   - untracked + local with same name + bytes match: "linked" (silent claim)
 //   - untracked + local with same name + bytes differ: "untracked-conflict"
 //   - untracked + no local: "new"
-func decidePullActions(remoteSkills []apiSkill, localSkills map[string]string, syncState *SyncState) ([]pullEntry, []string) {
+//
+// The third return value is the set of slugs classified as `diverged` or
+// `untracked-conflict`. Callers in a `sync` run register these in
+// syncActiveConflicts BEFORE the action loop so a download failure later
+// does not leave the slug eligible for push to upload over.
+func decidePullActions(remoteSkills []apiSkill, localSkills map[string]string, syncState *SyncState) ([]pullEntry, []string, []string) {
+	var divergedSlugs []string
 	skillIdToName := map[string]string{}
 	// Upstream skill IDs that are already represented by a local fork.
 	// After cli-org-member-suggest-via-shadow-fork.md, push may have
@@ -831,6 +852,7 @@ func decidePullActions(remoteSkills []apiSkill, localSkills map[string]string, s
 				actions = append(actions, pullEntry{skill: remote, reason: "updated", localDir: localDir, marker: marker})
 			default:
 				actions = append(actions, pullEntry{skill: remote, reason: "diverged", localDir: localDir, marker: marker})
+				divergedSlugs = append(divergedSlugs, remote.Name)
 			}
 			continue
 		}
@@ -851,6 +873,7 @@ func decidePullActions(remoteSkills []apiSkill, localSkills map[string]string, s
 				actions = append(actions, pullEntry{
 					skill: remote, reason: "untracked-conflict", localDir: localDir,
 				})
+				divergedSlugs = append(divergedSlugs, remote.Name)
 			}
 			continue
 		}
@@ -858,7 +881,7 @@ func decidePullActions(remoteSkills []apiSkill, localSkills map[string]string, s
 		actions = append(actions, pullEntry{skill: remote, reason: "new"})
 	}
 
-	return actions, warnings
+	return actions, warnings, divergedSlugs
 }
 
 // runPullForce implements `airskills pull --force [skill...]`.
@@ -871,7 +894,11 @@ func runPullForce(cmd *cobra.Command, args []string) error {
 	}
 
 	syncState := loadSyncState()
-	_, mirrorConflicts := mirrorLocalSkills(syncState)
+	// runPullForce deliberately does NOT call propagatePartialRenames —
+	// force-pull means "discard my edits, take server's truth"; running
+	// rename inference here could silently undo a deliberate user `mv`.
+	_, mirrorConflicts, restoreHints := mirrorLocalSkills(syncState)
+	printMirrorRestoreHints(restoreHints)
 	mirrorConflictSet := map[string]bool{}
 	for _, c := range mirrorConflicts {
 		mirrorConflictSet[c.slug] = true
@@ -896,7 +923,7 @@ func runPullForce(cmd *cobra.Command, args []string) error {
 	}
 	rememberSkillsetAfterSuccess(cfg, resolvedSlug)
 
-	toPull, _ := decidePullActions(remoteSkills, localSkills, syncState)
+	toPull, _, _ := decidePullActions(remoteSkills, localSkills, syncState)
 	divergedMap := map[string]pullEntry{}
 	for _, p := range toPull {
 		if p.reason == "diverged" || p.reason == "untracked-conflict" {

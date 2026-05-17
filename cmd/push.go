@@ -158,29 +158,32 @@ caller asked about something else.`,
 
 		syncState := loadSyncState()
 
-		// Resolve partial renames BEFORE mirror. A manual `mv` in one
-		// agent dir leaves the same skill living under two names; if we
-		// let mirrorLocalSkills run first, it cross-pollinates both names
-		// across every agent and the rename signal is lost.
-		if scanned, scanErr := scanSkillsFromAgents(); scanErr == nil {
-			propagatePartialRenames(scanned, syncState)
-		}
-
-		// Propagate any local edit across every detected agent dir before we
-		// scan, so push sees a consistent view. Slugs whose copies can't be
-		// safely reconciled are reported and skipped below. When sync is
-		// the caller, share the conflict set with the pull step that
-		// follows so pull doesn't re-run mirror (which previously inverted
-		// under the just-advanced marker).
-		_, mirrorConflicts := mirrorLocalSkills(syncState)
-		printMirrorConflicts(mirrorConflicts)
+		// Propagate any local edit across every detected agent dir before
+		// we scan, so push sees a consistent view. Mirror runs only when
+		// push is invoked standalone; in a `sync` run pull already
+		// executed mirror (plus the partial-rename pass) and registered
+		// the conflict set in syncActiveConflicts. Reading that set lets
+		// push skip both the redundant mirror call and any upload that
+		// would collide with a pull-detected divergence.
 		mirrorConflictSet := map[string]bool{}
-		for _, c := range mirrorConflicts {
-			mirrorConflictSet[c.slug] = true
-		}
-		if syncActiveMirrorConflicts != nil {
-			for slug := range mirrorConflictSet {
-				syncActiveMirrorConflicts[slug] = true
+		if syncActiveConflicts != nil {
+			for slug := range syncActiveConflicts {
+				mirrorConflictSet[slug] = true
+			}
+		} else {
+			// Standalone push: run the partial-rename pass and mirror as
+			// before. A manual `mv` in one agent dir leaves the same
+			// skill living under two names; if mirror runs first it
+			// cross-pollinates both names across every agent and the
+			// rename signal is lost.
+			if scanned, scanErr := scanSkillsFromAgents(); scanErr == nil {
+				propagatePartialRenames(scanned, syncState)
+			}
+			_, mirrorConflicts, restoreHints := mirrorLocalSkills(syncState)
+			printMirrorConflicts(mirrorConflicts)
+			printMirrorRestoreHints(restoreHints)
+			for _, c := range mirrorConflicts {
+				mirrorConflictSet[c.slug] = true
 			}
 		}
 
