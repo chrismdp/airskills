@@ -22,11 +22,14 @@ func verboseEnabled(flag bool) bool {
 }
 
 // printPendingReviewSummary surfaces sourced skills whose upstream has
-// moved past the user's last resolved point. Terse for human TTYs;
-// verbose for agents and `--verbose` runs, including a "don't guess —
-// ask the user" affordance so an agent doesn't make incorporation
-// decisions on the user's behalf.
-func printPendingReviewSummary(verbose bool) {
+// moved past the user's last resolved point. One line per skill —
+// agents and humans get the same compact form. The verbose flag is
+// accepted for caller compatibility but no longer changes the output.
+//
+// Pointing at `airskills add owner/slug --force` replaces the older
+// `airskills incoming` command tree (deleted in
+// platform/doc/changes/cli-kill-incoming-and-fold-into-add-force.md).
+func printPendingReviewSummary(_ bool) {
 	states, err := gatherSyncState()
 	if err != nil {
 		return
@@ -37,6 +40,13 @@ func printPendingReviewSummary(verbose bool) {
 			pending = append(pending, s)
 		}
 	}
+	renderPendingReviewSummary(pending)
+}
+
+// renderPendingReviewSummary is the pure formatter — split from
+// printPendingReviewSummary so tests can drive the format without
+// having to mock the API client behind gatherSyncState.
+func renderPendingReviewSummary(pending []SkillStateInfo) {
 	if len(pending) == 0 {
 		return
 	}
@@ -48,35 +58,14 @@ func printPendingReviewSummary(verbose bool) {
 		fmt.Printf("%s Pending review (%d skills)\n", yellow("M*"), len(pending))
 	}
 
-	if !verbose {
-		for _, s := range pending {
-			fmt.Printf("  %s — your customised copy needs review against the new upstream\n", s.Name)
-		}
-		fmt.Printf("\n  Run %s for paths, options, and resolution steps.\n", cyan("airskills sync --verbose"))
-		return
-	}
-
 	for _, s := range pending {
-		fmt.Println()
-		fmt.Printf("%s — modified, pending review\n", s.Name)
 		if s.Marker != nil && s.Marker.Source != nil {
-			fmt.Printf("  upstream: %s/%s — moved past the version you last resolved\n",
-				s.Marker.Source.Owner, s.Marker.Source.Slug)
+			src := s.Marker.Source.Owner + "/" + s.Marker.Source.Slug
+			fmt.Printf("  %s %s — upstream %s advanced; take it with: airskills add %s --force\n",
+				yellow("!"), s.Name, src, src)
+		} else {
+			fmt.Printf("  %s %s — upstream advanced; take it with: airskills add <owner>/<slug> --force\n",
+				yellow("!"), s.Name)
 		}
-		fmt.Printf("  local:    ~/.claude/skills/%s (mirrored to every detected agent dir)\n", s.Name)
-		fmt.Println()
-		fmt.Println("  ASK THE USER before changing any of their files. Don't guess.")
-		fmt.Println("  Specifically confirm:")
-		fmt.Println("    - which changes from the upstream update they want to take")
-		fmt.Println("    - which of their local edits must be preserved")
-		fmt.Println()
-		fmt.Println("  Then run ONE of:")
-		if s.Marker != nil && s.Marker.Source != nil {
-			fmt.Printf("    airskills add %s/%s --preview      # read upstream without installing\n",
-				s.Marker.Source.Owner, s.Marker.Source.Slug)
-		}
-		fmt.Printf("    airskills pull --force %s            # take all upstream, drop local\n", s.Name)
-		fmt.Printf("    airskills resolve %s                 # keep local as-is, acknowledge upstream\n", s.Name)
-		fmt.Printf("    # or: edit local files yourself, then airskills resolve %s\n", s.Name)
 	}
 }

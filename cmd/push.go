@@ -499,10 +499,11 @@ caller asked about something else.`,
 
 				if s.marker != nil && s.marker.Source != nil && !pushForceSuggest {
 					if remote := remoteForUpstreamCheck(s.marker, remoteByID); remote != nil && upstreamAdvanced(s.marker, *remote) {
+						src := s.marker.Source.Owner + "/" + s.marker.Source.Slug
 						mu.Lock()
 						warnings = append(warnings, fmt.Sprintf(
-							"%s: upstream changes available — run airskills incoming %s first, or use --force-suggest to submit anyway.",
-							s.name, s.name))
+							"%s: upstream %s advanced — take it with 'airskills add %s --force' (drops your edits), or use --force-suggest to submit anyway.",
+							s.name, src, src))
 						mu.Unlock()
 						lines[i].status = "incoming"
 						lines[i].pct = 1

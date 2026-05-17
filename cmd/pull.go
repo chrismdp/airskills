@@ -64,13 +64,9 @@ type pullEntry struct {
 }
 
 type incomingDetail struct {
-	name              string
-	localDir          string
-	upstreamOwner     string
-	upstreamSlug      string
-	upstreamHash      string
-	upstreamVersion   string
-	pendingSuggestion bool
+	name          string
+	upstreamOwner string
+	upstreamSlug  string
 }
 
 func runPull(cmd *cobra.Command, args []string) error {
@@ -235,13 +231,9 @@ func runPull(cmd *cobra.Command, args []string) error {
 		if p.reason == "upstream-advanced" {
 			incoming++
 			incomingDetails = append(incomingDetails, incomingDetail{
-				name:              p.skill.Name,
-				localDir:          p.localDir,
-				upstreamOwner:     p.marker.Source.Owner,
-				upstreamSlug:      p.marker.Source.Slug,
-				upstreamHash:      currentUpstreamHash(p.marker, p.skill),
-				upstreamVersion:   p.skill.Version,
-				pendingSuggestion: p.marker.SuggestionID != "",
+				name:          p.skill.Name,
+				upstreamOwner: p.marker.Source.Owner,
+				upstreamSlug:  p.marker.Source.Slug,
 			})
 			lines[i].status = "incoming"
 			lines[i].pct = 1
@@ -506,15 +498,8 @@ func runPull(cmd *cobra.Command, args []string) error {
 			if d.upstreamOwner == "" {
 				source = d.upstreamSlug
 			}
-			fmt.Printf("  %s %s: upstream changes available from %s\n", yellow("!"), d.name, source)
-			fmt.Printf("     Your version: %s\n", d.localDir)
-			if d.upstreamVersion != "" {
-				fmt.Printf("     Upstream: %s @ %s (%s)\n", source, d.upstreamVersion, shortHash(d.upstreamHash))
-			}
-			if d.pendingSuggestion {
-				fmt.Println("     Pending suggestion may need rebasing before the owner can accept it.")
-			}
-			fmt.Printf("     Review with: airskills incoming %s\n", d.name)
+			fmt.Printf("  %s %s: upstream %s advanced — take it with: airskills add %s --force\n",
+				yellow("!"), d.name, source, source)
 		}
 	}
 

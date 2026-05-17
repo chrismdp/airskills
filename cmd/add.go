@@ -24,16 +24,23 @@ var addSkillFlag string
 
 var addAllFlag bool
 
+var addForce bool
+
 var addCmd = &cobra.Command{
 	Use:   "add <username/skill>",
 	Short: "Install a shared skill",
 	Long: `Install a skill from airskills.ai or directly from GitHub.
 
   airskills add chrismdp/retro                                          # from airskills.ai
+  airskills add chrismdp/retro --force                                  # overwrite local with upstream's current bytes
   airskills add github.com/supabase/agent-skills/supabase               # specific skill from GitHub repo
   airskills add github.com/owner/repo                                   # single-skill GitHub repo
   airskills add github.com/modelcontextprotocol/ext-apps --all          # install all skills in repo
-  airskills add github.com/modelcontextprotocol/ext-apps --skill a,b   # install subset`,
+  airskills add github.com/modelcontextprotocol/ext-apps --skill a,b   # install subset
+
+Use --force to take upstream's current bytes when you already have the
+skill installed (e.g. after an upstream notification on sync). Any
+local copy is backed up to ~/.airskills/undo/<timestamp>/ first.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		input := args[0]
@@ -150,6 +157,77 @@ var addCmd = &cobra.Command{
 		dirName := result.Slug
 
 		syncState := loadSyncState()
+
+		// --force path: overwrite any local copy with upstream's current
+		// bytes after backing up. Used when the user has been told (by
+		// the sync-time notification) that upstream is ahead and they
+		// want to adopt upstream's bytes. Replaces the deprecated
+		// `airskills incoming incorporate` flow. Source-of-truth spec:
+		// platform/doc/changes/cli-kill-incoming-and-fold-into-add-force.md.
+		if addForce {
+			home, _ := os.UserHomeDir()
+			localDirPath := filepath.Join(home, ".claude", "skills", dirName)
+			_, hasLocal := os.Stat(localDirPath)
+			if hasLocal == nil {
+				ts := time.Now().UTC().Format("20060102T150405Z")
+				undoPath, backupErr := backupSkillToUndo(dirName, ts)
+				if backupErr != nil {
+					return fmt.Errorf("%s: backup failed before --force install: %w. No files modified.", dirName, backupErr)
+				}
+
+				installed, installErr := installSkillToAgents(dirName, files)
+				if installErr != nil {
+					return fmt.Errorf("%s: install failed after backup: %w. Local files in ~/.airskills/undo/%s/", dirName, installErr, ts)
+				}
+
+				newHash := computeMerkleHash(files)
+				existing := syncState.Skills[dirName]
+				entry := existing
+				if entry == nil {
+					entry = &SyncEntry{Tool: "claude-code"}
+				}
+				entry.Version = result.Version
+				entry.ContentHash = newHash
+				entry.OwnerKind = ownerKind
+				entry.OwnerSlug = ownerSlug
+				if entry.Source == nil {
+					entry.Source = &skillSource{}
+				}
+				entry.Source.Owner = username
+				entry.Source.Slug = slug
+				entry.Source.ID = result.ID
+				entry.Source.ContentHash = newHash
+				entry.Source.UpstreamSkillID = result.ID
+				entry.Source.UpstreamContentHash = newHash
+				entry.Source.UpstreamVersion = result.Version
+				if entry.SkillID == "" {
+					entry.SkillID = result.ID
+				}
+				syncState.Skills[dirName] = entry
+				saveSyncState(syncState)
+
+				fmt.Printf("\n  %s %s/%s overwritten with upstream's current bytes (%d agents)\n",
+					green("✓"), ownerSlug, result.Slug, len(installed))
+				if undoPath != "" {
+					fmt.Printf("  Previous local files backed up to %s/\n", undoPath)
+				}
+				telemetry.Capture("cli_add", map[string]interface{}{
+					"owner":         username,
+					"slug":          slug,
+					"skill_id":      result.ID,
+					"agents":        len(installed),
+					"authenticated": authHeader != "",
+					"force":         true,
+				})
+				printAgentNextSteps(os.Stdout, []agentNextStep{
+					{Cmd: "airskills status", Why: "confirm local matches upstream"},
+					{Cmd: "airskills push", Why: "push the new bytes up to your fork on the server"},
+				})
+				return nil
+			}
+			// No local copy yet — --force is a no-op; fall through to
+			// normal install.
+		}
 
 		// Collision check: if a different skill already lives at this dir
 		// name, write the incoming SKILL.md to /tmp and bail. We never
@@ -394,5 +472,6 @@ func init() {
 	addCmd.Flags().BoolVar(&addPreview, "preview", false, "Show skill content without installing")
 	addCmd.Flags().StringVar(&addSkillFlag, "skill", "", "Install specific skill(s) from a multi-skill GitHub repo (comma-separated names or path/to/name)")
 	addCmd.Flags().BoolVar(&addAllFlag, "all", false, "Install all skills found in a GitHub repository")
+	addCmd.Flags().BoolVar(&addForce, "force", false, "Take upstream's current bytes, overwriting any local copy (local backed up to ~/.airskills/undo/)")
 	rootCmd.AddCommand(addCmd)
 }

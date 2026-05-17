@@ -1140,7 +1140,7 @@ func TestPushBlocksSuggestionWhenUpstreamAdvanced(t *testing.T) {
 	if suggestionCalls != 0 {
 		t.Fatalf("suggestion called %d times; stale suggestion should be blocked", suggestionCalls)
 	}
-	if !strings.Contains(out, "airskills incoming shared-skill") {
-		t.Fatalf("expected incoming hint, got:\n%s", out)
+	if !strings.Contains(out, "airskills add upstream-org/shared-skill --force") {
+		t.Fatalf("expected incoming hint pointing at airskills add --force, got:\n%s", out)
 	}
 }
