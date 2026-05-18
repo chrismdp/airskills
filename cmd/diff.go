@@ -6,9 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
-	"strings"
 
-	"github.com/chrismdp/airskills/internal/apitypes"
 	"github.com/spf13/cobra"
 )
 
@@ -49,34 +47,25 @@ func runDiff(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("skill %q not found in sync state — is it tracked by airskills? Run 'airskills list'", skillName)
 	}
 
-	// Get version history to find the latest commit (or use specified one)
-	commits, err := client.getVersionHistory(entry.SkillID)
-	if err != nil {
-		return fmt.Errorf("fetching version history: %w", err)
-	}
-
-	var latestCommit apitypes.SkillCommit
+	var resolvedCommitID string
 	if commitID != "" {
-		found := false
-		for _, c := range commits {
-			if strings.HasPrefix(c.Id.String(), commitID) {
-				latestCommit = c
-				found = true
-				break
-			}
-		}
-		if !found {
-			return fmt.Errorf("commit %q not found in version history for %q", commitID, skillName)
+		resolvedCommitID, err = resolveCommitID(client, entry.SkillID, commitID)
+		if err != nil {
+			return err
 		}
 	} else {
+		commits, err := client.getVersionHistory(entry.SkillID)
+		if err != nil {
+			return fmt.Errorf("fetching version history: %w", err)
+		}
 		if len(commits) == 0 {
 			return fmt.Errorf("no versions found for %q on the server", skillName)
 		}
-		latestCommit = commits[0]
+		resolvedCommitID = commits[0].Id.String()
 	}
 
 	// Download server version
-	serverFiles, err := client.getVersionContent(entry.SkillID, latestCommit.Id.String())
+	serverFiles, err := client.getVersionContent(entry.SkillID, resolvedCommitID)
 	if err != nil {
 		return fmt.Errorf("downloading server version: %w", err)
 	}
@@ -167,7 +156,7 @@ func runDiff(cmd *cobra.Command, args []string) error {
 
 	if !anyChanged {
 		fmt.Printf("%s %s is in sync with the server (commit %s)\n",
-			green("✓"), skillName, latestCommit.Id.String()[:8])
+			green("✓"), skillName, resolvedCommitID[:8])
 	}
 
 	return nil

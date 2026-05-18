@@ -111,7 +111,11 @@ func runExport(cmd *cobra.Command, args []string) error {
 
 	var files map[string][]byte
 	if commitID != "" {
-		files, err = client.getVersionContent(target.Id.String(), commitID)
+		fullID, err := resolveCommitID(client, target.Id.String(), commitID)
+		if err != nil {
+			return err
+		}
+		files, err = client.getVersionContent(target.Id.String(), fullID)
 		if err != nil {
 			return fmt.Errorf("downloading version %s: %w", commitID, err)
 		}
