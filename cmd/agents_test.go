@@ -564,25 +564,33 @@ func TestMirrorPreservesEditToNonSkillMdFile(t *testing.T) {
 	claudeDir := filepath.Join(tmpHome, ".claude", "skills", "foo")
 	cursorDir := filepath.Join(tmpHome, ".cursor", "skills", "foo")
 
-	// claude carries the edit. SKILL.md is the *original* content; the
-	// script file is the edit. Backdate SKILL.md so it's older than
-	// cursor's SKILL.md (simulates "claude's SKILL.md hasn't been touched
-	// in days; cursor's SKILL.md was just rewritten by mirror").
+	// Pin every file's mtime explicitly so the test doesn't rely on
+	// filesystem resolution — macOS truncates to seconds.
+	stale := time.Now().Add(-2 * time.Hour)
+	cursorTouch := time.Now().Add(-1 * time.Hour)
+	freshEdit := time.Now()
+
+	// claude carries the edit. SKILL.md is the *original* content and is
+	// stale; the script file is the fresh edit.
 	writeSkillFile(t, filepath.Join(claudeDir, "SKILL.md"), "# foo\n")
 	writeSkillFile(t, filepath.Join(claudeDir, "scripts", "do.sh"), "#!/bin/sh\necho edited\n")
-	staleSkillMd := time.Now().Add(-2 * time.Hour)
-	if err := os.Chtimes(filepath.Join(claudeDir, "SKILL.md"), staleSkillMd, staleSkillMd); err != nil {
+	if err := os.Chtimes(filepath.Join(claudeDir, "SKILL.md"), stale, stale); err != nil {
 		t.Fatalf("chtimes claude SKILL.md: %v", err)
 	}
+	if err := os.Chtimes(filepath.Join(claudeDir, "scripts", "do.sh"), freshEdit, freshEdit); err != nil {
+		t.Fatalf("chtimes claude script: %v", err)
+	}
 
-	// cursor has the SAME SKILL.md (so SKILL.md hashes match) but an OLD
-	// script. cursor's SKILL.md was just touched (newer than claude's).
+	// cursor has the same SKILL.md (so the SKILL.md bytes match) but an
+	// old script. cursor's SKILL.md was just touched (newer than claude's
+	// SKILL.md, older than claude's script edit) — this is the trap the
+	// pre-fix code fell into.
 	writeSkillFile(t, filepath.Join(cursorDir, "SKILL.md"), "# foo\n")
 	writeSkillFile(t, filepath.Join(cursorDir, "scripts", "do.sh"), "#!/bin/sh\necho old\n")
-	// Backdate cursor's script so it's older than claude's edit, but
-	// leave cursor's SKILL.md at "now" — this is the trap.
-	oldScript := time.Now().Add(-2 * time.Hour)
-	if err := os.Chtimes(filepath.Join(cursorDir, "scripts", "do.sh"), oldScript, oldScript); err != nil {
+	if err := os.Chtimes(filepath.Join(cursorDir, "SKILL.md"), cursorTouch, cursorTouch); err != nil {
+		t.Fatalf("chtimes cursor SKILL.md: %v", err)
+	}
+	if err := os.Chtimes(filepath.Join(cursorDir, "scripts", "do.sh"), stale, stale); err != nil {
 		t.Fatalf("chtimes cursor script: %v", err)
 	}
 
