@@ -545,6 +545,72 @@ func TestMirrorAllCopiesIdenticalNoOp(t *testing.T) {
 	}
 }
 
+// TestMirrorPreservesEditToNonSkillMdFile reproduces a real production bug:
+// pickAuthoritativeHash was using SKILL.md mtime as a proxy for "newest
+// edit", but real edits often touch other files (scripts, references) and
+// leave SKILL.md untouched. With one agent dir holding the edit (newer
+// non-SKILL.md mtime, but older SKILL.md mtime than a sibling whose
+// SKILL.md was last touched by a previous mirror pass), mirror picked the
+// sibling and silently overwrote the edit.
+//
+// Concrete: agent edits project/scripts/foo.py. SKILL.md hasn't been
+// touched since the last sync. Another agent dir's SKILL.md was rewritten
+// by a recent mirror run so its mtime is newer. Under the old rule that
+// agent dir "wins" → edit lost.
+func TestMirrorPreservesEditToNonSkillMdFile(t *testing.T) {
+	tmpHome := t.TempDir()
+	setTestHome(t, tmpHome)
+
+	claudeDir := filepath.Join(tmpHome, ".claude", "skills", "foo")
+	cursorDir := filepath.Join(tmpHome, ".cursor", "skills", "foo")
+
+	// claude carries the edit. SKILL.md is the *original* content; the
+	// script file is the edit. Backdate SKILL.md so it's older than
+	// cursor's SKILL.md (simulates "claude's SKILL.md hasn't been touched
+	// in days; cursor's SKILL.md was just rewritten by mirror").
+	writeSkillFile(t, filepath.Join(claudeDir, "SKILL.md"), "# foo\n")
+	writeSkillFile(t, filepath.Join(claudeDir, "scripts", "do.sh"), "#!/bin/sh\necho edited\n")
+	staleSkillMd := time.Now().Add(-2 * time.Hour)
+	if err := os.Chtimes(filepath.Join(claudeDir, "SKILL.md"), staleSkillMd, staleSkillMd); err != nil {
+		t.Fatalf("chtimes claude SKILL.md: %v", err)
+	}
+
+	// cursor has the SAME SKILL.md (so SKILL.md hashes match) but an OLD
+	// script. cursor's SKILL.md was just touched (newer than claude's).
+	writeSkillFile(t, filepath.Join(cursorDir, "SKILL.md"), "# foo\n")
+	writeSkillFile(t, filepath.Join(cursorDir, "scripts", "do.sh"), "#!/bin/sh\necho old\n")
+	// Backdate cursor's script so it's older than claude's edit, but
+	// leave cursor's SKILL.md at "now" — this is the trap.
+	oldScript := time.Now().Add(-2 * time.Hour)
+	if err := os.Chtimes(filepath.Join(cursorDir, "scripts", "do.sh"), oldScript, oldScript); err != nil {
+		t.Fatalf("chtimes cursor script: %v", err)
+	}
+
+	// Marker matches neither set — forces the "fall through to newest
+	// mtime" branch in pickAuthoritativeHash.
+	state := &SyncState{
+		Version: 1,
+		Skills: map[string]*SyncEntry{
+			"foo": {SkillID: testUUID("skill-1").String(), Version: "1.0.0", ContentHash: "stale-marker-hash", Tool: "claude-code"},
+		},
+	}
+
+	_, conflicts, _ := mirrorLocalSkills(state)
+	if len(conflicts) != 0 {
+		t.Fatalf("unexpected conflicts: %+v", conflicts)
+	}
+
+	// The edit must survive in both dirs.
+	got, _ := os.ReadFile(filepath.Join(claudeDir, "scripts", "do.sh"))
+	if string(got) != "#!/bin/sh\necho edited\n" {
+		t.Errorf("claude script reverted to %q — mirror used SKILL.md mtime and overwrote the edit", string(got))
+	}
+	cursorScript, _ := os.ReadFile(filepath.Join(cursorDir, "scripts", "do.sh"))
+	if string(cursorScript) != "#!/bin/sh\necho edited\n" {
+		t.Errorf("cursor script = %q, want edit propagated from claude", string(cursorScript))
+	}
+}
+
 // TestNamespacedSlug verifies the naming helper used by the add command.
 func TestNamespacedSlug(t *testing.T) {
 	tests := []struct {

@@ -595,13 +595,13 @@ func pickAuthoritativeHash(
 	newestPath := ""
 	var newestTime time.Time
 	for _, p := range paths {
-		info, err := os.Stat(filepath.Join(p, "SKILL.md"))
-		if err != nil {
+		t := newestFileMtime(p)
+		if t.IsZero() {
 			continue
 		}
-		if newestPath == "" || info.ModTime().After(newestTime) {
+		if newestPath == "" || t.After(newestTime) {
 			newestPath = p
-			newestTime = info.ModTime()
+			newestTime = t
 		}
 	}
 	if newestPath == "" {
@@ -610,19 +610,55 @@ func pickAuthoritativeHash(
 	return hashByPath[newestPath]
 }
 
-// newestSkillMtime returns the most recent SKILL.md mtime across the
-// given skill directory paths. Zero value if none are stat-able.
+// newestSkillMtime returns the most recent mtime across the tracked
+// skill files in the given directory paths. "Tracked" means the same
+// set readSkillFiles considers: every file under the dir except the
+// .airskills marker and paths matched by shouldIgnoreFile (__pycache__,
+// .DS_Store, etc.).
+//
+// Looking only at SKILL.md was wrong — many edits touch scripts or
+// references and leave SKILL.md untouched. Mirror then treated those
+// dirs as "older" than siblings whose SKILL.md had been rewritten by a
+// previous mirror pass, and silently overwrote the edits.
 func newestSkillMtime(skillPaths []string) time.Time {
 	var newest time.Time
 	for _, p := range skillPaths {
-		info, err := os.Stat(filepath.Join(p, "SKILL.md"))
+		t := newestFileMtime(p)
+		if !t.IsZero() && (newest.IsZero() || t.After(newest)) {
+			newest = t
+		}
+	}
+	return newest
+}
+
+// newestFileMtime walks one skill directory and returns the newest
+// mtime among its tracked files (same filter as readSkillFiles).
+// Zero value if the dir is empty or unreadable.
+func newestFileMtime(dir string) time.Time {
+	var newest time.Time
+	filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
-			continue
+			return nil
+		}
+		if info.IsDir() {
+			rel, _ := filepath.Rel(dir, path)
+			if rel != "." && shouldIgnoreFile(rel) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if info.Name() == ".airskills" {
+			return nil
+		}
+		rel, _ := filepath.Rel(dir, path)
+		if shouldIgnoreFile(rel) {
+			return nil
 		}
 		if newest.IsZero() || info.ModTime().After(newest) {
 			newest = info.ModTime()
 		}
-	}
+		return nil
+	})
 	return newest
 }
 
