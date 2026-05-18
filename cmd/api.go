@@ -329,14 +329,21 @@ type apiClient struct {
 	baseURL string
 	token   string
 	http    *http.Client
+	// httpArchive is used for archive uploads/downloads. Large skills
+	// (hundreds of files) make the server's per-file Storage round-trips
+	// add up well past the 30s general client cap, so this client gets
+	// a much longer ceiling. Wire transfer is fast (gzipped tar); the
+	// time is Cloudflare Worker CPU and Supabase Storage latency.
+	httpArchive *http.Client
 }
 
 // newAPIClient creates an API client from config and token.
 func newAPIClient(cfg *config.Config, token *config.TokenData) *apiClient {
 	return &apiClient{
-		baseURL: cfg.APIURL,
-		token:   token.AccessToken,
-		http:    &http.Client{Timeout: 30 * time.Second},
+		baseURL:     cfg.APIURL,
+		token:       token.AccessToken,
+		http:        &http.Client{Timeout: 30 * time.Second},
+		httpArchive: &http.Client{Timeout: 5 * time.Minute},
 	}
 }
 
@@ -762,7 +769,7 @@ func (c *apiClient) putArchive(skillID string, archive []byte, expectedHash, con
 		req.Header.Set("X-Content-Hash", contentHash)
 	}
 
-	resp, err := doRequest(c.http, req)
+	resp, err := doRequest(c.httpArchive, req)
 	if err != nil {
 		return nil, 0, err
 	}
