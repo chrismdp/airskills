@@ -71,8 +71,33 @@ func maybeAutoUpdate() bool {
 		return false
 	}
 
-	newVersion, err := performUpdate(version, false, "auto")
+	newVersion, err := performUpdateFn(version, false, "auto")
 	finalizeAutoUpdate(state.LatestVersion, version, newVersion, err)
+
+	// Re-exec into the freshly-installed binary so the user's command
+	// runs on the new code, not the still-in-memory old version. Without
+	// this, `airskills sync` (and any other long-running command) would
+	// continue with the v_old flow even though v_new is now on disk —
+	// observed in the wild as a sync that printed "updating to v_new"
+	// and then ran the v_old sync semantics. Reuses the same guard env
+	// as the 426 path so a runaway loop is impossible: in the new
+	// process, version == LatestVersion → isNewer is false → return
+	// early. The env var is belt-and-braces in case state.json races.
+	if err == nil && newVersion != "" {
+		execPath, exErr := os.Executable()
+		if exErr == nil {
+			env := append(os.Environ(), reExecGuardEnv+"=1")
+			if reExecErr := reExecFn(execPath, os.Args, env); reExecErr != nil {
+				// On re-exec failure, fall through — the user's command
+				// continues on old code (which is what we did before
+				// this change, so no regression).
+				fmt.Fprintf(os.Stderr,
+					"airskills: updated to v%s but cannot re-exec (%v) — current command will run on v%s; next invocation will use v%s\n",
+					newVersion, reExecErr, version, newVersion)
+			}
+			// reExecFn does not return on success.
+		}
+	}
 	return true
 }
 
