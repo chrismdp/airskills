@@ -45,6 +45,14 @@ func maybeAutoUpdate() bool {
 	if noUpdate {
 		return false
 	}
+	// Same guard used by the 426 path: if this process was spawned by a
+	// previous re-exec, don't attempt another update. Belt-and-braces
+	// against a pathological case (e.g. checksum-passing but version-
+	// mismatched download) where the child's `version` is still behind
+	// `state.LatestVersion` and would otherwise loop.
+	if os.Getenv(reExecGuardEnv) == "1" {
+		return false
+	}
 
 	dir, err := config.Dir()
 	if err != nil {

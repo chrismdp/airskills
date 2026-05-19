@@ -131,6 +131,41 @@ func TestMaybeAutoUpdateReExecsAfterSuccess(t *testing.T) {
 	}
 }
 
+// TestMaybeAutoUpdateSkipsWhenGuardEnvSet pins the no-loop defence:
+// the child of a previous re-exec must not attempt another update,
+// even if its `version` somehow disagrees with state.LatestVersion
+// (pathological download or a state.json race).
+func TestMaybeAutoUpdateSkipsWhenGuardEnvSet(t *testing.T) {
+	tmpHome := t.TempDir()
+	setTestHome(t, tmpHome)
+
+	cfgDir := filepath.Join(tmpHome, ".config", "airskills")
+	if err := os.MkdirAll(cfgDir, 0700); err != nil {
+		t.Fatalf("mkdir cfg: %v", err)
+	}
+	state := updateState{LatestVersion: "9.9.9"}
+	data, _ := json.Marshal(state)
+	if err := os.WriteFile(filepath.Join(cfgDir, "update_state.json"), data, 0644); err != nil {
+		t.Fatalf("write update_state: %v", err)
+	}
+
+	oldVersion := version
+	version = "0.0.1"
+	t.Cleanup(func() { version = oldVersion })
+
+	t.Setenv(reExecGuardEnv, "1")
+
+	performUpdateFn = func(string, bool, string) (string, error) {
+		t.Fatal("performUpdate must NOT be called when guard env is set")
+		return "", nil
+	}
+	t.Cleanup(func() { performUpdateFn = performUpdate })
+
+	if maybeAutoUpdate() {
+		t.Error("maybeAutoUpdate returned true (attempted) under guard env; should have skipped")
+	}
+}
+
 func TestClassifyUpdateError(t *testing.T) {
 	cases := []struct {
 		err  error
