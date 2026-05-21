@@ -159,6 +159,19 @@ func runDiff(cmd *cobra.Command, args []string) error {
 			green("✓"), skillName, resolvedCommitID[:8])
 	}
 
+	// Surface what .askignore / .gitignore is hiding so silent skipping
+	// doesn't become debug hell. One block per local copy.
+	for _, localDir := range localDirs {
+		entries := listIgnoredFiles(localDir)
+		if len(entries) == 0 {
+			continue
+		}
+		fmt.Printf("\n# ignored (%s)\n", localDir)
+		for _, e := range entries {
+			fmt.Printf("  %s  (%s)\n", e.Path, e.Reason)
+		}
+	}
+
 	return nil
 }
 

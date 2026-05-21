@@ -112,6 +112,146 @@ func TestReadSkillFilesIgnoresNoise(t *testing.T) {
 	}
 }
 
+// End-to-end: a skill with .askignore + .gitignore (merged, with negation
+// re-includes) plus a nested .gitignore. The archive and the local
+// hash-input reader must agree on what's included.
+func TestCreateTarGzHonoursIgnoreFiles(t *testing.T) {
+	dir := t.TempDir()
+	skillDir := filepath.Join(dir, "dreamy")
+	os.MkdirAll(skillDir, 0755)
+	os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("# Dreamy"), 0644)
+
+	os.MkdirAll(filepath.Join(skillDir, "scripts"), 0755)
+	os.WriteFile(filepath.Join(skillDir, "scripts", "run.sh"), []byte("personal cron"), 0644)
+	os.WriteFile(filepath.Join(skillDir, "scripts", "shared.py"), []byte("shared"), 0644)
+	os.WriteFile(filepath.Join(skillDir, "scripts", "debug.log"), []byte("noise"), 0644)
+	os.WriteFile(filepath.Join(skillDir, "scripts", "keep.log"), []byte("kept"), 0644)
+	// Nested .gitignore inside scripts/ re-includes keep.log even though
+	// the root .gitignore ignores *.log.
+	os.WriteFile(filepath.Join(skillDir, "scripts", ".gitignore"), []byte("!keep.log\n"), 0644)
+
+	os.MkdirAll(filepath.Join(skillDir, "state"), 0755)
+	os.WriteFile(filepath.Join(skillDir, "state", "sync.json"), []byte("local"), 0644)
+
+	// .gitignore ignores all *.log files; .askignore adds state/ and a
+	// personal-only scripts/run.sh.
+	os.WriteFile(filepath.Join(skillDir, ".gitignore"), []byte("*.log\n"), 0644)
+	os.WriteFile(filepath.Join(skillDir, ".askignore"), []byte("scripts/run.sh\nstate/\n"), 0644)
+
+	data, err := createTarGz(skillDir)
+	if err != nil {
+		t.Fatalf("createTarGz: %v", err)
+	}
+	gz, _ := gzip.NewReader(bytes.NewReader(data))
+	defer gz.Close()
+	tr := tar.NewReader(gz)
+	files := map[string]bool{}
+	for {
+		h, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("tar read: %v", err)
+		}
+		files[h.Name] = true
+	}
+
+	must := []string{"dreamy/SKILL.md", "dreamy/scripts/shared.py", "dreamy/scripts/keep.log"}
+	for _, p := range must {
+		if !files[p] {
+			t.Errorf("%s should be uploaded", p)
+		}
+	}
+	mustNot := []string{
+		"dreamy/scripts/run.sh",   // .askignore
+		"dreamy/scripts/debug.log", // .gitignore *.log
+		"dreamy/state/sync.json",  // .askignore state/
+		"dreamy/.askignore",       // ignore files never uploaded
+		"dreamy/.gitignore",
+		"dreamy/scripts/.gitignore",
+	}
+	for _, p := range mustNot {
+		if files[p] {
+			t.Errorf("%s should NOT be uploaded", p)
+		}
+	}
+
+	// Hash-input reader sees the same view.
+	got := readSkillFiles(skillDir)
+	if _, ok := got["scripts/run.sh"]; ok {
+		t.Error("readSkillFiles should exclude scripts/run.sh")
+	}
+	if _, ok := got["scripts/keep.log"]; !ok {
+		t.Error("readSkillFiles should keep scripts/keep.log (re-included by nested .gitignore)")
+	}
+	if _, ok := got["state/sync.json"]; ok {
+		t.Error("readSkillFiles should exclude state/sync.json")
+	}
+}
+
+// --no-ignore bypasses .askignore/.gitignore for that push (built-in noise
+// still excluded). Used for "move a skill between machines without losing
+// local config" — the user explicitly opts in to shipping everything.
+func TestCreateTarGzNoIgnore(t *testing.T) {
+	dir := t.TempDir()
+	skillDir := filepath.Join(dir, "everything")
+	os.MkdirAll(skillDir, 0755)
+	os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("# Everything"), 0644)
+	os.WriteFile(filepath.Join(skillDir, "local.cfg"), []byte("secret"), 0644)
+	os.WriteFile(filepath.Join(skillDir, ".askignore"), []byte("local.cfg\n"), 0644)
+	// Built-in noise must still be excluded.
+	os.MkdirAll(filepath.Join(skillDir, "node_modules", "x"), 0755)
+	os.WriteFile(filepath.Join(skillDir, "node_modules", "x", "index.js"), []byte("noise"), 0644)
+
+	prev := pushNoIgnore
+	pushNoIgnore = true
+	defer func() { pushNoIgnore = prev }()
+
+	data, err := createTarGz(skillDir)
+	if err != nil {
+		t.Fatalf("createTarGz: %v", err)
+	}
+	gz, _ := gzip.NewReader(bytes.NewReader(data))
+	defer gz.Close()
+	tr := tar.NewReader(gz)
+	files := map[string]bool{}
+	for {
+		h, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("tar read: %v", err)
+		}
+		files[h.Name] = true
+	}
+
+	if !files["everything/local.cfg"] {
+		t.Error("--no-ignore should override .askignore and include local.cfg")
+	}
+	if files["everything/node_modules/x/index.js"] {
+		t.Error("built-in noise must still be excluded even with --no-ignore")
+	}
+}
+
+// If any rule (e.g. *.md typo) would exclude SKILL.md, push fails loudly.
+func TestCreateTarGzRefusesIfSkillFileIgnored(t *testing.T) {
+	dir := t.TempDir()
+	skillDir := filepath.Join(dir, "broken")
+	os.MkdirAll(skillDir, 0755)
+	os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("# Broken"), 0644)
+	os.WriteFile(filepath.Join(skillDir, ".askignore"), []byte("*.md\n"), 0644)
+
+	_, err := createTarGz(skillDir)
+	if err == nil {
+		t.Fatal("expected error — *.md should have blocked the push")
+	}
+	if _, ok := err.(*skillFileIgnoredError); !ok {
+		t.Errorf("expected skillFileIgnoredError, got %T: %v", err, err)
+	}
+}
+
 func TestExtractTarGzToMap(t *testing.T) {
 	srcDir := t.TempDir()
 	skillDir := filepath.Join(srcDir, "my-skill")

@@ -71,6 +71,7 @@ type pendingShadowFork struct {
 var pushForce bool
 var pushOrg string
 var pushForceSuggest bool
+var pushNoIgnore bool
 
 var pushCmd = &cobra.Command{
 	Use:   "push [skill...]",
@@ -93,7 +94,17 @@ in opposite directions.
 Mirror and orphan-classifier passes always run across every detected skill,
 even when push is scoped to named skills — mirroring keeps multi-agent dirs
 consistent and surfacing moved/deleted markers is important even when the
-caller asked about something else.`,
+caller asked about something else.
+
+A skill folder may contain a .askignore (or .gitignore) at any depth using
+standard gitignore syntax to keep local-only files (cron wrappers, sync
+state, secrets) out of the upload. Both files are honoured and merge — use
+.askignore for "git-tracked but not airskills-pushed", or vice versa. Run
+'airskills diff <skill>' to see exactly what's being excluded, or push -v
+for a per-file rundown. SKILL.md is always uploaded — if a rule matches it,
+push fails so the rule can be fixed. --no-ignore bypasses both files for
+one push (handy for moving a skill between machines without losing local
+config).`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := newAPIClientAuto()
 		if err != nil {
@@ -393,6 +404,34 @@ caller asked about something else.`,
 		if len(skills) > freeSkillLimit {
 			warnings = append(warnings, fmt.Sprintf("%d skills exceeds %d free tier limit — will not be supported in future versions. See airskills.ai/pricing", len(skills), freeSkillLimit))
 		}
+		// Fail fast if any skill's ignore rules would exclude SKILL.md —
+		// the skill is meaningless without it and we'd rather the author
+		// fix the rule than silently ship a broken upload.
+		for _, s := range skills {
+			if err := newPushMatcher(s.dir).CheckSkillFile(); err != nil {
+				return fmt.Errorf("%s: %w", s.name, err)
+			}
+		}
+
+		// Verbose mode: print the files each skill will exclude, with the
+		// matching rule, before any upload starts. Run serially so output
+		// doesn't interleave with the parallel push progress bar below.
+		if verbose {
+			for _, s := range skills {
+				if pushNoIgnore {
+					continue // user opted out of ignore rules entirely
+				}
+				entries := listIgnoredFiles(s.dir)
+				if len(entries) == 0 {
+					continue
+				}
+				fmt.Printf("  %s: excluding %d file(s)\n", s.name, len(entries))
+				for _, e := range entries {
+					fmt.Printf("    %s  (%s)\n", e.Path, e.Reason)
+				}
+			}
+		}
+
 		// Calculate total local storage
 		var totalStorage int64
 		for _, s := range skills {
@@ -1122,8 +1161,9 @@ func movedDestinationInEffectiveSet(a skippedAction, remoteSkills []apiSkill, or
 func init() {
 	pushCmd.Flags().BoolVar(&pushForce, "force", false, "Skip conflict check (use after resolving conflicts)")
 	pushCmd.Flags().BoolVar(&pushForceSuggest, "force-suggest", false, "Submit a suggestion even when upstream has changed")
-	pushCmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "Show per-skill progress")
+	pushCmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "Show per-skill progress (and the files excluded by .askignore/.gitignore)")
 	pushCmd.Flags().StringVar(&pushOrg, "org", "", "Create new skills under this org (org admins only)")
+	pushCmd.Flags().BoolVar(&pushNoIgnore, "no-ignore", false, "Bypass .askignore and .gitignore for this push (built-in noise like node_modules is still excluded)")
 	rootCmd.AddCommand(pushCmd)
 }
 
@@ -1139,7 +1179,19 @@ func remoteForUpstreamCheck(marker *SyncEntry, remoteByID map[string]*apiSkill) 
 	return remoteByID[sourceUpstreamID(marker.Source)]
 }
 
+// createTarGz builds the push tarball, honouring per-skill .askignore /
+// .gitignore (plus built-in noise). Fails fast if the matcher would exclude
+// SKILL.md — a skill without its manifest is broken and the user needs to
+// see and fix the offending rule.
 func createTarGz(dir string) ([]byte, error) {
+	return createTarGzWith(dir, newPushMatcher(dir))
+}
+
+func createTarGzWith(dir string, matcher *ignoreMatcher) ([]byte, error) {
+	if err := matcher.CheckSkillFile(); err != nil {
+		return nil, err
+	}
+
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gz)
@@ -1156,11 +1208,13 @@ func createTarGz(dir string) ([]byte, error) {
 		}
 
 		rel, _ := filepath.Rel(dir, path)
-		if rel != "." && shouldIgnoreFile(rel) {
-			if info.IsDir() {
-				return filepath.SkipDir
+		if rel != "." {
+			if ignored, _ := matcher.Decide(rel, info.IsDir()); ignored {
+				if info.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
 			}
-			return nil
 		}
 
 		header, err := tar.FileInfoHeader(info, "")
@@ -1198,8 +1252,14 @@ func createTarGz(dir string) ([]byte, error) {
 }
 
 // readSkillFiles reads all files in a skill directory (excluding .airskills
-// marker and universal dev noise — see shouldIgnoreFile).
+// marker, universal dev noise, and per-skill .askignore/.gitignore patterns —
+// see ignoreMatcher). Used as the canonical "what belongs to this skill"
+// view by hash computation, diff, status, doctor, pull and push.
 func readSkillFiles(dir string) map[string][]byte {
+	return readSkillFilesWith(dir, newPushMatcher(dir))
+}
+
+func readSkillFilesWith(dir string, matcher *ignoreMatcher) map[string][]byte {
 	files := map[string][]byte{}
 	filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -1209,11 +1269,13 @@ func readSkillFiles(dir string) map[string][]byte {
 			return nil
 		}
 		rel, _ := filepath.Rel(dir, path)
-		if rel != "." && shouldIgnoreFile(rel) {
-			if info.IsDir() {
-				return filepath.SkipDir
+		if rel != "." {
+			if ignored, _ := matcher.Decide(rel, info.IsDir()); ignored {
+				if info.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
 			}
-			return nil
 		}
 		if info.IsDir() {
 			return nil
@@ -1227,6 +1289,18 @@ func readSkillFiles(dir string) map[string][]byte {
 		return nil
 	})
 	return files
+}
+
+// newPushMatcher returns the matcher used by the push code paths. When
+// `--no-ignore` is set, the matcher is empty so only built-in noise applies
+// — user .askignore / .gitignore rules are bypassed. Built-in noise is
+// always enforced even with `--no-ignore` (you really don't want node_modules
+// in your skill upload).
+func newPushMatcher(dir string) *ignoreMatcher {
+	if pushNoIgnore {
+		return &ignoreMatcher{ignoreFiles: map[string]bool{}}
+	}
+	return newIgnoreMatcher(dir)
 }
 
 // propagatePartialRenames detects skills whose dir was manually renamed in
