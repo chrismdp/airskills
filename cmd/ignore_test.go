@@ -234,12 +234,153 @@ func TestIgnoreMatcher_SkillFileProtected(t *testing.T) {
 	}
 }
 
-// A user with no rule for SKILL.md passes the check.
+// A user with no rule for SKILL.md passes the check. The built-in swap-file
+// suffix `.swp` matches `SKILL.md.swp`, not `SKILL.md` itself — the guard
+// should not false-positive on it.
 func TestIgnoreMatcher_SkillFileFine(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, ".askignore"), []byte("state/\n"), 0644)
+	os.WriteFile(filepath.Join(dir, ".askignore"), []byte("state/\n*.swp\n"), 0644)
 	m := newIgnoreMatcher(dir)
 	if err := m.CheckSkillFile(); err != nil {
 		t.Errorf("unexpected SKILL.md error: %v", err)
+	}
+	// And the swap-file pattern still matches the actual swap file.
+	if ig, _ := m.Decide("SKILL.md.swp", false); !ig {
+		t.Error("SKILL.md.swp should be ignored")
+	}
+}
+
+// Leading slash anchors a pattern to the directory holding the ignore file —
+// `/state` matches `state` at the skill root but not `scripts/state` further
+// down. A bare `state` (no slash) matches anywhere.
+func TestIgnoreMatcher_LeadingSlashAnchors(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, ".askignore"), []byte("/state\n"), 0644)
+
+	m := newIgnoreMatcher(dir)
+	if ig, _ := m.Decide("state", true); !ig {
+		t.Error("/state should match root-level state dir")
+	}
+	if ig, _ := m.Decide("scripts/state", true); ig {
+		t.Error("/state should NOT match nested scripts/state")
+	}
+}
+
+// `**` matches arbitrary path depth. Both `**/x.sh` (anywhere) and
+// `logs/**` (anything under logs) work.
+func TestIgnoreMatcher_DoubleStar(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, ".askignore"), []byte("**/secret.key\nlogs/**\n"), 0644)
+	m := newIgnoreMatcher(dir)
+	cases := []struct {
+		rel  string
+		want bool
+	}{
+		{"secret.key", true},
+		{"scripts/secret.key", true},
+		{"a/b/c/secret.key", true},
+		{"logs/today.log", true},
+		{"logs/by-date/2026-05-21.log", true},
+		{"unrelated.txt", false},
+	}
+	for _, tc := range cases {
+		if ig, reason := m.Decide(tc.rel, false); ig != tc.want {
+			t.Errorf("Decide(%q) = %v (%s), want %v", tc.rel, ig, reason, tc.want)
+		}
+	}
+}
+
+// CRLF line endings (Windows) shouldn't break pattern parsing — go-gitignore
+// strips \r itself, and our negation extractor uses TrimSpace which also
+// handles it.
+func TestIgnoreMatcher_CRLF(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, ".askignore"), []byte("state/\r\n*.log\r\n!keep.log\r\n"), 0644)
+	m := newIgnoreMatcher(dir)
+	if ig, _ := m.Decide("state/x", false); !ig {
+		t.Error("state/x should be ignored under CRLF .askignore")
+	}
+	if ig, _ := m.Decide("debug.log", false); !ig {
+		t.Error("debug.log should be ignored under CRLF .askignore")
+	}
+	if ig, _ := m.Decide("keep.log", false); ig {
+		t.Error("keep.log should be re-included by within-file negation under CRLF")
+	}
+}
+
+// An empty / comments-only file is a valid no-op — the level is registered
+// (so the file itself is excluded from the upload) but no rules apply.
+func TestIgnoreMatcher_EmptyOrCommentsOnly(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, ".askignore"), []byte("# just a comment\n\n   \n"), 0644)
+	m := newIgnoreMatcher(dir)
+	if ig, _ := m.Decide("anything.txt", false); ig {
+		t.Error("nothing should be ignored under comment-only .askignore (except the file itself)")
+	}
+	if ig, _ := m.Decide(".askignore", false); !ig {
+		t.Error(".askignore itself should still be excluded from upload")
+	}
+}
+
+// `*` should not match path components like `.git` — built-in noise must
+// stay non-overridable, even if the user wrote `!` re-includes.
+func TestIgnoreMatcher_BuiltinBeatsBareStar(t *testing.T) {
+	dir := t.TempDir()
+	// A rule that would otherwise sweep everything in, but built-in still wins.
+	os.WriteFile(filepath.Join(dir, ".askignore"), []byte("!.git\n!node_modules\n"), 0644)
+	m := newIgnoreMatcher(dir)
+	if ig, _ := m.Decide(".git/HEAD", false); !ig {
+		t.Error(".git noise must remain ignored")
+	}
+	if ig, _ := m.Decide("node_modules/foo", false); !ig {
+		t.Error("node_modules noise must remain ignored")
+	}
+}
+
+// Three-level merging: skill-root .gitignore + skill-root .askignore +
+// nested scripts/.gitignore. All apply, deepest wins.
+func TestIgnoreMatcher_ThreeLevelMerge(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("*.log\n"), 0644)
+	os.WriteFile(filepath.Join(dir, ".askignore"), []byte("private/\n"), 0644)
+	os.MkdirAll(filepath.Join(dir, "scripts"), 0755)
+	os.WriteFile(filepath.Join(dir, "scripts", ".gitignore"), []byte("!keep.log\n"), 0644)
+
+	m := newIgnoreMatcher(dir)
+	if len(m.levels) != 3 {
+		t.Fatalf("expected 3 levels, got %d", len(m.levels))
+	}
+
+	cases := []struct {
+		rel  string
+		want bool
+		why  string
+	}{
+		{"scripts/keep.log", false, "nested !keep.log re-includes"},
+		{"scripts/debug.log", true, "root *.log applies under scripts/"},
+		{"keep.log", true, "nested scope doesn't reach root"},
+		{"private/secret", true, "askignore private/"},
+	}
+	for _, tc := range cases {
+		got, reason := m.Decide(tc.rel, false)
+		if got != tc.want {
+			t.Errorf("%s: Decide(%q) = %v (%s), want %v", tc.why, tc.rel, got, reason, tc.want)
+		}
+	}
+}
+
+// .askignore inside a built-in noise dir (e.g. node_modules/.askignore) must
+// NOT be loaded — the pre-walk should stop at noise dirs.
+func TestIgnoreMatcher_IgnoresInNoiseDirs(t *testing.T) {
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "node_modules"), 0755)
+	os.WriteFile(filepath.Join(dir, "node_modules", ".askignore"), []byte("# malicious\n!node_modules\n"), 0644)
+
+	m := newIgnoreMatcher(dir)
+	if len(m.levels) != 0 {
+		t.Errorf("expected no levels (noise dirs not descended), got %+v", m.levels)
+	}
+	if ig, _ := m.Decide("node_modules/x", false); !ig {
+		t.Error("node_modules must still be ignored")
 	}
 }
