@@ -95,21 +95,25 @@ type ignoreLevel struct {
 }
 
 // ignoreMatcher combines the built-in noise list with all per-skill
-// .gitignore / .askignore files found within the skill tree. `.askignore`
-// merges with `.gitignore` rather than replacing it (so a user can ignore
-// from airskills without affecting git, or vice versa).
+// .askignore / .gitignore files found within the skill tree. The two
+// formats are interchangeable: both use gitignore-style syntax and both
+// are loaded when present. At a single directory level the rules MERGE,
+// with .askignore loaded second so its negations (`!pattern`) can
+// re-include something a .gitignore in the same directory excluded.
+//
+// The names exist mainly as user signal: pick whichever convention fits.
+// A skill that ships alongside a git repo will naturally reuse its
+// .gitignore; a skill that wants airskills-only rules can use .askignore.
 type ignoreMatcher struct {
-	levels      []ignoreLevel
-	ignoreFiles map[string]bool // relative paths of the ignore files themselves
+	levels []ignoreLevel
 }
 
 // newIgnoreMatcher pre-walks skillDir to collect every .gitignore and
 // .askignore at any depth. Same-directory order: .gitignore first, then
-// .askignore, so .askignore has the final word at the skill root (matching
-// the "askignore wins" intuition from the original request) while still
-// composing with .gitignore via negation patterns.
+// .askignore, so .askignore has the final word at a given level while
+// still composing with .gitignore via negation patterns.
 func newIgnoreMatcher(skillDir string) *ignoreMatcher {
-	m := &ignoreMatcher{ignoreFiles: map[string]bool{}}
+	m := &ignoreMatcher{}
 
 	filepath.Walk(skillDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil || info == nil {
@@ -140,12 +144,11 @@ func newIgnoreMatcher(skillDir string) *ignoreMatcher {
 			return nil
 		}
 		m.levels = append(m.levels, *lvl)
-		m.ignoreFiles[filepath.ToSlash(src)] = true
 		return nil
 	})
 
-	// Order: outer dirs first, then by file basename so .gitignore precedes
-	// .askignore at the same depth (askignore last-wins at a given level).
+	// Order: outer dirs first (so nested levels layer on top), then within a
+	// directory .gitignore before .askignore (so askignore wins last).
 	sort.SliceStable(m.levels, func(i, j int) bool {
 		di := strings.Count(m.levels[i].dir, "/")
 		dj := strings.Count(m.levels[j].dir, "/")
@@ -185,11 +188,9 @@ func (m *ignoreMatcher) Decide(rel string, isDir bool) (bool, string) {
 		return true, "built-in: " + rel
 	}
 
-	// The ignore files themselves are excluded from the upload but aren't
-	// "ignored" in the user-rule sense — report a clear reason.
-	if m.ignoreFiles[rel] {
-		return true, rel + ": ignore-file (never uploaded)"
-	}
+	// .gitignore and .askignore are PART of the skill — they configure how
+	// future pushes from any machine should behave. Upload them unless a
+	// user rule explicitly hides them (handled by the level loop below).
 
 	ignored := false
 	reason := ""

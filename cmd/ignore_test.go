@@ -99,7 +99,7 @@ func TestIgnoreMatcher_AskIgnore(t *testing.T) {
 		{"debug.log", false, true},
 		{"nested/debug.log", false, true},
 		{"keep.log", false, false},
-		{".askignore", false, true}, // the ignore file itself
+		{".askignore", false, false}, // the ignore file IS part of the skill setup — uploaded
 	}
 	for _, tc := range cases {
 		got, reason := m.Decide(tc.rel, tc.isDir)
@@ -123,13 +123,14 @@ func TestIgnoreMatcher_GitIgnoreOnly(t *testing.T) {
 	if ig, _ := m.Decide("secrets/api-key", false); !ig {
 		t.Error("secrets/api-key should be ignored via .gitignore")
 	}
-	if ig, _ := m.Decide(".gitignore", false); !ig {
-		t.Error(".gitignore itself should be excluded from upload")
+	if ig, _ := m.Decide(".gitignore", false); ig {
+		t.Error(".gitignore should be uploaded as part of the skill setup")
 	}
 }
 
-// Both files at the same level MERGE — patterns from both apply, with the
-// last-loaded (.askignore) able to override .gitignore via `!negation`.
+// Both files at the same level MERGE — patterns from both apply, and
+// .askignore (loaded last) can re-include via `!` what .gitignore excluded.
+// The two formats are interchangeable; both being present is fine.
 func TestIgnoreMatcher_MergeRootLevel(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("secrets/\n*.log\n"), 0644); err != nil {
@@ -155,8 +156,8 @@ func TestIgnoreMatcher_MergeRootLevel(t *testing.T) {
 		{"state/x", false, true, "askignore rule applies"},
 		{"debug.log", false, true, "gitignore *.log"},
 		{"important.log", false, false, "askignore !important.log re-includes"},
-		{".gitignore", false, true, "ignore-file never uploaded"},
-		{".askignore", false, true, "ignore-file never uploaded"},
+		{".gitignore", false, false, "ignore-file is part of the skill — uploaded"},
+		{".askignore", false, false, "ignore-file is part of the skill — uploaded"},
 	}
 	for _, tc := range cases {
 		got, reason := m.Decide(tc.rel, tc.isDir)
@@ -309,16 +310,17 @@ func TestIgnoreMatcher_CRLF(t *testing.T) {
 }
 
 // An empty / comments-only file is a valid no-op — the level is registered
-// (so the file itself is excluded from the upload) but no rules apply.
+// but no rules apply. The file itself is still uploaded (it's part of the
+// skill setup), in case the user adds rules later.
 func TestIgnoreMatcher_EmptyOrCommentsOnly(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, ".askignore"), []byte("# just a comment\n\n   \n"), 0644)
 	m := newIgnoreMatcher(dir)
 	if ig, _ := m.Decide("anything.txt", false); ig {
-		t.Error("nothing should be ignored under comment-only .askignore (except the file itself)")
+		t.Error("nothing should be ignored under comment-only .askignore")
 	}
-	if ig, _ := m.Decide(".askignore", false); !ig {
-		t.Error(".askignore itself should still be excluded from upload")
+	if ig, _ := m.Decide(".askignore", false); ig {
+		t.Error(".askignore should be uploaded as part of the skill setup")
 	}
 }
 
@@ -338,7 +340,8 @@ func TestIgnoreMatcher_BuiltinBeatsBareStar(t *testing.T) {
 }
 
 // Three-level merging: skill-root .gitignore + skill-root .askignore +
-// nested scripts/.gitignore. All apply, deepest wins.
+// nested scripts/.gitignore. All apply; same-dir merges with askignore last,
+// nested layers add on top of root.
 func TestIgnoreMatcher_ThreeLevelMerge(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("*.log\n"), 0644)

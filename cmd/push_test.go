@@ -112,8 +112,8 @@ func TestReadSkillFilesIgnoresNoise(t *testing.T) {
 	}
 }
 
-// End-to-end: a skill with .askignore + .gitignore (merged, with negation
-// re-includes) plus a nested .gitignore. The archive and the local
+// End-to-end: a skill with .askignore + .gitignore at root (merged, with
+// negation re-includes) plus a nested .gitignore. The archive and the local
 // hash-input reader must agree on what's included.
 func TestCreateTarGzHonoursIgnoreFiles(t *testing.T) {
 	dir := t.TempDir()
@@ -134,7 +134,7 @@ func TestCreateTarGzHonoursIgnoreFiles(t *testing.T) {
 	os.WriteFile(filepath.Join(skillDir, "state", "sync.json"), []byte("local"), 0644)
 
 	// .gitignore ignores all *.log files; .askignore adds state/ and a
-	// personal-only scripts/run.sh.
+	// personal-only scripts/run.sh. Both load at root — patterns merge.
 	os.WriteFile(filepath.Join(skillDir, ".gitignore"), []byte("*.log\n"), 0644)
 	os.WriteFile(filepath.Join(skillDir, ".askignore"), []byte("scripts/run.sh\nstate/\n"), 0644)
 
@@ -157,19 +157,25 @@ func TestCreateTarGzHonoursIgnoreFiles(t *testing.T) {
 		files[h.Name] = true
 	}
 
-	must := []string{"dreamy/SKILL.md", "dreamy/scripts/shared.py", "dreamy/scripts/keep.log"}
+	must := []string{
+		"dreamy/SKILL.md",
+		"dreamy/scripts/shared.py",
+		"dreamy/scripts/keep.log",
+		// Ignore files are part of the skill setup — uploaded so future
+		// pushes from any machine inherit the rules.
+		"dreamy/.askignore",
+		"dreamy/.gitignore",
+		"dreamy/scripts/.gitignore",
+	}
 	for _, p := range must {
 		if !files[p] {
 			t.Errorf("%s should be uploaded", p)
 		}
 	}
 	mustNot := []string{
-		"dreamy/scripts/run.sh",   // .askignore
+		"dreamy/scripts/run.sh",    // .askignore
 		"dreamy/scripts/debug.log", // .gitignore *.log
-		"dreamy/state/sync.json",  // .askignore state/
-		"dreamy/.askignore",       // ignore files never uploaded
-		"dreamy/.gitignore",
-		"dreamy/scripts/.gitignore",
+		"dreamy/state/sync.json",   // .askignore state/
 	}
 	for _, p := range mustNot {
 		if files[p] {

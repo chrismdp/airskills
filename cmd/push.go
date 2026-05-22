@@ -1298,7 +1298,7 @@ func readSkillFilesWith(dir string, matcher *ignoreMatcher) map[string][]byte {
 // in your skill upload).
 func newPushMatcher(dir string) *ignoreMatcher {
 	if pushNoIgnore {
-		return &ignoreMatcher{ignoreFiles: map[string]bool{}}
+		return &ignoreMatcher{}
 	}
 	return newIgnoreMatcher(dir)
 }
