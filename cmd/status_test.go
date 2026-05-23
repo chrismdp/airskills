@@ -101,21 +101,10 @@ func TestClassifyForStatusBucketsInOtherSkillset(t *testing.T) {
 	}
 }
 
-// Regression: `airskills skillset use poppins` writes cfg.Skillset
-// locally, but `airskills status` was sending an empty slug — so the
-// server resolved to the is_default skillset and the one-line summary
-// described the wrong skillset. The remembered slug must flow through.
-func TestRunStatusUsesRememberedSkillsetFromConfig(t *testing.T) {
-	var gotQuery string
-	_ = runStatusCapture(t, statusFixture{
-		runningVersion:  "0.6.1",
-		rememberedSlug:  "poppins",
-		skillsQuerySink: &gotQuery,
-	})
-	if gotQuery != "skillset=poppins" {
-		t.Fatalf("status ignored remembered skillset; gotQuery = %q, want skillset=poppins", gotQuery)
-	}
-}
+// Obsolete after mig 047: cfg.Skillset is no longer plumbed through —
+// the server's /api/v1/skills always resolves to the user's single
+// implicit 'default' regardless of the param value. The test above
+// described pre-mig behaviour that no longer applies.
 
 // Reproduces the tmux-re-attach scenario: maybeAutoUpdate fires,
 // autoUpdateDidFire is true, runStatus must not nag for self-update.

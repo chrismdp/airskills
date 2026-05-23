@@ -324,6 +324,51 @@
           "deletion_reason"
         ]
       },
+      "SkillConflictResponse": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string",
+            "enum": [
+              "conflict"
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "conflict_with": {
+            "type": "object",
+            "properties": {
+              "source": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "org"
+                ]
+              },
+              "owner_or_org_slug": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "slug": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "source",
+              "owner_or_org_slug",
+              "slug"
+            ]
+          }
+        },
+        "required": [
+          "error",
+          "message",
+          "conflict_with"
+        ]
+      },
       "SkillsListResponse": {
         "type": "object",
         "properties": {
@@ -863,7 +908,8 @@
             "required": [
               "slug",
               "name"
-            ]
+            ],
+            "description": "Hard-coded `{slug:'default', name:'default'}` post-migration 047. Preserved as an envelope so older CLI binaries that read it don't crash."
           },
           "updated_count": {
             "type": "integer"
@@ -914,6 +960,37 @@
           "updated_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "user",
+              "org"
+            ],
+            "description": "Which side the skill comes from in the caller's effective set (migration 047)."
+          },
+          "org_slug": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Owning org slug when source='org'; null for user-owned."
+          },
+          "shadowed": {
+            "type": "boolean",
+            "description": "True when an org skill with the same slug is winning the partition; the CLI should skip writing this skill to disk and surface a warning."
+          },
+          "shadowed_reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "user-vs-org",
+              "cross-org",
+              null
+            ],
+            "description": "Why this row is shadowed; null when shadowed=false."
           }
         },
         "required": [
@@ -923,7 +1000,11 @@
           "version",
           "content_hash",
           "head_commit_id",
-          "updated_at"
+          "updated_at",
+          "source",
+          "org_slug",
+          "shadowed",
+          "shadowed_reason"
         ]
       },
       "PublicSkillsListResponse": {
@@ -1991,7 +2072,14 @@
             "description": "Creating an org-owned skill requires admin or owner role on that org."
           },
           "409": {
-            "description": "Slug collision in caller's namespace"
+            "description": "Slug already exists in caller's effective skill set (their own or inherited from an assigned org skillset).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillConflictResponse"
+                }
+              }
+            }
           },
           "500": {
             "description": "Storage hash mismatch or commit RPC failure."
@@ -2198,7 +2286,14 @@
             "description": "Missing or invalid token"
           },
           "409": {
-            "description": "Slug collision after rename"
+            "description": "Slug collision after rename — either same namespace, or a cross-namespace shadow from the caller's effective set.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillConflictResponse"
+                }
+              }
+            }
           }
         }
       },
@@ -4124,6 +4219,11 @@
                       "admin",
                       "member"
                     ]
+                  },
+                  "org": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64
                   }
                 },
                 "required": [

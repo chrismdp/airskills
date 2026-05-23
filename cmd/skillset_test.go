@@ -44,92 +44,53 @@ func TestResolveSkillsetFlag_FirstRunNoFlag(t *testing.T) {
 	}
 }
 
-func TestResolveSkillsetFlag_FirstRunWithFlagRemembers(t *testing.T) {
-	withTempHome(t)
-	cfg := &config.Config{APIURL: "http://x"}
+// Mig 047 collapsed user-side skillsets to a single implicit 'default'.
+// resolveSkillsetFlag now returns "" unconditionally (the server's
+// /api/v1/skills GET coerces any passed slug to the user's default).
+// It warns and clears the stale cfg.Skillset if one was remembered.
 
-	slug, err := resolveSkillsetFlag(cfg, "writing", strings.NewReader(""), &bytes.Buffer{})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if slug != "writing" {
-		t.Errorf("expected slug=writing, got %q", slug)
-	}
-	if cfg.Skillset != "writing" {
-		t.Errorf("cfg not updated: %q", cfg.Skillset)
-	}
-	if got := readStoredSkillset(t); got != "writing" {
-		t.Errorf("on-disk config not updated: %q", got)
-	}
-}
-
-func TestResolveSkillsetFlag_NoFlagUsesRemembered(t *testing.T) {
-	withTempHome(t)
-	cfg := &config.Config{APIURL: "http://x", Skillset: "work"}
-
-	slug, err := resolveSkillsetFlag(cfg, "", strings.NewReader(""), &bytes.Buffer{})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if slug != "work" {
-		t.Errorf("expected slug=work, got %q", slug)
-	}
-}
-
-func TestResolveSkillsetFlag_MatchesRememberedNoPrompt(t *testing.T) {
-	withTempHome(t)
-	cfg := &config.Config{APIURL: "http://x", Skillset: "work"}
-	var writer bytes.Buffer
-
-	slug, err := resolveSkillsetFlag(cfg, "work", strings.NewReader(""), &writer)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if slug != "work" {
-		t.Errorf("expected slug=work, got %q", slug)
-	}
-	if writer.Len() != 0 {
-		t.Errorf("should not have prompted: %q", writer.String())
-	}
-}
-
-// --skillset is an explicit user choice — treat it as an implicit
-// `skillset use`: persist the new slug and switch silently. A short
-// notice tells the user which default they're now on so they don't
-// lose track when running pull/sync interactively.
-func TestResolveSkillsetFlag_SwitchSilentlyPersists(t *testing.T) {
-	withTempHome(t)
-	cfg := &config.Config{APIURL: "http://x", Skillset: "work"}
-	var writer bytes.Buffer
-
-	slug, err := resolveSkillsetFlag(cfg, "personal", strings.NewReader(""), &writer)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if slug != "personal" {
-		t.Errorf("expected slug=personal, got %q", slug)
-	}
-	if !strings.Contains(writer.String(), `Switched default skillset from "work" to "personal"`) {
-		t.Errorf("expected switch notice, got: %q", writer.String())
-	}
-	if readStoredSkillset(t) != "personal" {
-		t.Errorf("on-disk not updated")
-	}
-}
-
-// A switch from no remembered slug to a flagged one should be silent —
-// the user hasn't chosen anything yet, so there's nothing to "switch
-// from" and no notice to print.
-func TestResolveSkillsetFlag_FirstUseIsSilent(t *testing.T) {
+func TestResolveSkillsetFlag_NonDefaultFlagWarnsAndIgnored(t *testing.T) {
 	withTempHome(t)
 	cfg := &config.Config{APIURL: "http://x"}
 	var writer bytes.Buffer
 
-	if _, err := resolveSkillsetFlag(cfg, "personal", strings.NewReader(""), &writer); err != nil {
+	slug, err := resolveSkillsetFlag(cfg, "writing", strings.NewReader(""), &writer)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if slug != "" {
+		t.Errorf("expected slug to be ignored (empty), got %q", slug)
+	}
+	if !strings.Contains(writer.String(), `--skillset is no longer used`) {
+		t.Errorf("expected deprecation notice, got: %q", writer.String())
+	}
+}
+
+func TestResolveSkillsetFlag_StaleConfigGetsCleared(t *testing.T) {
+	withTempHome(t)
+	cfg := &config.Config{APIURL: "http://x", Skillset: "work"}
+
+	if _, err := resolveSkillsetFlag(cfg, "", strings.NewReader(""), &bytes.Buffer{}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Skillset != "" {
+		t.Errorf("stale cfg.Skillset should have been cleared, got %q", cfg.Skillset)
+	}
+	if readStoredSkillset(t) != "" {
+		t.Errorf("on-disk cfg.Skillset should have been cleared")
+	}
+}
+
+func TestResolveSkillsetFlag_DefaultFlagSilent(t *testing.T) {
+	withTempHome(t)
+	cfg := &config.Config{APIURL: "http://x"}
+	var writer bytes.Buffer
+
+	if _, err := resolveSkillsetFlag(cfg, "default", strings.NewReader(""), &writer); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if writer.Len() != 0 {
-		t.Errorf("expected silent first-use, got: %q", writer.String())
+		t.Errorf("passing 'default' should be silent (it's the canonical value), got: %q", writer.String())
 	}
 }
 

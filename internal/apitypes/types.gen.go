@@ -1556,6 +1556,7 @@ type PostApiV1OrganizationJSONBody struct {
 // PostApiV1OrganizationInviteJSONBody defines parameters for PostApiV1OrganizationInvite.
 type PostApiV1OrganizationInviteJSONBody struct {
 	Email openapi_types.Email                      `json:"email"`
+	Org   *string                                  `json:"org,omitempty"`
 	Role  *PostApiV1OrganizationInviteJSONBodyRole `json:"role,omitempty"`
 }
 
