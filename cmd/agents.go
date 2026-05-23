@@ -84,8 +84,20 @@ func detectInstalledAgents() []agentDef {
 	return found
 }
 
-// installSkillToAgents writes a skill folder to all detected agents
+// installSkillToAgents writes a skill folder to all detected agents.
+//
+// SKILL.md is rewritten in place to ensure `name:` matches `slug` (the
+// dir name). The agentskills.io spec requires this, and the server's
+// archive PUT enforces it on push. Without this, a stale archive
+// (e.g. an org skill pulled before mig 047 renamed it bare) would
+// install with `name: <orgslug>-<slug>` in the frontmatter and any
+// subsequent push would 400 with name_slug_mismatch.
 func installSkillToAgents(slug string, files map[string][]byte) ([]string, error) {
+	if skillMd, ok := files["SKILL.md"]; ok {
+		if fixed, changed := fixSkillNameInContent(slug, skillMd); changed {
+			files["SKILL.md"] = fixed
+		}
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil, err

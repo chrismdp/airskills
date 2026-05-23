@@ -651,6 +651,79 @@ func (c *apiClient) listPersonalSkillsInSkillset(skillset string) ([]apiSkill, s
 	return parsed.Skills, resolved, nil
 }
 
+// ShadowInfo records a server-reported shadow on one of the caller's
+// skills (migration 047). Returned by fetchShadowMap so pull can skip
+// shadowed slugs and emit a warning instead of writing them to disk.
+type ShadowInfo struct {
+	SkillID string
+	Slug    string
+	OrgSlug string // winning org slug; empty for cross-org shadow on the loser side
+}
+
+// fetchShadowMap calls /api/v1/sync with since=epoch to get the
+// caller's effective skill set with shadow tagging. Returns one entry
+// per shadowed skill_id (the loser side), keyed by skill id. Pull
+// uses this to filter remoteSkills before download, and to print the
+// "shadowed by <org>/<slug>" warning the design promises fires on
+// every pull until the user renames.
+//
+// Best-effort: a fetch error returns an empty map and nil — sync's
+// extra surface shouldn't fail the whole pull, and a missing shadow
+// map degrades to the pre-mig-047 behaviour (write all skills).
+func (c *apiClient) fetchShadowMap() map[string]ShadowInfo {
+	out := map[string]ShadowInfo{}
+	req, err := http.NewRequest("GET", c.baseURL+"/api/v1/sync?since=1970-01-01T00:00:00Z", nil)
+	if err != nil {
+		return out
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	setStandardHeaders(req)
+	resp, err := doRequest(c.http, req)
+	if err != nil {
+		return out
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return out
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return out
+	}
+	var parsed struct {
+		Skills []struct {
+			ID       string  `json:"id"`
+			Slug     string  `json:"slug"`
+			Shadowed bool    `json:"shadowed"`
+			OrgSlug  *string `json:"org_slug"`
+		} `json:"skills"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return out
+	}
+	// We also need the WINNING org slug per slug for the warning.
+	// Build that map from the non-shadowed org rows first.
+	winnerOrgBySlug := map[string]string{}
+	for _, s := range parsed.Skills {
+		if !s.Shadowed && s.OrgSlug != nil && *s.OrgSlug != "" {
+			winnerOrgBySlug[s.Slug] = *s.OrgSlug
+		}
+	}
+	for _, s := range parsed.Skills {
+		if !s.Shadowed {
+			continue
+		}
+		info := ShadowInfo{SkillID: s.ID, Slug: s.Slug}
+		if winnerOrgBySlug[s.Slug] != "" {
+			info.OrgSlug = winnerOrgBySlug[s.Slug]
+		} else if s.OrgSlug != nil {
+			info.OrgSlug = *s.OrgSlug
+		}
+		out[s.ID] = info
+	}
+	return out
+}
+
 // listDeletedSkills fetches soft-deleted skills owned by the caller.
 func (c *apiClient) listDeletedSkills() ([]apiSkill, error) {
 	body, err := c.get("/api/v1/skills?deleted=true")
@@ -704,8 +777,33 @@ func (c *apiClient) getVersionContent(skillID, commitID string) (map[string][]by
 	return extractTarGzToMap(bytes.NewReader(archiveBody))
 }
 
+// SkillConflictError is returned by createSkill when the server's
+// effective-skills check (migration 047) rejects a new slug because it
+// already exists in the caller's user-or-org-inherited skill set.
+// Push surfaces this with a hint pointing at `airskills mv`.
+type SkillConflictError struct {
+	Slug             string // the slug that conflicted (the one the user tried to create)
+	Source           string // "user" or "org" — where the conflicting skill lives
+	OwnerOrOrgSlug  string  // org slug when Source=="org"; empty otherwise
+	ServerMessage    string // verbatim server `message` if present
+}
+
+func (e *SkillConflictError) Error() string {
+	if e.Source == "org" && e.OwnerOrOrgSlug != "" {
+		return fmt.Sprintf("slug %q is already in your effective skill set via org %q — rename your local skill with `airskills mv %s <new-name>` and retry the push", e.Slug, e.OwnerOrOrgSlug, e.Slug)
+	}
+	if e.ServerMessage != "" {
+		return e.ServerMessage
+	}
+	return fmt.Sprintf("slug %q already exists in your effective skill set", e.Slug)
+}
+
 // createSkill creates a skill metadata shell (files uploaded separately via archive).
 // orgID is optional — non-empty creates the skill under the given org (caller must be admin/owner).
+//
+// On a 409 with the migration-047 `conflict_with` payload, returns a
+// typed *SkillConflictError so push can format the user-facing message
+// with the conflicting source named.
 func (c *apiClient) createSkill(name, description string, tools []string, forkedFrom, orgID string) (*apiSkill, error) {
 	payload := map[string]interface{}{
 		"name":         name,
@@ -718,8 +816,12 @@ func (c *apiClient) createSkill(name, description string, tools []string, forked
 	if orgID != "" {
 		payload["org_id"] = orgID
 	}
-	body, err := c.post("/api/v1/skills", payload)
+	body, err := c.postWithStatus("/api/v1/skills", payload)
 	if err != nil {
+		if conflict := parseSkillConflict(err); conflict != nil {
+			conflict.Slug = slugify(name)
+			return nil, conflict
+		}
 		return nil, err
 	}
 	var skill apiSkill
@@ -727,6 +829,103 @@ func (c *apiClient) createSkill(name, description string, tools []string, forked
 		return nil, err
 	}
 	return &skill, nil
+}
+
+// slugify mirrors the platform's lib/api-utils.ts slugify so the CLI
+// can predict which slug the server will produce from a given name.
+// Used to populate SkillConflictError.Slug when the server rejects.
+func slugify(name string) string {
+	out := make([]rune, 0, len(name))
+	prevHyphen := false
+	for _, r := range name {
+		switch {
+		case r >= 'A' && r <= 'Z':
+			out = append(out, r+('a'-'A'))
+			prevHyphen = false
+		case (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9'):
+			out = append(out, r)
+			prevHyphen = false
+		default:
+			if !prevHyphen && len(out) > 0 {
+				out = append(out, '-')
+				prevHyphen = true
+			}
+		}
+	}
+	for len(out) > 0 && out[len(out)-1] == '-' {
+		out = out[:len(out)-1]
+	}
+	return string(out)
+}
+
+// parseSkillConflict tries to extract a migration-047 conflict_with
+// payload from a generic API error string. Returns nil if the error
+// isn't a 409 with the expected shape.
+func parseSkillConflict(apiErr error) *SkillConflictError {
+	if apiErr == nil {
+		return nil
+	}
+	msg := apiErr.Error()
+	// post() formats errors as "API error (%d): %s"; only the body of
+	// a 409 carries the conflict_with payload.
+	if !strings.Contains(msg, "(409)") {
+		return nil
+	}
+	idx := strings.Index(msg, "{")
+	if idx < 0 {
+		return nil
+	}
+	var body struct {
+		Error        string `json:"error"`
+		Message      string `json:"message"`
+		ConflictWith *struct {
+			Source           string `json:"source"`
+			OwnerOrOrgSlug  string `json:"owner_or_org_slug"`
+			Slug             string `json:"slug"`
+		} `json:"conflict_with"`
+	}
+	if err := json.Unmarshal([]byte(msg[idx:]), &body); err != nil || body.ConflictWith == nil {
+		return nil
+	}
+	return &SkillConflictError{
+		Slug:           body.ConflictWith.Slug,
+		Source:         body.ConflictWith.Source,
+		OwnerOrOrgSlug: body.ConflictWith.OwnerOrOrgSlug,
+		ServerMessage:  body.Message,
+	}
+}
+
+// postWithStatus is an internal variant of post() that surfaces the
+// HTTP status code so callers can distinguish 409 conflicts. The
+// existing post() is unchanged so other callsites keep working.
+func (c *apiClient) postWithStatus(path string, payload interface{}) ([]byte, error) {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequest("POST", c.baseURL+path, bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Content-Type", "application/json")
+	setStandardHeaders(req)
+
+	resp, err := doRequest(c.http, req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("API error (%d): %s", resp.StatusCode, string(body))
+	}
+	return body, nil
 }
 
 // createSkillWithGitHub creates a skill on the server with GitHub provenance.

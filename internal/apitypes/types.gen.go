@@ -17,13 +17,13 @@ const (
 
 // Defines values for ArchiveConflictResponseError.
 const (
-	Conflict ArchiveConflictResponseError = "conflict"
+	ArchiveConflictResponseErrorConflict ArchiveConflictResponseError = "conflict"
 )
 
 // Valid indicates whether the value is a known member of the ArchiveConflictResponseError enum.
 func (e ArchiveConflictResponseError) Valid() bool {
 	switch e {
-	case Conflict:
+	case ArchiveConflictResponseErrorConflict:
 		return true
 	default:
 		return false
@@ -387,6 +387,39 @@ func (e SkillVisibility) Valid() bool {
 	}
 }
 
+// Defines values for SkillConflictResponseConflictWithSource.
+const (
+	SkillConflictResponseConflictWithSourceOrg  SkillConflictResponseConflictWithSource = "org"
+	SkillConflictResponseConflictWithSourceUser SkillConflictResponseConflictWithSource = "user"
+)
+
+// Valid indicates whether the value is a known member of the SkillConflictResponseConflictWithSource enum.
+func (e SkillConflictResponseConflictWithSource) Valid() bool {
+	switch e {
+	case SkillConflictResponseConflictWithSourceOrg:
+		return true
+	case SkillConflictResponseConflictWithSourceUser:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SkillConflictResponseError.
+const (
+	SkillConflictResponseErrorConflict SkillConflictResponseError = "conflict"
+)
+
+// Valid indicates whether the value is a known member of the SkillConflictResponseError enum.
+func (e SkillConflictResponseError) Valid() bool {
+	switch e {
+	case SkillConflictResponseErrorConflict:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for SkillDependencyEdgeVisibility.
 const (
 	SkillDependencyEdgeVisibilityLessThannil SkillDependencyEdgeVisibility = "<nil>"
@@ -447,6 +480,45 @@ func (e SuggestionStatus) Valid() bool {
 	case SuggestionStatusDeclined:
 		return true
 	case SuggestionStatusPending:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SyncSkillShadowedReason.
+const (
+	CrossOrg    SyncSkillShadowedReason = "cross-org"
+	LessThannil SyncSkillShadowedReason = "<nil>"
+	UserVsOrg   SyncSkillShadowedReason = "user-vs-org"
+)
+
+// Valid indicates whether the value is a known member of the SyncSkillShadowedReason enum.
+func (e SyncSkillShadowedReason) Valid() bool {
+	switch e {
+	case CrossOrg:
+		return true
+	case LessThannil:
+		return true
+	case UserVsOrg:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SyncSkillSource.
+const (
+	SyncSkillSourceOrg  SyncSkillSource = "org"
+	SyncSkillSourceUser SyncSkillSource = "user"
+)
+
+// Valid indicates whether the value is a known member of the SyncSkillSource enum.
+func (e SyncSkillSource) Valid() bool {
+	switch e {
+	case SyncSkillSourceOrg:
+		return true
+	case SyncSkillSourceUser:
 		return true
 	default:
 		return false
@@ -1164,6 +1236,23 @@ type SkillCommitsListResponse struct {
 	Versions []SkillCommit `json:"versions"`
 }
 
+// SkillConflictResponse defines model for SkillConflictResponse.
+type SkillConflictResponse struct {
+	ConflictWith struct {
+		OwnerOrOrgSlug *string                                 `json:"owner_or_org_slug"`
+		Slug           string                                  `json:"slug"`
+		Source         SkillConflictResponseConflictWithSource `json:"source"`
+	} `json:"conflict_with"`
+	Error   SkillConflictResponseError `json:"error"`
+	Message string                     `json:"message"`
+}
+
+// SkillConflictResponseConflictWithSource defines model for SkillConflictResponse.ConflictWith.Source.
+type SkillConflictResponseConflictWithSource string
+
+// SkillConflictResponseError defines model for SkillConflictResponse.Error.
+type SkillConflictResponseError string
+
 // SkillDependencyEdge defines model for SkillDependencyEdge.
 type SkillDependencyEdge struct {
 	Id         *openapi_types.UUID            `json:"id"`
@@ -1343,8 +1432,10 @@ type SuggestionsListResponse struct {
 // SyncResponse defines model for SyncResponse.
 type SyncResponse struct {
 	// Since Echo of the `since` query parameter (ISO timestamp).
-	Since    time.Time   `json:"since"`
-	Skills   []SyncSkill `json:"skills"`
+	Since  time.Time   `json:"since"`
+	Skills []SyncSkill `json:"skills"`
+
+	// Skillset Hard-coded `{slug:'default', name:'default'}` post-migration 047. Preserved as an envelope so older CLI binaries that read it don't crash.
 	Skillset struct {
 		Name string `json:"name"`
 		Slug string `json:"slug"`
@@ -1358,10 +1449,28 @@ type SyncSkill struct {
 	HeadCommitId *openapi_types.UUID `json:"head_commit_id"`
 	Id           openapi_types.UUID  `json:"id"`
 	Name         string              `json:"name"`
-	Slug         string              `json:"slug"`
-	UpdatedAt    time.Time           `json:"updated_at"`
-	Version      string              `json:"version"`
+
+	// OrgSlug Owning org slug when source='org'; null for user-owned.
+	OrgSlug *string `json:"org_slug"`
+
+	// Shadowed True when an org skill with the same slug is winning the partition; the CLI should skip writing this skill to disk and surface a warning.
+	Shadowed bool `json:"shadowed"`
+
+	// ShadowedReason Why this row is shadowed; null when shadowed=false.
+	ShadowedReason *SyncSkillShadowedReason `json:"shadowed_reason"`
+	Slug           string                   `json:"slug"`
+
+	// Source Which side the skill comes from in the caller's effective set (migration 047).
+	Source    SyncSkillSource `json:"source"`
+	UpdatedAt time.Time       `json:"updated_at"`
+	Version   string          `json:"version"`
 }
+
+// SyncSkillShadowedReason Why this row is shadowed; null when shadowed=false.
+type SyncSkillShadowedReason string
+
+// SyncSkillSource Which side the skill comes from in the caller's effective set (migration 047).
+type SyncSkillSource string
 
 // TokenPair defines model for TokenPair.
 type TokenPair struct {

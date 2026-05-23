@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -717,8 +718,19 @@ config).`,
 
 						skill, err := client.createSkill(s.name, "", []string{"claude-code"}, forkedFrom, createOrgID)
 						if err != nil {
-							lines[i].status = "failed"
-							renderProgress(lines)
+							// Migration-047 effective-set collision: surface the
+							// conflicting source clearly instead of "failed".
+							var sc *SkillConflictError
+							if errors.As(err, &sc) {
+								lines[i].status = "conflict"
+								renderProgress(lines)
+								mu.Lock()
+								warnings = append(warnings, fmt.Sprintf("%s: %s", s.name, sc.Error()))
+								mu.Unlock()
+							} else {
+								lines[i].status = "failed"
+								renderProgress(lines)
+							}
 							atomic.AddInt64(&failed, 1)
 							return
 						}

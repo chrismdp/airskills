@@ -19,6 +19,13 @@ type SyncEntry struct {
 	Tool            string       `json:"tool"`
 	OwnerKind       string       `json:"owner_kind,omitempty"` // "user" or "org"
 	OwnerSlug       string       `json:"owner_slug,omitempty"` // e.g. "chrismdp" or "cherrypick"
+	// LocalAlias is the on-disk directory name when it differs from
+	// the server slug. Set by `airskills add --as <alias>` and by the
+	// on-disk migration when it has to disambiguate a rename
+	// collision. Empty means "dir name matches server slug." The
+	// marker stays the source of truth — see CLAUDE.md "Org
+	// namespacing lives in the marker, not on disk."
+	LocalAlias      string       `json:"local_alias,omitempty"`
 	Source          *skillSource `json:"source,omitempty"`
 	// ResolvedHash records the upstream content hash the user last
 	// reviewed against via `airskills resolve`. Only meaningful for

@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"bufio"
 	"errors"
 	"fmt"
 	"io"
@@ -38,23 +37,21 @@ var skillsetFlag string
 // already an explicit user choice and an extra confirmation just blocked
 // non-interactive runs (CI, agents).
 func resolveSkillsetFlag(cfg *config.Config, flag string, _ io.Reader, writer io.Writer) (string, error) {
-	remembered := cfg.Skillset
-
-	if flag == "" {
-		return remembered, nil
+	// Migration 047 (2026-05-23) collapsed user-side skillsets to a
+	// single implicit 'default'. The --skillset flag and the
+	// remembered cfg.Skillset are now no-ops on the user side — the
+	// server's /api/v1/skills GET silently coerces any passed slug to
+	// the user's default. Warn once if either is set so users can
+	// stop passing the flag, but don't fail.
+	if flag != "" && flag != "default" {
+		fmt.Fprintf(writer, "Note: --skillset is no longer used for user accounts (one default per user). Ignoring %q.\n", flag)
 	}
-	if flag == remembered {
-		return flag, nil
+	if cfg.Skillset != "" && cfg.Skillset != "default" {
+		// Clear stale config so the warning fires once, not on every command.
+		cfg.Skillset = ""
+		_ = cfg.Save()
 	}
-
-	cfg.Skillset = flag
-	if err := cfg.Save(); err != nil {
-		return "", fmt.Errorf("save skillset preference: %w", err)
-	}
-	if remembered != "" {
-		fmt.Fprintf(writer, "Switched default skillset from %q to %q.\n", remembered, flag)
-	}
-	return flag, nil
+	return "", nil
 }
 
 // rememberedSkillsetSlug returns the user's last-used personal skillset
@@ -116,12 +113,11 @@ func validSkillsetSlug(slug string) error {
 
 var skillsetParentCmd = &cobra.Command{
 	Use:   "skillset",
-	Short: "Manage personal skillsets (list / create / delete / use)",
-	Long: `Personal skillsets group skills for selective sync.
-
-Every account has a 'default' skillset auto-created on signup. Use
-these commands to add more, switch between them (--skillset on sync
-remembers the last-used one), and delete the ones you no longer want.`,
+	Short: "List your default skillset (multi-skillset for users removed 2026-05-23)",
+	Long: `Personal skillsets were collapsed to a single implicit 'default'
+in May 2026 — see the dashboard at airskills.ai/dashboard. Org
+skillsets are still a thing and are managed via the dashboard or
+the 'airskills org' subcommands.`,
 }
 
 var skillsetListCmd = &cobra.Command{
@@ -168,139 +164,13 @@ func renderSkillsetList(w io.Writer, skillsets []apitypes.SkillsetListItem, sele
 	}
 }
 
-var (
-	skillsetCreateName        string
-	skillsetCreateDescription string
-)
-
-var skillsetCreateCmd = &cobra.Command{
-	Use:   "create <slug>",
-	Short: "Create a new personal skillset",
-	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		slug := args[0]
-		if err := validSkillsetSlug(slug); err != nil {
-			return err
-		}
-		name := skillsetCreateName
-		if name == "" {
-			name = slug
-		}
-		client, err := newAPIClientAuto()
-		if err != nil {
-			return err
-		}
-		ss, err := client.createSkillset(slug, name, skillsetCreateDescription)
-		if err != nil {
-			return err
-		}
-		fmt.Printf("Created skillset %q (id %s)\n", ss.Slug, ss.Id)
-		printAgentNextSteps(os.Stdout, []agentNextStep{
-			{Cmd: "airskills skillset use " + ss.Slug, Why: "make this the default for future sync/push/pull"},
-			{Cmd: "airskills skillset list", Why: "confirm the new skillset shows up"},
-		})
-		return nil
-	},
-}
-
-var skillsetDeleteForce bool
-
-var skillsetDeleteCmd = &cobra.Command{
-	Use:   "delete <slug>",
-	Short: "Delete a personal skillset (refuses 'default' and the currently-selected one)",
-	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		slug := args[0]
-		if slug == "default" {
-			return errors.New("cannot delete 'default' — it's auto-created and load-bearing; pick a different skillset to switch to and delete this one via the dashboard if you really need to")
-		}
-		cfg, cfgErr := config.Load()
-		if cfgErr != nil {
-			return cfgErr
-		}
-		if cfg.Skillset == slug {
-			return fmt.Errorf("cannot delete %q — it's your currently-selected skillset. Run 'airskills skillset use <other-slug>' first", slug)
-		}
-		if !skillsetDeleteForce {
-			fmt.Printf("Delete skillset %q? This cannot be undone. [y/N] ", slug)
-			reader := bufio.NewReader(os.Stdin)
-			line, _ := reader.ReadString('\n')
-			answer := strings.ToLower(strings.TrimSpace(line))
-			if answer != "y" && answer != "yes" {
-				return errors.New("cancelled")
-			}
-		}
-		client, err := newAPIClientAuto()
-		if err != nil {
-			return err
-		}
-		if err := client.deletePersonalSkillset(slug); err != nil {
-			return err
-		}
-		fmt.Printf("Deleted skillset %q\n", slug)
-		return nil
-	},
-}
-
-var skillsetUseCmd = &cobra.Command{
-	Use:   "use <slug>",
-	Short: "Switch the remembered default skillset to <slug>",
-	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		slug := args[0]
-		if err := validSkillsetSlug(slug); err != nil {
-			return err
-		}
-		client, err := newAPIClientAuto()
-		if err != nil {
-			return err
-		}
-		skillsets, err := client.listSkillsets()
-		if err != nil {
-			return err
-		}
-		found := false
-		for _, s := range skillsets {
-			if s.Slug == slug {
-				found = true
-				break
-			}
-		}
-		if !found {
-			names := make([]string, 0, len(skillsets))
-			for _, s := range skillsets {
-				names = append(names, s.Slug)
-			}
-			if len(names) == 0 {
-				return fmt.Errorf("skillset %q not found — you have no personal skillsets yet", slug)
-			}
-			return fmt.Errorf("skillset %q not found. Your skillsets: %s", slug, strings.Join(names, ", "))
-		}
-		cfg, cfgErr := config.Load()
-		if cfgErr != nil {
-			return cfgErr
-		}
-		cfg.Skillset = slug
-		if err := cfg.Save(); err != nil {
-			return fmt.Errorf("save skillset preference: %w", err)
-		}
-		fmt.Printf("Switched default skillset to %q\n", slug)
-		printAgentNextSteps(os.Stdout, []agentNextStep{
-			{Cmd: "airskills sync", Why: "pull the skills in this skillset onto the machine"},
-			{Cmd: "airskills status", Why: "see where things stand under the new skillset"},
-		})
-		return nil
-	},
-}
+// `skillset create`, `skillset delete`, `skillset use` (+ set-default /
+// auto-absorb) were removed on 2026-05-23 — see migration 047. Every
+// user has exactly one implicit 'default' skillset. `skillset list`
+// stays as the only user-facing read so cached automation isn't
+// surprised by a missing subcommand.
 
 func init() {
-	skillsetCreateCmd.Flags().StringVar(&skillsetCreateName, "name", "", "Human-readable name (defaults to slug)")
-	skillsetCreateCmd.Flags().StringVar(&skillsetCreateDescription, "description", "", "Optional one-line description")
-	skillsetDeleteCmd.Flags().BoolVar(&skillsetDeleteForce, "force", false, "Skip the confirmation prompt")
-
 	skillsetParentCmd.AddCommand(skillsetListCmd)
-	skillsetParentCmd.AddCommand(skillsetCreateCmd)
-	skillsetParentCmd.AddCommand(skillsetDeleteCmd)
-	skillsetParentCmd.AddCommand(skillsetUseCmd)
 	rootCmd.AddCommand(skillsetParentCmd)
 }

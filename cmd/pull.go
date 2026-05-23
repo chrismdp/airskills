@@ -147,6 +147,30 @@ func runPull(cmd *cobra.Command, args []string) error {
 		fmt.Printf("  %s %s\n", dim("Skillset:"), resolvedSlug)
 	}
 
+	// Migration 047: filter shadowed skills out of the pull set and
+	// emit a warning naming the winning org. Fires on every pull until
+	// the user resolves with `airskills mv`.
+	shadowMap := client.fetchShadowMap()
+	if len(shadowMap) > 0 {
+		filtered := remoteSkills[:0]
+		for _, s := range remoteSkills {
+			info, isShadow := shadowMap[s.Id.String()]
+			if !isShadow {
+				filtered = append(filtered, s)
+				continue
+			}
+			location := info.OrgSlug
+			if location == "" {
+				location = "another skill"
+			} else {
+				location = location + "/" + info.Slug
+			}
+			fmt.Fprintf(os.Stderr, "  %s %s shadowed by %s\n", yellow("⚠"), info.Slug, location)
+			fmt.Fprintf(os.Stderr, "    run `airskills mv %s <new-name>` to keep your version\n", info.Slug)
+		}
+		remoteSkills = filtered
+	}
+
 	movedSourceNotices := collectMovedSourceNotices(client, syncState, remoteSkills)
 
 	owners := newOwnerResolver(client)

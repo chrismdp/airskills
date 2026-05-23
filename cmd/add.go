@@ -26,12 +26,22 @@ var addAllFlag bool
 
 var addForce bool
 
+// addAsAlias optionally lets the user install a skill under a different
+// local directory name than the server slug. The alias is stored in
+// SyncEntry.LocalAlias so future pulls keep using the same on-disk
+// name even though the marker still records the upstream owner/slug.
+// Useful for disambiguating after the migration-047 prefix removal
+// (two namespaces can now have the same bare slug — `airskills add
+// parsons-home/retro --as work-retro`).
+var addAsAlias string
+
 var addCmd = &cobra.Command{
 	Use:   "add <username/skill>",
 	Short: "Install a shared skill",
 	Long: `Install a skill from airskills.ai or directly from GitHub.
 
   airskills add chrismdp/retro                                          # from airskills.ai
+  airskills add chrismdp/retro --as my-retro                            # install under a different local dir name
   airskills add chrismdp/retro --force                                  # overwrite local with upstream's current bytes
   airskills add github.com/supabase/agent-skills/supabase               # specific skill from GitHub repo
   airskills add github.com/owner/repo                                   # single-skill GitHub repo
@@ -155,6 +165,12 @@ local copy is backed up to ~/.airskills/undo/<timestamp>/ first.`,
 			ownerSlug = result.CurrentOwner.Slug
 		}
 		dirName := result.Slug
+		if addAsAlias != "" {
+			if err := validateSkillName(addAsAlias); err != nil {
+				return fmt.Errorf("--as: %w", err)
+			}
+			dirName = addAsAlias
+		}
 
 		syncState := loadSyncState()
 
@@ -328,6 +344,9 @@ local copy is backed up to ~/.airskills/undo/<timestamp>/ first.`,
 				UpstreamVersion:     result.Version,
 			},
 		}
+		if addAsAlias != "" {
+			entry.LocalAlias = addAsAlias
+		}
 
 		// If logged in, register the skill on the server now
 		if token != nil && time.Now().Unix() < token.ExpiresAt {
@@ -473,5 +492,6 @@ func init() {
 	addCmd.Flags().StringVar(&addSkillFlag, "skill", "", "Install specific skill(s) from a multi-skill GitHub repo (comma-separated names or path/to/name)")
 	addCmd.Flags().BoolVar(&addAllFlag, "all", false, "Install all skills found in a GitHub repository")
 	addCmd.Flags().BoolVar(&addForce, "force", false, "Take upstream's current bytes, overwriting any local copy (local backed up to ~/.airskills/undo/)")
+	addCmd.Flags().StringVar(&addAsAlias, "as", "", "Install under a different local directory name (recorded in sync.json as LocalAlias). Useful when two namespaces have the same bare slug after mig 047.")
 	rootCmd.AddCommand(addCmd)
 }

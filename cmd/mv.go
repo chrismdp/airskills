@@ -51,6 +51,19 @@ That is a deliberate, consumer-visible move; rename is not.`,
 					map[string]interface{}{"name": newName},
 				)
 				if err != nil || status >= 400 {
+					// Migration 047: a 409 from PUT /skills/{id} carries
+					// either the legacy slug_conflict shape (same-namespace
+					// collision) or the new conflict_with shape
+					// (cross-namespace shadow from an assigned org skill).
+					// Parse the latter and surface a clear hint; fall
+					// through to the generic error otherwise.
+					if status == 409 {
+						parsed := parseSkillConflict(fmt.Errorf("API error (409): %s", string(body)))
+						if parsed != nil {
+							parsed.Slug = newName
+							return parsed
+						}
+					}
 					return fmt.Errorf("renaming on server (status %d): %s", status, string(body))
 				}
 				fmt.Printf("  %s remote skill renamed\n", green("✓"))
