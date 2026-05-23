@@ -12,6 +12,10 @@ func TestPersonalScopeCallersAreOwnershipQueries(t *testing.T) {
 	allowed := map[string]bool{
 		"publish.go":  true,
 		"transfer.go": true,
+		// status.go uses listSkills("personal") to detect skills owned
+		// server-side but not in the active skillset (the "in other
+		// skillset" warning). That's a legitimate ownership query.
+		"status.go": true,
 	}
 	callRe := regexp.MustCompile(`listSkills\("personal"\)`)
 	defaultRe := regexp.MustCompile(`scope\s*=\s*"personal"`)

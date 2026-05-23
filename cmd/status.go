@@ -42,10 +42,28 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	skillsCh := make(chan skillsResult, 1)
 	healthCh := make(chan healthResult, 1)
 	suggCh := make(chan int, 1)
+	// Ownership query: every skill the caller owns server-side,
+	// regardless of which personal skillset it belongs to. Used to
+	// label locals that are owned-but-not-in-the-active-skillset, so
+	// `airskills skillset use <other>` doesn't make 70 perfectly safe
+	// skills look like "to push" (they would have collided on name).
+	ownedCh := make(chan []apiSkill, 1)
 
 	go func() {
 		skills, _, err := client.listPersonalSkillsInSkillset(rememberedSkillsetSlug())
 		skillsCh <- skillsResult{skills, err}
+	}()
+
+	go func() {
+		// Ownership query: returns every skill the caller owns across
+		// every personal skillset (cross-skillset view), so we can
+		// distinguish "in another skillset" from "local-only".
+		owned, err := client.listSkills("personal")
+		if err != nil {
+			ownedCh <- nil
+			return
+		}
+		ownedCh <- owned
 	}()
 
 	go func() {
@@ -78,20 +96,32 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		// Still drain the other channels so their goroutines don't leak
 		<-healthCh
 		<-suggCh
+		<-ownedCh
 		return nil
 	}
 	hr := <-healthCh
 	pendingSuggestions := <-suggCh
+	ownedAll := <-ownedCh
+
+	// Build the owned-elsewhere set: skills the caller owns server-side
+	// minus the ones already in the active skillset's listing. We key
+	// by local dir name (via the marker's SkillID) because that's what
+	// the classifier loops over. If the ownership query failed
+	// (ownedAll == nil) we pass nil through and the classifier behaves
+	// as before — these skills will appear as "to push", which is
+	// wrong but at least visible.
+	ownedElsewhereByName := buildOwnedElsewhereByName(sr.skills, ownedAll, syncState)
 
 	hashLocal := func(p string) string { return computeMerkleHash(readSkillFiles(p)) }
-	buckets := classifyForStatus(sr.skills, localSkills, syncState, hashLocal)
-	toPush, toPull, toUpdate, upstream, untracked := buckets.toPush, buckets.toPull, buckets.toUpdate, buckets.upstream, buckets.untracked
+	buckets := classifyForStatus(sr.skills, localSkills, syncState, hashLocal, ownedElsewhereByName)
+	toPush, toPull, toUpdate, upstream, untracked, inOtherSkillset := buckets.toPush, buckets.toPull, buckets.toUpdate, buckets.upstream, buckets.untracked, buckets.inOtherSkillset
 
 	needPush := len(toPush)
 	needPull := len(toPull)
 	needUpdate := len(toUpdate)
 	needUntracked := len(untracked)
 	upstreamUpdates := len(upstream)
+	needInOther := len(inOtherSkillset)
 
 	// Skip capture on the shell-prompt hot path (quiet mode is used by
 	// `eval "$(airskills status)"` in shell init). Capturing there would
@@ -112,7 +142,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	// auto-update, so isNewer above falsely flags an upgrade.
 	showLatestCLI := hr.latestCLI != "" && !autoUpdateDidFire.Load()
 
-	if needPush == 0 && needPull == 0 && needUpdate == 0 && needUntracked == 0 && upstreamUpdates == 0 && pendingSuggestions == 0 && !showLatestCLI {
+	if needPush == 0 && needPull == 0 && needUpdate == 0 && needUntracked == 0 && upstreamUpdates == 0 && pendingSuggestions == 0 && needInOther == 0 && !showLatestCLI {
 		if !quiet {
 			fmt.Fprintf(os.Stderr, "[airskills] %s\n", green("✓ in sync"))
 			printAgentNextSteps(os.Stderr, []agentNextStep{
@@ -139,6 +169,9 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	if needUntracked > 0 {
 		parts = append(parts, yellow(fmt.Sprintf("? %d untracked", needUntracked)))
 	}
+	if needInOther > 0 {
+		parts = append(parts, yellow(fmt.Sprintf("⚠ %d in other skillset", needInOther)))
+	}
 	if pendingSuggestions > 0 {
 		parts = append(parts, cyan(fmt.Sprintf("? %d suggestions", pendingSuggestions)))
 	}
@@ -161,6 +194,17 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		printStatusGroup("on server", toUpdate, yellow)
 		printStatusGroup("upstream", upstream, cyan)
 		printStatusGroup("untracked", untracked, yellow)
+		if needInOther > 0 {
+			active := rememberedSkillsetSlug()
+			if active == "" {
+				active = "(default)"
+			}
+			fmt.Fprintf(os.Stderr, "  %s (%d): owned server-side but not in active skillset %q — sync ignores them; switch back with 'airskills skillset use <other>' to re-include\n",
+				yellow("in other skillset"), needInOther, active)
+			for _, n := range inOtherSkillset {
+				fmt.Fprintf(os.Stderr, "    %s\n", n)
+			}
+		}
 	}
 
 	if showLatestCLI {
@@ -191,22 +235,68 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+// buildOwnedElsewhereByName produces the set of local dir names whose
+// marker skill_id is owned by the caller server-side but not in the
+// current skillset's listing. The lookup is local-name → bool so the
+// classifier (which loops over local dir names) can ask "is this name
+// in another skillset?" in O(1).
+//
+// ownedAll comes from the personal-scope ownership query in runStatus.
+func buildOwnedElsewhereByName(inSkillset []apiSkill, ownedAll []apiSkill, state *SyncState) map[string]bool {
+	if len(ownedAll) == 0 || state == nil {
+		return nil
+	}
+	inSkillsetIDs := map[string]bool{}
+	for _, s := range inSkillset {
+		inSkillsetIDs[s.Id.String()] = true
+	}
+	elsewhereIDs := map[string]bool{}
+	for _, s := range ownedAll {
+		id := s.Id.String()
+		if inSkillsetIDs[id] {
+			continue
+		}
+		elsewhereIDs[id] = true
+	}
+	if len(elsewhereIDs) == 0 {
+		return nil
+	}
+	out := map[string]bool{}
+	for name, entry := range state.Skills {
+		if entry == nil || entry.SkillID == "" {
+			continue
+		}
+		if elsewhereIDs[entry.SkillID] {
+			out[name] = true
+		}
+	}
+	return out
+}
+
 // statusBuckets is the cross-state of skills for the status command.
 // untracked: a remote-known skill exists locally with no marker — next
 // sync would surface a conflict (silent in this command before).
 type statusBuckets struct {
-	toPush, toPull, toUpdate, upstream, untracked []string
+	toPush, toPull, toUpdate, upstream, untracked, inOtherSkillset []string
 }
 
 // classifyForStatus is pure — no I/O — so it's unit-testable. The status
-// command needs five buckets:
+// command needs six buckets:
 //
-//   - toPush:    local skill, no remote; OR tracked skill with local changes
-//   - toPull:    remote skill, no local
-//   - toUpdate:  tracked, marker hash differs from remote hash
-//   - upstream:  remote has an upstream update available (sourced)
-//   - untracked: remote skill, local exists, no marker — needs reconciling
-func classifyForStatus(remoteSkills []apiSkill, localSkills map[string]string, syncState *SyncState, hashLocal func(string) string) statusBuckets {
+//   - toPush:           local skill, no remote anywhere; OR tracked skill with local edits
+//   - toPull:           remote skill, no local
+//   - toUpdate:         tracked, marker hash differs from remote hash
+//   - upstream:         remote has an upstream update available (sourced)
+//   - untracked:        remote skill, local exists, no marker — needs reconciling
+//   - inOtherSkillset:  local skill that the user owns server-side, but
+//                       the skill is not in the active personal skillset.
+//                       Without this bucket the classifier dumped them in
+//                       toPush, which lied — push would have collided on
+//                       name. ownedElsewhereByName is the cross-reference
+//                       (skill names the caller owns but that are not in
+//                       remoteSkills); status fetches this via the
+//                       personal-scope ownership query in runStatus.
+func classifyForStatus(remoteSkills []apiSkill, localSkills map[string]string, syncState *SyncState, hashLocal func(string) string, ownedElsewhereByName map[string]bool) statusBuckets {
 	skillIdToName := map[string]string{}
 	if syncState != nil {
 		for name, entry := range syncState.Skills {
@@ -250,9 +340,14 @@ func classifyForStatus(remoteSkills []apiSkill, localSkills map[string]string, s
 	}
 
 	for name := range localSkills {
-		if !remoteByName[name] {
-			b.toPush = append(b.toPush, name)
+		if remoteByName[name] {
+			continue
 		}
+		if ownedElsewhereByName[name] {
+			b.inOtherSkillset = append(b.inOtherSkillset, name)
+			continue
+		}
+		b.toPush = append(b.toPush, name)
 	}
 
 	// Detect locally-modified tracked skills. If a tracked skill's local
@@ -283,6 +378,7 @@ func classifyForStatus(remoteSkills []apiSkill, localSkills map[string]string, s
 	sort.Strings(b.toUpdate)
 	sort.Strings(b.upstream)
 	sort.Strings(b.untracked)
+	sort.Strings(b.inOtherSkillset)
 	return b
 }
 

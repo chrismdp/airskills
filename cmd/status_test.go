@@ -29,7 +29,7 @@ func TestClassifyForStatusFlagsTrackedOnServerNoMarker(t *testing.T) {
 	}
 	state := &SyncState{Skills: map[string]*SyncEntry{}}
 
-	got := classifyForStatus(remote, local, state, nil)
+	got := classifyForStatus(remote, local, state, nil, nil)
 	if !reflect.DeepEqual(got.untracked, []string{"foo"}) {
 		t.Fatalf("untracked = %v, want [foo]", got.untracked)
 	}
@@ -56,7 +56,7 @@ func TestClassifyForStatusBuckets(t *testing.T) {
 		"tracked-changed": {SkillID: testUUID("id-tracked-changed").String(), ContentHash: "h-old"},
 	}}
 
-	got := classifyForStatus(remote, local, state, nil)
+	got := classifyForStatus(remote, local, state, nil, nil)
 	if !reflect.DeepEqual(got.toPush, []string{"local-only"}) {
 		t.Errorf("toPush = %v, want [local-only]", got.toPush)
 	}
@@ -68,6 +68,36 @@ func TestClassifyForStatusBuckets(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got.untracked, []string{"untracked-skill"}) {
 		t.Errorf("untracked = %v, want [untracked-skill]", got.untracked)
+	}
+}
+
+// After `airskills skillset use poppins` the user's other 70+ skills
+// drop out of the active listing. Before the in-other-skillset bucket
+// they were dumped into toPush, which lied: the skill already exists
+// server-side under another skillset, and a push would have collided
+// on name. They belong in their own bucket so status reports them as
+// "owned but in another skillset" instead.
+func TestClassifyForStatusBucketsInOtherSkillset(t *testing.T) {
+	remote := []apiSkill{
+		{Id: testUUID("id-active"), Name: "active-skill", ContentHash: strPtr("ha")},
+	}
+	local := map[string]string{
+		"active-skill":  "/agent/skills/active-skill",
+		"in-other":      "/agent/skills/in-other",
+		"never-pushed":  "/agent/skills/never-pushed",
+	}
+	state := &SyncState{Skills: map[string]*SyncEntry{
+		"active-skill": {SkillID: testUUID("id-active").String(), ContentHash: "ha"},
+		"in-other":     {SkillID: testUUID("id-elsewhere").String(), ContentHash: "hb"},
+	}}
+	ownedElsewhere := map[string]bool{"in-other": true}
+
+	got := classifyForStatus(remote, local, state, nil, ownedElsewhere)
+	if !reflect.DeepEqual(got.inOtherSkillset, []string{"in-other"}) {
+		t.Errorf("inOtherSkillset = %v, want [in-other]", got.inOtherSkillset)
+	}
+	if !reflect.DeepEqual(got.toPush, []string{"never-pushed"}) {
+		t.Errorf("toPush = %v, want [never-pushed] (in-other must NOT be here)", got.toPush)
 	}
 }
 
