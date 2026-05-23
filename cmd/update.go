@@ -33,7 +33,7 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 		filterName = args[0]
 	}
 
-	skills, _, err := client.listPersonalSkillsInSkillset("")
+	skills, _, err := client.listPersonalSkillsInSkillset(rememberedSkillsetSlug())
 	if err != nil {
 		return fmt.Errorf("fetching skills: %w", err)
 	}

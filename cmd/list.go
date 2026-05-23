@@ -59,7 +59,7 @@ Use --deleted to show soft-deleted skills.`,
 
 		var skills []apiSkill
 		if scope == "" {
-			skills, _, err = client.listPersonalSkillsInSkillset("")
+			skills, _, err = client.listPersonalSkillsInSkillset(rememberedSkillsetSlug())
 		} else {
 			skills, err = client.listSkills(scope)
 		}

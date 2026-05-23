@@ -35,7 +35,7 @@ const guideSlug = "airskills-guide"
 
 func init() {
 	syncCmd.Flags().BoolVarP(&syncVerbose, "verbose", "v", false, "Show per-skill progress")
-	syncCmd.Flags().StringVar(&skillsetFlag, "skillset", "", "Personal skillset to sync against (default: your last-used skillset)")
+	syncCmd.Flags().StringVar(&skillsetFlag, "skillset", "", "Personal skillset to sync against; sets the default for future runs (default: your last-used skillset)")
 	rootCmd.AddCommand(syncCmd)
 }
 

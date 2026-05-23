@@ -71,6 +71,22 @@ func TestClassifyForStatusBuckets(t *testing.T) {
 	}
 }
 
+// Regression: `airskills skillset use poppins` writes cfg.Skillset
+// locally, but `airskills status` was sending an empty slug — so the
+// server resolved to the is_default skillset and the one-line summary
+// described the wrong skillset. The remembered slug must flow through.
+func TestRunStatusUsesRememberedSkillsetFromConfig(t *testing.T) {
+	var gotQuery string
+	_ = runStatusCapture(t, statusFixture{
+		runningVersion:  "0.6.1",
+		rememberedSlug:  "poppins",
+		skillsQuerySink: &gotQuery,
+	})
+	if gotQuery != "skillset=poppins" {
+		t.Fatalf("status ignored remembered skillset; gotQuery = %q, want skillset=poppins", gotQuery)
+	}
+}
+
 // Reproduces the tmux-re-attach scenario: maybeAutoUpdate fires,
 // autoUpdateDidFire is true, runStatus must not nag for self-update.
 func TestRunStatusSuppressesLatestCLIHintAfterAutoUpdate(t *testing.T) {
@@ -180,11 +196,13 @@ func TestFinalizeAutoUpdateGatesOnNewVersion(t *testing.T) {
 // only set a subset; zero values are sensible defaults (no local
 // skills, no quiet mode).
 type statusFixture struct {
-	runningVersion string
-	latestCLI      string
-	autoUpdated    bool
-	localSkills    []string
-	quiet          bool
+	runningVersion  string
+	latestCLI       string
+	autoUpdated     bool
+	localSkills     []string
+	quiet           bool
+	rememberedSlug  string  // cfg.Skillset on disk before runStatus
+	skillsQuerySink *string // set by httptest server on the /api/v1/skills hit
 }
 
 func runStatusCapture(t *testing.T, f statusFixture) string {
@@ -211,6 +229,9 @@ func runStatusCapture(t *testing.T, f statusFixture) string {
 		case "/api/v1/health":
 			w.Write([]byte(`{"latest_cli":"` + f.latestCLI + `"}`))
 		case "/api/v1/skills":
+			if f.skillsQuerySink != nil {
+				*f.skillsQuerySink = r.URL.RawQuery
+			}
 			w.Write([]byte(`{"skills":[]}`))
 		case "/api/v1/suggestions/count":
 			w.Write([]byte(`{"count":0}`))
@@ -224,7 +245,7 @@ func runStatusCapture(t *testing.T, f statusFixture) string {
 	if err := os.MkdirAll(cfgDir, 0700); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
-	cfgData, _ := json.Marshal(config.Config{APIURL: srv.URL})
+	cfgData, _ := json.Marshal(config.Config{APIURL: srv.URL, Skillset: f.rememberedSlug})
 	if err := os.WriteFile(filepath.Join(cfgDir, "config.json"), cfgData, 0600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}

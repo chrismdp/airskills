@@ -11,7 +11,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/chrismdp/airskills/config"
 	"github.com/spf13/cobra"
 )
 
@@ -97,11 +96,8 @@ func gatherSyncState() ([]SkillStateInfo, error) {
 
 	var remote []apiSkill
 	if client, clientErr := newAPIClientAuto(); clientErr == nil {
-		if cfg, cfgErr := config.Load(); cfgErr == nil {
-			if r, _, fetchErr := client.listPersonalSkillsInSkillset(""); fetchErr == nil {
-				remote = r
-			}
-			_ = cfg
+		if r, _, fetchErr := client.listPersonalSkillsInSkillset(rememberedSkillsetSlug()); fetchErr == nil {
+			remote = r
 		}
 	}
 

@@ -1,10 +1,16 @@
 package cmd
 
 import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/chrismdp/airskills/config"
 )
 
 // agentForDir returns an agentDef whose GlobalDir resolves to dir after
@@ -372,6 +378,51 @@ func TestRenderSyncStateReportSurfacesNotableStates(t *testing.T) {
 		if !strings.HasPrefix(trimmed, "!") {
 			t.Errorf("expected line to start with `!`, got: %q", trimmed)
 		}
+	}
+}
+
+// Regression: doctor's gatherSyncState loaded config but threw it
+// away (`_ = cfg`), sending an empty slug to /api/v1/skills. The
+// server then resolved to the is_default skillset, so doctor's
+// sync-state section described the wrong skillset.
+func TestGatherSyncStateUsesRememberedSkillset(t *testing.T) {
+	var gotQuery string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/skills" {
+			http.NotFound(w, r)
+			return
+		}
+		gotQuery = r.URL.RawQuery
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"skillset":{"slug":"poppins","name":"Poppins"},"skills":[]}`))
+	}))
+	defer srv.Close()
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	cfgDir := filepath.Join(home, ".config", "airskills")
+	if err := os.MkdirAll(cfgDir, 0700); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	cfgData, _ := json.Marshal(config.Config{APIURL: srv.URL, Skillset: "poppins"})
+	if err := os.WriteFile(filepath.Join(cfgDir, "config.json"), cfgData, 0600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	tokenData, _ := json.Marshal(config.TokenData{
+		AccessToken:  "x",
+		RefreshToken: "y",
+		ExpiresAt:    time.Now().Add(time.Hour).Unix(),
+	})
+	if err := os.WriteFile(filepath.Join(cfgDir, "token.json"), tokenData, 0600); err != nil {
+		t.Fatalf("write token: %v", err)
+	}
+
+	if _, err := gatherSyncState(); err != nil {
+		t.Fatalf("gatherSyncState: %v", err)
+	}
+	if gotQuery != "skillset=poppins" {
+		t.Fatalf("gatherSyncState ignored remembered skillset; gotQuery = %q, want skillset=poppins", gotQuery)
 	}
 }
 

@@ -17,59 +17,59 @@ import (
 // "not provided on this invocation".
 var skillsetFlag string
 
-// ErrSkillsetSwitchCancelled signals a y/N prompt answered negatively —
-// callers exit non-zero without updating the remembered default.
-var ErrSkillsetSwitchCancelled = errors.New("cancelled — default skillset unchanged")
-
 // resolveSkillsetFlag decides what skillset slug to send on the upcoming
 // API call given the CLI flag value and the remembered default in cfg.
 //
-// Rules (mirrors doc/changes/cli-skillset-flag.md):
+// Rules:
 //
 //   - flag empty, nothing remembered → return empty (server picks default,
 //     caller should remember the resolved slug on successful response).
 //   - flag empty, something remembered → return the remembered slug.
-//   - flag matches remembered → return the flag, no prompt.
-//   - flag differs from remembered → prompt via reader; y stores and returns
-//     the new slug, anything else returns ErrSkillsetSwitchCancelled.
+//   - flag matches remembered → return the flag, no notice.
+//   - flag differs from remembered → silently treat the flag as a
+//     `skillset use`: persist the new slug and return it. A short notice
+//     is printed when we switched away from a previously remembered slug
+//     so users don't lose track of which default they're on.
 //   - flag but nothing remembered → return and remember the flag silently.
 //
 // Persistence is via cfg.Save(); callers pass the *config.Config they loaded.
-func resolveSkillsetFlag(cfg *config.Config, flag string, reader io.Reader, writer io.Writer) (string, error) {
+// The reader argument is retained for ABI stability with older callers but
+// is no longer consulted — the prompt was removed because `--skillset` is
+// already an explicit user choice and an extra confirmation just blocked
+// non-interactive runs (CI, agents).
+func resolveSkillsetFlag(cfg *config.Config, flag string, _ io.Reader, writer io.Writer) (string, error) {
 	remembered := cfg.Skillset
 
 	if flag == "" {
 		return remembered, nil
 	}
-
-	if remembered == "" {
-		cfg.Skillset = flag
-		if err := cfg.Save(); err != nil {
-			return "", fmt.Errorf("save skillset preference: %w", err)
-		}
-		return flag, nil
-	}
-
 	if flag == remembered {
 		return flag, nil
 	}
 
-	fmt.Fprintf(writer, "Switch default skillset from %q to %q? [y/N] ", remembered, flag)
-	bufReader := bufio.NewReader(reader)
-	line, err := bufReader.ReadString('\n')
-	if err != nil && line == "" {
-		// EOF / read error with nothing typed — treat as no.
-		return "", ErrSkillsetSwitchCancelled
-	}
-	answer := strings.ToLower(strings.TrimSpace(line))
-	if answer != "y" && answer != "yes" {
-		return "", ErrSkillsetSwitchCancelled
-	}
 	cfg.Skillset = flag
 	if err := cfg.Save(); err != nil {
 		return "", fmt.Errorf("save skillset preference: %w", err)
 	}
+	if remembered != "" {
+		fmt.Fprintf(writer, "Switched default skillset from %q to %q.\n", remembered, flag)
+	}
 	return flag, nil
+}
+
+// rememberedSkillsetSlug returns the user's last-used personal skillset
+// slug from local config (set by `airskills skillset use` or persisted
+// after the first sync), or empty if nothing is remembered. Read-only
+// commands that don't take --skillset (status, doctor, list, history,
+// update, export) use this so they describe the same skillset the next
+// sync/pull would touch — without it, the server resolved an empty
+// slug to is_default and silently reported the wrong skillset.
+func rememberedSkillsetSlug() string {
+	cfg, err := config.Load()
+	if err != nil || cfg == nil {
+		return ""
+	}
+	return cfg.Skillset
 }
 
 // rememberSkillsetAfterSuccess persists the server-resolved skillset slug

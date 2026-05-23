@@ -63,7 +63,7 @@ func runExport(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("--commit and --all can't be used together")
 	}
 
-	skills, _, err := client.listPersonalSkillsInSkillset("")
+	skills, _, err := client.listPersonalSkillsInSkillset(rememberedSkillsetSlug())
 	if err != nil {
 		return fmt.Errorf("fetching skills: %w", err)
 	}

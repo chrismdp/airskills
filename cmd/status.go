@@ -44,7 +44,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	suggCh := make(chan int, 1)
 
 	go func() {
-		skills, _, err := client.listPersonalSkillsInSkillset("")
+		skills, _, err := client.listPersonalSkillsInSkillset(rememberedSkillsetSlug())
 		skillsCh <- skillsResult{skills, err}
 	}()
 

@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"bytes"
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -94,47 +93,43 @@ func TestResolveSkillsetFlag_MatchesRememberedNoPrompt(t *testing.T) {
 	}
 }
 
-func TestResolveSkillsetFlag_SwitchConfirmed(t *testing.T) {
+// --skillset is an explicit user choice — treat it as an implicit
+// `skillset use`: persist the new slug and switch silently. A short
+// notice tells the user which default they're now on so they don't
+// lose track when running pull/sync interactively.
+func TestResolveSkillsetFlag_SwitchSilentlyPersists(t *testing.T) {
 	withTempHome(t)
 	cfg := &config.Config{APIURL: "http://x", Skillset: "work"}
 	var writer bytes.Buffer
 
-	slug, err := resolveSkillsetFlag(cfg, "personal", strings.NewReader("y\n"), &writer)
+	slug, err := resolveSkillsetFlag(cfg, "personal", strings.NewReader(""), &writer)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if slug != "personal" {
 		t.Errorf("expected slug=personal, got %q", slug)
 	}
-	if !strings.Contains(writer.String(), `"work" to "personal"`) {
-		t.Errorf("expected switch prompt, got: %q", writer.String())
+	if !strings.Contains(writer.String(), `Switched default skillset from "work" to "personal"`) {
+		t.Errorf("expected switch notice, got: %q", writer.String())
 	}
 	if readStoredSkillset(t) != "personal" {
 		t.Errorf("on-disk not updated")
 	}
 }
 
-func TestResolveSkillsetFlag_SwitchCancelled(t *testing.T) {
+// A switch from no remembered slug to a flagged one should be silent —
+// the user hasn't chosen anything yet, so there's nothing to "switch
+// from" and no notice to print.
+func TestResolveSkillsetFlag_FirstUseIsSilent(t *testing.T) {
 	withTempHome(t)
-	cfg := &config.Config{APIURL: "http://x", Skillset: "work"}
+	cfg := &config.Config{APIURL: "http://x"}
 	var writer bytes.Buffer
 
-	_, err := resolveSkillsetFlag(cfg, "personal", strings.NewReader("N\n"), &writer)
-	if !errors.Is(err, ErrSkillsetSwitchCancelled) {
-		t.Fatalf("expected cancel error, got: %v", err)
+	if _, err := resolveSkillsetFlag(cfg, "personal", strings.NewReader(""), &writer); err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg.Skillset != "work" {
-		t.Errorf("cfg mutated on cancel: %q", cfg.Skillset)
-	}
-}
-
-func TestResolveSkillsetFlag_SwitchEOFCancels(t *testing.T) {
-	withTempHome(t)
-	cfg := &config.Config{APIURL: "http://x", Skillset: "work"}
-
-	_, err := resolveSkillsetFlag(cfg, "personal", strings.NewReader(""), &bytes.Buffer{})
-	if !errors.Is(err, ErrSkillsetSwitchCancelled) {
-		t.Fatalf("expected cancel error on EOF, got: %v", err)
+	if writer.Len() != 0 {
+		t.Errorf("expected silent first-use, got: %q", writer.String())
 	}
 }
 

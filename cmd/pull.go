@@ -19,7 +19,7 @@ var pullForceFlag bool
 var pullVersionFlag string
 
 func init() {
-	pullCmd.Flags().StringVar(&skillsetFlag, "skillset", "", "Personal skillset to pull against (default: your last-used skillset)")
+	pullCmd.Flags().StringVar(&skillsetFlag, "skillset", "", "Personal skillset to pull against; sets the default for future runs (default: your last-used skillset)")
 	pullCmd.Flags().BoolVar(&pullForceFlag, "force", false, "Overwrite local with remote for diverged skills (backs up local first)")
 	pullCmd.Flags().StringVar(&pullVersionFlag, "version", "", "Pull a specific commit version of a skill: pull --version <commit-hash> <skill>")
 	rootCmd.AddCommand(pullCmd)

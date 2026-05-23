@@ -80,7 +80,7 @@ func runSkillLog(client *apiClient, skillName string, limit int) error {
 
 // runUnifiedLog shows a merged timeline across all skills.
 func runUnifiedLog(client *apiClient, limit int) error {
-	skills, _, err := client.listPersonalSkillsInSkillset("")
+	skills, _, err := client.listPersonalSkillsInSkillset(rememberedSkillsetSlug())
 	if err != nil {
 		return fmt.Errorf("fetching skills: %w", err)
 	}
