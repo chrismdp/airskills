@@ -414,6 +414,18 @@ config).`,
 			}
 		}
 
+		// Warn (don't fail) when a file the SKILL.md frontmatter declares in
+		// allowed-tools / script: would be excluded by the ignore rules — it
+		// ships missing and the skill breaks at use time. Skipped under
+		// --no-ignore, where the rules aren't being applied.
+		if !pushNoIgnore {
+			for _, s := range skills {
+				for _, w := range checkIgnoredToolReferences(s.dir, newPushMatcher(s.dir)) {
+					warnings = append(warnings, fmt.Sprintf("%s: %s", s.name, w))
+				}
+			}
+		}
+
 		// Verbose mode: print the files each skill will exclude, with the
 		// matching rule, before any upload starts. Run serially so output
 		// doesn't interleave with the parallel push progress bar below.
