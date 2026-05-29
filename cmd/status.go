@@ -289,13 +289,13 @@ type statusBuckets struct {
 //   - upstream:         remote has an upstream update available (sourced)
 //   - untracked:        remote skill, local exists, no marker — needs reconciling
 //   - inOtherSkillset:  local skill that the user owns server-side, but
-//                       the skill is not in the active personal skillset.
-//                       Without this bucket the classifier dumped them in
-//                       toPush, which lied — push would have collided on
-//                       name. ownedElsewhereByName is the cross-reference
-//                       (skill names the caller owns but that are not in
-//                       remoteSkills); status fetches this via the
-//                       personal-scope ownership query in runStatus.
+//     the skill is not in the active personal skillset.
+//     Without this bucket the classifier dumped them in
+//     toPush, which lied — push would have collided on
+//     name. ownedElsewhereByName is the cross-reference
+//     (skill names the caller owns but that are not in
+//     remoteSkills); status fetches this via the
+//     personal-scope ownership query in runStatus.
 func classifyForStatus(remoteSkills []apiSkill, localSkills map[string]string, syncState *SyncState, hashLocal func(string) string, ownedElsewhereByName map[string]bool) statusBuckets {
 	skillIdToName := map[string]string{}
 	if syncState != nil {
@@ -308,6 +308,7 @@ func classifyForStatus(remoteSkills []apiSkill, localSkills map[string]string, s
 
 	var b statusBuckets
 	remoteByName := map[string]bool{}
+	accountedLocal := map[string]bool{}
 	for _, remote := range remoteSkills {
 		remoteByName[remote.Name] = true
 
@@ -321,6 +322,7 @@ func classifyForStatus(remoteSkills []apiSkill, localSkills map[string]string, s
 			if _, exists := localSkills[trackedName]; !exists {
 				continue
 			}
+			accountedLocal[trackedName] = true
 			marker := syncState.Skills[trackedName]
 			remoteHash := strDeref(remote.ContentHash)
 			if marker != nil && marker.ContentHash != "" && remoteHash != "" && marker.ContentHash != remoteHash {
@@ -333,6 +335,7 @@ func classifyForStatus(remoteSkills []apiSkill, localSkills map[string]string, s
 		// sync will surface a conflict — flag it now rather than going
 		// silent like the previous implementation did.
 		if _, exists := localSkills[remote.Name]; exists {
+			accountedLocal[remote.Name] = true
 			b.untracked = append(b.untracked, remote.Name)
 		} else {
 			b.toPull = append(b.toPull, remote.Name)
@@ -340,6 +343,14 @@ func classifyForStatus(remoteSkills []apiSkill, localSkills map[string]string, s
 	}
 
 	for name := range localSkills {
+		if accountedLocal[name] {
+			continue
+		}
+		if syncState != nil {
+			if entry := syncState.Skills[name]; entry != nil && entry.Deleted {
+				continue
+			}
+		}
 		if remoteByName[name] {
 			continue
 		}
@@ -364,7 +375,7 @@ func classifyForStatus(remoteSkills []apiSkill, localSkills map[string]string, s
 				continue
 			}
 			// Already in toPush (not on remote) — don't duplicate
-			if remoteByName[name] {
+			if remoteByName[name] || accountedLocal[name] {
 				localHash := hashLocal(localSkills[name])
 				if localHash != entry.ContentHash {
 					b.toPush = append(b.toPush, name)

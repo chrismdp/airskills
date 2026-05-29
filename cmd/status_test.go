@@ -71,6 +71,45 @@ func TestClassifyForStatusBuckets(t *testing.T) {
 	}
 }
 
+func TestClassifyForStatusDoesNotPushTrackedLocalAlias(t *testing.T) {
+	remote := []apiSkill{
+		{Id: testUUID("id-home"), Name: "org-home", ContentHash: strPtr("h-home")},
+	}
+	local := map[string]string{
+		"home": "/agent/skills/home",
+	}
+	state := &SyncState{Skills: map[string]*SyncEntry{
+		"home": {SkillID: testUUID("id-home").String(), ContentHash: "h-home"},
+	}}
+
+	got := classifyForStatus(remote, local, state, func(path string) string {
+		if path != "/agent/skills/home" {
+			t.Fatalf("unexpected hash path %q", path)
+		}
+		return "h-home"
+	}, nil)
+	if len(got.toPush) != 0 {
+		t.Fatalf("toPush = %v, want empty for tracked skill matched by id under a different remote name", got.toPush)
+	}
+	if len(got.toPull) != 0 || len(got.toUpdate) != 0 || len(got.untracked) != 0 {
+		t.Fatalf("expected no status buckets for clean tracked alias, got %+v", got)
+	}
+}
+
+func TestClassifyForStatusDoesNotPushTombstonedLocalSkill(t *testing.T) {
+	local := map[string]string{
+		"home": "/agent/skills/home",
+	}
+	state := &SyncState{Skills: map[string]*SyncEntry{
+		"home": {Deleted: true, MovedTo: "parsons-home/home"},
+	}}
+
+	got := classifyForStatus(nil, local, state, nil, nil)
+	if len(got.toPush) != 0 {
+		t.Fatalf("toPush = %v, want empty for tombstoned moved/deleted marker", got.toPush)
+	}
+}
+
 // After `airskills skillset use poppins` the user's other 70+ skills
 // drop out of the active listing. Before the in-other-skillset bucket
 // they were dumped into toPush, which lied: the skill already exists
