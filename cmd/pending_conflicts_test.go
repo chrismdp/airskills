@@ -32,6 +32,52 @@ func TestPrintLingeringConflicts(t *testing.T) {
 	}
 }
 
+// Idempotent parking: a parked copy that already matches the remote hash
+// needs no re-download/re-write (the warning recurs against the existing
+// copy); a missing copy or a changed remote does.
+func TestConflictReparkIdempotency(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
+	t.Setenv("TMP", tmp)
+	t.Setenv("TEMP", tmp)
+
+	dir := conflictParkPath("home")
+	if got := filepath.Dir(dir); filepath.Base(got) != "airskills-conflicts" {
+		t.Fatalf("park path should sit under airskills-conflicts, got %s", dir)
+	}
+
+	// Nothing parked yet → must write.
+	if _, need := conflictNeedsRepark("home", "anyhash"); !need {
+		t.Fatal("missing parked copy should need a (re)park")
+	}
+
+	// Park a copy and compute its real hash.
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte("---\nname: home\n---\nremote\n"), 0600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	parkedHash := computeMerkleHash(readSkillFiles(dir))
+
+	// Same remote hash → no churn.
+	if !parkedConflictCurrent(dir, parkedHash) {
+		t.Fatal("parked copy matching remote hash should be current")
+	}
+	if _, need := conflictNeedsRepark("home", parkedHash); need {
+		t.Fatal("unchanged remote should NOT need a re-park")
+	}
+
+	// Remote changed → re-park.
+	if _, need := conflictNeedsRepark("home", parkedHash+"x"); !need {
+		t.Fatal("changed remote should need a re-park")
+	}
+	// Empty remote hash is never 'current'.
+	if parkedConflictCurrent(dir, "") {
+		t.Fatal("empty remote hash should not count as current")
+	}
+}
+
 func TestPendingConflictNamesFindsAddAndPullConflictDirs(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("TMPDIR", tmp)

@@ -137,7 +137,7 @@ func TestConflictResolutionMessageBothBranchesShowCommands(t *testing.T) {
 	}
 }
 
-func TestConflictResolutionMessageUntrackedRecommendsMoveThenPull(t *testing.T) {
+func TestConflictResolutionMessageUntrackedOffersKeepLocalForceAndRename(t *testing.T) {
 	msg := conflictResolutionMessage([]conflictEntry{
 		{
 			name:      "home",
@@ -147,20 +147,48 @@ func TestConflictResolutionMessageUntrackedRecommendsMoveThenPull(t *testing.T) 
 		},
 	}, true)
 
+	// All three resolutions must be present: keep-local (the safe default),
+	// take-remote, and rename-YOUR-local-aside.
 	for _, want := range []string{
+		"airskills pull --keep-local home",
+		"airskills pull --force home",
 		"airskills mv home <new-local-name>",
-		"airskills pull",
-		"merge them from <new-local-name> back into home",
 		"Do not edit ~/.config/airskills/sync.json directly",
 	} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("untracked conflict message missing %q in:\n%s", want, msg)
 		}
 	}
-	for _, notWant := range []string{"push --force home", "pull --force home"} {
-		if strings.Contains(msg, notWant) {
-			t.Errorf("untracked conflict should not suggest destructive force path %q:\n%s", notWant, msg)
+	// The keep-local (non-destructive) option must come before the
+	// overwrite option, so it reads as the default.
+	if strings.Index(msg, "--keep-local") > strings.Index(msg, "pull --force") {
+		t.Errorf("keep-local should be offered before the destructive force path:\n%s", msg)
+	}
+	// Never tell the user to rename the server/org skill — only their local.
+	if strings.Contains(msg, "airskills mv home") && !strings.Contains(msg, "rename YOUR local") {
+		t.Errorf("rename guidance must target the local copy, not the server skill:\n%s", msg)
+	}
+}
+
+// When the conflicting skill is an org skill, the message must warn that
+// keep-local FORKS it (wrong for an admin who owns the org skill) — we
+// can't detect admin role yet, so the warning fires for any org skill.
+// Personal skills get no such warning.
+func TestConflictResolutionMessageUntrackedWarnsForOrgSkill(t *testing.T) {
+	org := conflictResolutionMessage([]conflictEntry{
+		{name: "home", localDir: "/l/home", remoteDir: "/t/home", kind: "untracked", orgSlug: "cherrypick"},
+	}, true)
+	for _, want := range []string{"org skill", "FORK", "cherrypick/home", "administer"} {
+		if !strings.Contains(org, want) {
+			t.Errorf("org-skill conflict message missing %q in:\n%s", want, org)
 		}
+	}
+
+	personal := conflictResolutionMessage([]conflictEntry{
+		{name: "home", localDir: "/l/home", remoteDir: "/t/home", kind: "untracked"},
+	}, true)
+	if strings.Contains(personal, "FORK") {
+		t.Errorf("personal-skill conflict must not get the org fork warning:\n%s", personal)
 	}
 }
 

@@ -118,6 +118,12 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	buckets := classifyForStatus(sr.skills, localSkills, syncState, hashLocal, ownedElsewhereByName)
 	toPush, toPull, toUpdate, upstream, untracked, inOtherSkillset := buckets.toPush, buckets.toPull, buckets.toUpdate, buckets.upstream, buckets.untracked, buckets.inOtherSkillset
 
+	// A pull conflict now parks its remote copy to the stable conflict path
+	// AND surfaces live in the "untracked" bucket (or "on server"/toUpdate
+	// for a tracked divergence). Don't double-report: drop pending-conflict
+	// names already shown there, so the same skill isn't listed twice.
+	pendingConflicts = dropPendingConflictDuplicates(pendingConflicts, untracked, toUpdate)
+
 	needPush := len(toPush)
 	needPull := len(toPull)
 	needUpdate := len(toUpdate)
@@ -244,7 +250,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 			steps = append(steps, agentNextStep{Cmd: "airskills push", Why: "upload local changes"})
 		}
 		if needUntracked > 0 {
-			steps = append(steps, agentNextStep{Cmd: "airskills sync", Why: "reconcile untracked skills (server has same name, no local marker)"})
+			steps = append(steps, agentNextStep{Cmd: "airskills pull --keep-local <name>", Why: "keep your local copy of a same-named server skill and stop the conflict (or 'pull --force <name>' to take the server's; sync alone won't clear it)"})
 		}
 		if pendingSuggestions > 0 {
 			steps = append(steps, agentNextStep{Cmd: "airskills review", Why: "review incoming suggestions"})
@@ -256,6 +262,29 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
+}
+
+// dropPendingConflictDuplicates removes from pending any name that already
+// appears in one of the shownElsewhere lists (e.g. the untracked or toUpdate
+// buckets), so a single conflicting skill isn't reported as both a live
+// classification and a parked "pending conflict" copy.
+func dropPendingConflictDuplicates(pending []string, shownElsewhere ...[]string) []string {
+	if len(pending) == 0 {
+		return pending
+	}
+	seen := map[string]bool{}
+	for _, list := range shownElsewhere {
+		for _, n := range list {
+			seen[n] = true
+		}
+	}
+	out := pending[:0]
+	for _, n := range pending {
+		if !seen[n] {
+			out = append(out, n)
+		}
+	}
+	return out
 }
 
 func printPendingConflictStatusGroup(w io.Writer, names []string) {

@@ -16,11 +16,13 @@ import (
 )
 
 var pullForceFlag bool
+var pullKeepLocalFlag bool
 var pullVersionFlag string
 
 func init() {
 	pullCmd.Flags().StringVar(&skillsetFlag, "skillset", "", "Personal skillset to pull against; sets the default for future runs (default: your last-used skillset)")
 	pullCmd.Flags().BoolVar(&pullForceFlag, "force", false, "Overwrite local with remote for diverged skills (backs up local first)")
+	pullCmd.Flags().BoolVar(&pullKeepLocalFlag, "keep-local", false, "Keep your local copy of a conflicting skill and track it against the server version (stops the conflict warning; never overwrites your files)")
 	pullCmd.Flags().StringVar(&pullVersionFlag, "version", "", "Restore a specific commit; use with exactly one skill: airskills pull --version <commit-hash> <skill>")
 	rootCmd.AddCommand(pullCmd)
 }
@@ -35,13 +37,18 @@ var pullCmd = &cobra.Command{
 divergence and decided the remote copy is the truth. The mirror flag is
 'push --force', which means "my local wins, take it as-is". Both flags
 express the same intent — "I'm about to overwrite the other side, do it
-anyway" — pointed in opposite directions.`,
+anyway" — pointed in opposite directions.
+
+--keep-local is the opposite resolution: keep your local copy as-is and
+track it against the server version, so the conflict stops recurring. Your
+files are never touched. Use it when your local copy is the one you want and
+you don't need the server's bytes.`,
 	Args: validatePullArgs,
 	RunE: runPull,
 }
 
 func validatePullArgs(cmd *cobra.Command, args []string) error {
-	if pullForceFlag {
+	if pullForceFlag || pullKeepLocalFlag {
 		return nil
 	}
 	if pullVersionFlag != "" {
@@ -58,6 +65,11 @@ type conflictDetail struct {
 	// "untracked" (no marker, server has same name with different bytes).
 	// Drives the headline wording in conflictResolutionMessage.
 	kind string
+	// orgSlug is set when the conflicting server skill is an org skill.
+	// Drives the keep-local warning: resolving with --keep-local forks the
+	// org skill into your personal namespace rather than updating it, which
+	// is wrong if you administer the org. Empty for personal skills.
+	orgSlug string
 }
 
 type updateDetail struct {
@@ -81,8 +93,14 @@ type incomingDetail struct {
 }
 
 func runPull(cmd *cobra.Command, args []string) error {
+	if pullForceFlag && pullKeepLocalFlag {
+		return fmt.Errorf("--force and --keep-local are opposite resolutions (take remote vs keep local) — choose one")
+	}
 	if pullForceFlag {
 		return runPullForce(cmd, args)
+	}
+	if pullKeepLocalFlag {
+		return runPullKeepLocal(cmd, args)
 	}
 	if pullVersionFlag != "" {
 		return runPullVersion(cmd, args)
@@ -235,9 +253,6 @@ func runPull(cmd *cobra.Command, args []string) error {
 	var incomingDetails []incomingDetail
 	var updateDetails []updateDetail
 
-	// Unique conflict dir per sync run
-	conflictBase, _ := os.MkdirTemp("", "airskills-conflicts-")
-
 	for i, p := range toPull {
 		// Auto-resolved: local already matches remote — update marker silently, no download.
 		if p.reason == "auto-resolved" {
@@ -298,6 +313,57 @@ func runPull(cmd *cobra.Command, args []string) error {
 			continue
 		}
 
+		// Diverged / untracked-conflict: never overwrite local. Park the
+		// remote copy for review and warn — but idempotently. Only
+		// (re)download and re-park when the remote actually changed since
+		// the last park; otherwise reuse the existing copy so the warning
+		// recurs without piling up duplicates or re-downloading. Sweep
+		// stale copies first so old versions don't linger.
+		if p.reason == "diverged" || p.reason == "untracked-conflict" {
+			remoteHash := strDeref(p.skill.ContentHash)
+			parkDir, needWrite := conflictNeedsRepark(p.skill.Name, remoteHash)
+			if needWrite {
+				_, _ = removePendingConflictDirs(p.skill.Name)
+				files, err := downloadSkillFiles(client, p.skill.Id.String())
+				if err != nil || len(files) == 0 {
+					lines[i].status = "failed"
+					renderProgress(lines)
+					failed++
+					continue
+				}
+				os.MkdirAll(parkDir, 0755)
+				_ = writeFilesToDir(parkDir, files)
+			}
+
+			if p.reason == "untracked-conflict" {
+				lines[i].status = "UNTRACKED-CONFLICT"
+			} else {
+				lines[i].status = "DIVERGED"
+			}
+			lines[i].pct = 1
+			renderProgress(lines)
+			diverged++
+			kind := "tracked"
+			if p.reason == "untracked-conflict" {
+				kind = "untracked"
+			}
+			orgSlug := ""
+			if ok, slug := owners.resolve(&p.skill); ok == "org" {
+				orgSlug = slug
+				if orgSlug == "" {
+					orgSlug = "org"
+				}
+			}
+			divergedDetails = append(divergedDetails, conflictDetail{
+				name:      p.skill.Name,
+				localDir:  p.localDir,
+				remoteDir: parkDir,
+				kind:      kind,
+				orgSlug:   orgSlug,
+			})
+			continue
+		}
+
 		lines[i].status = "downloading"
 		lines[i].pct = 0.5
 		renderProgress(lines)
@@ -318,32 +384,6 @@ func runPull(cmd *cobra.Command, args []string) error {
 			lines[i].status = "failed"
 			renderProgress(lines)
 			failed++
-			continue
-		}
-
-		if p.reason == "diverged" || p.reason == "untracked-conflict" {
-			conflictDir := filepath.Join(conflictBase, p.skill.Name)
-			os.MkdirAll(conflictDir, 0755)
-			_ = writeFilesToDir(conflictDir, files)
-
-			if p.reason == "untracked-conflict" {
-				lines[i].status = "UNTRACKED-CONFLICT"
-			} else {
-				lines[i].status = "DIVERGED"
-			}
-			lines[i].pct = 1
-			renderProgress(lines)
-			diverged++
-			kind := "tracked"
-			if p.reason == "untracked-conflict" {
-				kind = "untracked"
-			}
-			divergedDetails = append(divergedDetails, conflictDetail{
-				name:      p.skill.Name,
-				localDir:  p.localDir,
-				remoteDir: conflictDir,
-				kind:      kind,
-			})
 			continue
 		}
 
@@ -521,6 +561,7 @@ func runPull(cmd *cobra.Command, args []string) error {
 				remoteDir: d.remoteDir,
 				source:    source,
 				kind:      d.kind,
+				orgSlug:   d.orgSlug,
 			})
 		}
 		fmt.Print(conflictResolutionMessage(entries, !isTTY))

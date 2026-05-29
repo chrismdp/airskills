@@ -252,6 +252,25 @@ func TestRunStatusSurfacesPendingConflict(t *testing.T) {
 	}
 }
 
+// A pull conflict shows up both as a parked copy and live in the untracked
+// (or toUpdate) bucket — status must report it once, not twice.
+func TestDropPendingConflictDuplicates(t *testing.T) {
+	got := dropPendingConflictDuplicates([]string{"home", "dream", "maps"}, []string{"home"}, []string{"maps"})
+	want := []string{"dream"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("dedup = %v, want %v", got, want)
+	}
+	// Nothing shown elsewhere → unchanged.
+	got = dropPendingConflictDuplicates([]string{"a", "b"}, nil)
+	if !reflect.DeepEqual(got, []string{"a", "b"}) {
+		t.Fatalf("no-op dedup changed the list: %v", got)
+	}
+	// Empty input stays empty.
+	if out := dropPendingConflictDuplicates(nil, []string{"x"}); len(out) != 0 {
+		t.Fatalf("empty input should stay empty, got %v", out)
+	}
+}
+
 // Regression for the status→sync→status loop: when the only outstanding
 // item is a pending conflict, the headline must NOT tell the user to run
 // 'airskills sync'. Sync is a no-op for pending conflicts (it only

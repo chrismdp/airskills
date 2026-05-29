@@ -23,6 +23,34 @@ func printLingeringConflicts(w io.Writer, names []string) {
 		yellow("⚠"), len(names))
 }
 
+// conflictParkPath is the stable, per-skill location for the parked remote
+// copy of a conflicting skill. Pull parks here (rather than a fresh
+// airskills-conflicts-<random>/ per run) so a recurring conflict keeps
+// pointing at ONE copy instead of accumulating duplicates every sync.
+func conflictParkPath(name string) string {
+	return filepath.Join(os.TempDir(), "airskills-conflicts", name)
+}
+
+// parkedConflictCurrent reports whether a parked copy already exists at dir
+// with content matching remoteHash — i.e. nothing has changed since the
+// last park, so there's no need to re-download or re-write it.
+func parkedConflictCurrent(dir, remoteHash string) bool {
+	if remoteHash == "" || !hasSkillManifest(dir) {
+		return false
+	}
+	return computeMerkleHash(readSkillFiles(dir)) == remoteHash
+}
+
+// conflictNeedsRepark returns the stable park dir for name and whether the
+// caller must (re)download and write it. needWrite is false when a parked
+// copy already matches remoteHash — the warning recurs against the existing
+// copy, no churn. When true, callers should sweep stale copies first
+// (removePendingConflictDirs) so old versions don't linger.
+func conflictNeedsRepark(name, remoteHash string) (dir string, needWrite bool) {
+	dir = conflictParkPath(name)
+	return dir, !parkedConflictCurrent(dir, remoteHash)
+}
+
 // pendingConflictNames finds remote copies left by add/pull conflict paths.
 // These dirs are deliberately outside sync.json, so status/doctor need to
 // look at the tmp conflict area directly.

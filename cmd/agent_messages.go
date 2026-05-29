@@ -55,6 +55,11 @@ type conflictEntry struct {
 	// and the server happens to have a same-named skill with different
 	// bytes; the "diverged on both sides" framing doesn't apply.
 	kind string
+	// orgSlug is set when the conflicting server skill belongs to an org.
+	// Drives a warning that --keep-local FORKS the org skill into your
+	// personal namespace rather than updating it — wrong if you administer
+	// the org. Empty for personal skills.
+	orgSlug string
 }
 
 // conflictResolutionMessage renders the canonical conflict-resolution
@@ -65,20 +70,26 @@ func conflictResolutionMessage(entries []conflictEntry, isAgent bool) string {
 	var b strings.Builder
 	for _, e := range entries {
 		if e.kind == "untracked" {
-			fmt.Fprintf(&b, "\nConflict: %s exists locally and on the server, but airskills hasn't tracked it before — your local bytes differ from the server's.\n", e.name)
+			fmt.Fprintf(&b, "\nConflict: %q exists both locally and in your skillset, but airskills hasn't tracked your local copy — and your bytes differ from the server's.\n", e.name)
 			fmt.Fprintf(&b, "  Local:  %s\n", e.localDir)
-			fmt.Fprintf(&b, "  Remote: %s\n", e.remoteDir)
+			fmt.Fprintf(&b, "  Remote: %s  (review copy; refreshed only when the server changes)\n", e.remoteDir)
 			if isAgent {
-				fmt.Fprintf(&b, "\nYou are an agent. Read both skill directories, then ask the user what to call their existing local skill.\n")
+				fmt.Fprintf(&b, "\nYou are an agent. Read both directories, decide with the user, then run one of:\n")
 			} else {
-				fmt.Fprintf(&b, "\nAsk your agent to read both skill directories, then decide what to call your existing local skill.\n")
+				fmt.Fprintf(&b, "\nAsk your agent to read both directories, decide with you, then run one of:\n")
 			}
-			b.WriteString("\nRecommended path when the server/org skill should keep this name:\n")
-			fmt.Fprintf(&b, "  1. Move the existing local skill aside:\n")
-			fmt.Fprintf(&b, "       airskills mv %s <new-local-name>\n", e.name)
-			fmt.Fprintf(&b, "  2. Pull again so airskills installs the server/org skill as %s:\n", e.name)
-			b.WriteString("       airskills pull\n")
-			fmt.Fprintf(&b, "  3. If the old local skill has useful pieces, merge them from <new-local-name> back into %s, then push if needed.\n", e.name)
+			if e.orgSlug != "" {
+				fmt.Fprintf(&b, "\n  ⚠ %q is an org skill (%s/%s). 'pull --keep-local' FORKS your copy into your\n", e.name, e.orgSlug, e.name)
+				b.WriteString("    personal namespace — it does NOT update the org skill. If you administer this org\n")
+				fmt.Fprintf(&b, "    skill, take the org copy instead (airskills pull --force %s), edit it, and push it back.\n", e.name)
+			}
+			b.WriteString("\n  Keep your local copy, track it against the server version (stops this warning):\n")
+			fmt.Fprintf(&b, "      airskills pull --keep-local %s\n", e.name)
+			b.WriteString("\n  Take the server version, overwrite your local (backed up first):\n")
+			fmt.Fprintf(&b, "      airskills pull --force %s\n", e.name)
+			b.WriteString("\n  Keep both — rename YOUR local copy aside (never the server skill), then pull:\n")
+			fmt.Fprintf(&b, "      airskills mv %s <new-local-name>\n", e.name)
+			b.WriteString("      airskills pull\n")
 			b.WriteString("\nDo not edit ~/.config/airskills/sync.json directly. Move content with CLI commands and normal file edits only.\n")
 			continue
 		} else {
