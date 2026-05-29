@@ -133,6 +133,8 @@ func runPull(cmd *cobra.Command, args []string) error {
 		return runPullAnon(localSkills, syncState, mirrorConflictSet)
 	}
 
+	repairTransferTombstoneMarkers(client, localSkills, syncState)
+
 	// Fetch the caller's skills scoped to their selected personal skillset
 	// (and any org skillsets they've been assigned to). Empty slug =>
 	// server resolves to their is_default=true skillset.

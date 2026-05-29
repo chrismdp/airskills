@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -146,6 +147,94 @@ func repointMarkerToTransferredSkill(e *SyncEntry, newSkillID, newKind, newOwner
 	}
 	e.Deleted = false
 	e.MovedTo = ""
+}
+
+// repairTransferTombstoneMarkers handles the local-machine aftermath of the
+// old transfer bug: the originating machine could keep a Deleted/MovedTo
+// tombstone even though its local bytes are exactly the newly-owned skill.
+//
+// This is intentionally conservative. It only repairs when the marker's
+// moved_to destination resolves and the local Merkle hash exactly equals the
+// resolved skill's content_hash. Diverged local edits stay tombstoned so push
+// continues to refuse them instead of silently binding the wrong content.
+func repairTransferTombstoneMarkers(c *apiClient, localSkills map[string]string, state *SyncState) int {
+	if c == nil || state == nil || len(state.Skills) == 0 || len(localSkills) == 0 {
+		return 0
+	}
+
+	repaired := 0
+	for name, e := range state.Skills {
+		if e == nil || !e.Deleted || e.MovedTo == "" || e.SkillID != "" {
+			continue
+		}
+		localDir, ok := localSkills[name]
+		if !ok {
+			continue
+		}
+		owner, slug, ok := strings.Cut(e.MovedTo, "/")
+		if !ok || owner == "" || slug == "" {
+			continue
+		}
+		resolved, err := resolveTransferDestination(c, owner, slug)
+		if err != nil || resolved.skillID == "" || resolved.contentHash == "" || resolved.ownerKind == "" || resolved.ownerSlug == "" {
+			continue
+		}
+		localHash := computeMerkleHash(readSkillFiles(localDir))
+		if localHash != resolved.contentHash {
+			continue
+		}
+		repointMarkerToTransferredSkill(e, resolved.skillID, resolved.ownerKind, resolved.ownerSlug, resolved.version, resolved.contentHash)
+		state.Skills[name] = e
+		repaired++
+	}
+	if repaired > 0 {
+		_ = saveSyncState(state)
+	}
+	return repaired
+}
+
+type transferDestination struct {
+	skillID     string
+	version     string
+	contentHash string
+	ownerKind   string
+	ownerSlug   string
+}
+
+func resolveTransferDestination(c *apiClient, owner, slug string) (transferDestination, error) {
+	body, status, err := c.getWithStatus(fmt.Sprintf(
+		"/api/v1/resolve/%s/%s",
+		url.PathEscape(owner),
+		url.PathEscape(slug),
+	))
+	if err != nil {
+		return transferDestination{}, err
+	}
+	if status != 200 {
+		return transferDestination{}, fmt.Errorf("resolve returned %d", status)
+	}
+	var resp struct {
+		ID           string  `json:"id"`
+		Version      string  `json:"version"`
+		ContentHash  *string `json:"content_hash"`
+		CurrentOwner *struct {
+			Kind string `json:"kind"`
+			Slug string `json:"slug"`
+		} `json:"current_owner"`
+	}
+	if err := parseJSON(body, &resp); err != nil {
+		return transferDestination{}, err
+	}
+	out := transferDestination{
+		skillID:     resp.ID,
+		version:     resp.Version,
+		contentHash: strDeref(resp.ContentHash),
+	}
+	if resp.CurrentOwner != nil {
+		out.ownerKind = resp.CurrentOwner.Kind
+		out.ownerSlug = resp.CurrentOwner.Slug
+	}
+	return out, nil
 }
 
 // classifyMarkerSkill calls the server to learn what state a marker's skill
