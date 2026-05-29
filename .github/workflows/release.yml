@@ -22,7 +22,7 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: go.sum
 
-      - uses: sigstore/cosign-installer@v4.1.2
+      - uses: sigstore/cosign-installer@v3
 
       - uses: goreleaser/goreleaser-action@v7
         with:
