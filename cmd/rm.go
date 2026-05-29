@@ -43,7 +43,27 @@ to delete only locally, or --keep-local to delete only on the server.`,
 		_, hasLocal := localSkills[name]
 
 		if !tracked && !hasLocal {
-			return fmt.Errorf("no skill named %q found locally or in sync state", name)
+			pendingDirs := pendingConflictDirs(name)
+			if len(pendingDirs) == 0 {
+				return fmt.Errorf("no skill named %q found locally, in sync state, or in pending conflicts", name)
+			}
+			if !rmForce {
+				fmt.Printf("Discard pending conflict copy for %q? [y/N] ", name)
+				reader := bufio.NewReader(os.Stdin)
+				answer, _ := reader.ReadString('\n')
+				if strings.TrimSpace(strings.ToLower(answer)) != "y" {
+					fmt.Println("Aborted.")
+					return nil
+				}
+			}
+			removed, err := removePendingConflictDirs(name)
+			if err != nil {
+				return fmt.Errorf("discarding pending conflict: %w", err)
+			}
+			for _, p := range removed {
+				fmt.Printf("  %s discarded pending conflict %s\n", green("-"), p)
+			}
+			return nil
 		}
 
 		// Confirmation
@@ -106,6 +126,21 @@ func init() {
 	rmCmd.Flags().BoolVar(&rmKeepRemote, "keep-remote", false, "Only delete locally; leave remote skill")
 	rmCmd.Flags().BoolVar(&rmKeepLocal, "keep-local", false, "Only delete remote; leave local files")
 	rootCmd.AddCommand(rmCmd)
+}
+
+func removePendingConflictDirs(name string) ([]string, error) {
+	if err := validateSkillName(name); err != nil {
+		return nil, err
+	}
+	dirs := pendingConflictDirs(name)
+	removed := make([]string, 0, len(dirs))
+	for _, dir := range dirs {
+		if err := os.RemoveAll(dir); err != nil {
+			return removed, fmt.Errorf("removing %s: %w", dir, err)
+		}
+		removed = append(removed, dir)
+	}
+	return removed, nil
 }
 
 // validateSkillName rejects empty strings, path separators, and traversal

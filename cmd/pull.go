@@ -156,9 +156,6 @@ func runPull(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("fetching skills: %w", err)
 	}
 	rememberSkillsetAfterSuccess(cfg, resolvedSlug)
-	if resolvedSlug != "" {
-		fmt.Printf("  %s %s\n", dim("Skillset:"), resolvedSlug)
-	}
 
 	// Migration 047: filter shadowed skills out of the pull set and
 	// emit a warning naming the winning org. Fires on every pull until

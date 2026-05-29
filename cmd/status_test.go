@@ -247,6 +247,9 @@ func TestRunStatusSurfacesPendingConflict(t *testing.T) {
 	if !strings.Contains(out, "pending conflict") || !strings.Contains(out, "home") {
 		t.Fatalf("expected pending conflict detail, got:\n%s", out)
 	}
+	if !strings.Contains(out, "airskills rm home") {
+		t.Fatalf("expected discard command for pending conflict, got:\n%s", out)
+	}
 }
 
 // Direct unit test for the post-performUpdate gate: the flag must only

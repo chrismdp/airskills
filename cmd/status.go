@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"sort"
 	"strings"
@@ -200,7 +201,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		printStatusGroup("on server", toUpdate, yellow)
 		printStatusGroup("upstream", upstream, cyan)
 		printStatusGroup("untracked", untracked, yellow)
-		printStatusGroup("pending conflicts", pendingConflicts, yellow)
+		printPendingConflictStatusGroup(os.Stderr, pendingConflicts)
 		if needInOther > 0 {
 			active := rememberedSkillsetSlug()
 			if active == "" {
@@ -236,10 +237,23 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		if pendingSuggestions > 0 {
 			steps = append(steps, agentNextStep{Cmd: "airskills review", Why: "review incoming suggestions"})
 		}
+		if needPendingConflicts > 0 {
+			steps = append(steps, agentNextStep{Cmd: "airskills rm <name>", Why: "discard a stale pending conflict copy after reviewing it"})
+		}
 		printAgentNextSteps(os.Stderr, steps)
 	}
 
 	return nil
+}
+
+func printPendingConflictStatusGroup(w io.Writer, names []string) {
+	if len(names) == 0 {
+		return
+	}
+	fmt.Fprintf(w, "  %s (%d): temp remote copies kept for review; discard with 'airskills rm <name>'\n", yellow("pending conflicts"), len(names))
+	for _, n := range names {
+		fmt.Fprintf(w, "    %s  discard: airskills rm %s\n", n, n)
+	}
 }
 
 // buildOwnedElsewhereByName produces the set of local dir names whose

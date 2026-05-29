@@ -107,3 +107,43 @@ func TestRmDropsSyncStateEntry(t *testing.T) {
 		t.Errorf("keeper should still be in sync state")
 	}
 }
+
+func TestRmDiscardsPendingConflictWhenNoSkillExists(t *testing.T) {
+	home := t.TempDir()
+	tmp := filepath.Join(home, "tmp")
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("TMPDIR", tmp)
+	t.Setenv("TMP", tmp)
+	t.Setenv("TEMP", tmp)
+
+	conflictDir := filepath.Join(tmp, "airskills-conflicts", "borrowed")
+	if err := os.MkdirAll(conflictDir, 0700); err != nil {
+		t.Fatalf("MkdirAll conflict: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(conflictDir, "SKILL.md"), []byte("remote"), 0600); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+
+	oldForce := rmForce
+	oldKeepRemote := rmKeepRemote
+	oldKeepLocal := rmKeepLocal
+	t.Cleanup(func() {
+		rmForce = oldForce
+		rmKeepRemote = oldKeepRemote
+		rmKeepLocal = oldKeepLocal
+	})
+	rmForce = true
+	rmKeepRemote = false
+	rmKeepLocal = false
+
+	_ = captureStdout(t, func() {
+		if err := rmCmd.RunE(rmCmd, []string{"borrowed"}); err != nil {
+			t.Fatalf("rm pending conflict: %v", err)
+		}
+	})
+
+	if _, err := os.Stat(conflictDir); !os.IsNotExist(err) {
+		t.Fatalf("pending conflict dir still exists: %v", err)
+	}
+}

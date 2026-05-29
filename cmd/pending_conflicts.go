@@ -11,16 +11,31 @@ import (
 // These dirs are deliberately outside sync.json, so status/doctor need to
 // look at the tmp conflict area directly.
 func pendingConflictNames() []string {
-	seen := map[string]bool{}
+	byName := pendingConflictDirsByName()
+
+	names := make([]string, 0, len(byName))
+	for name := range byName {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func pendingConflictDirs(name string) []string {
+	if name == "" {
+		return nil
+	}
+	dirs := pendingConflictDirsByName()[name]
+	out := append([]string(nil), dirs...)
+	sort.Strings(out)
+	return out
+}
+
+func pendingConflictDirsByName() map[string][]string {
+	out := map[string][]string{}
 
 	addRoot := filepath.Join(os.TempDir(), "airskills-conflicts")
-	if entries, err := os.ReadDir(addRoot); err == nil {
-		for _, e := range entries {
-			if e.IsDir() && hasSkillManifest(filepath.Join(addRoot, e.Name())) {
-				seen[e.Name()] = true
-			}
-		}
-	}
+	addPendingConflictDirs(out, addRoot)
 
 	matches, _ := filepath.Glob(filepath.Join(os.TempDir(), "airskills-conflicts-*"))
 	for _, root := range matches {
@@ -28,23 +43,26 @@ func pendingConflictNames() []string {
 		if err != nil || !info.IsDir() || strings.TrimPrefix(filepath.Base(root), "airskills-conflicts-") == "" {
 			continue
 		}
-		entries, err := os.ReadDir(root)
-		if err != nil {
-			continue
-		}
-		for _, e := range entries {
-			if e.IsDir() && hasSkillManifest(filepath.Join(root, e.Name())) {
-				seen[e.Name()] = true
-			}
-		}
+		addPendingConflictDirs(out, root)
 	}
 
-	names := make([]string, 0, len(seen))
-	for name := range seen {
-		names = append(names, name)
+	return out
+}
+
+func addPendingConflictDirs(out map[string][]string, root string) {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return
 	}
-	sort.Strings(names)
-	return names
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		dir := filepath.Join(root, e.Name())
+		if hasSkillManifest(dir) {
+			out[e.Name()] = append(out[e.Name()], dir)
+		}
+	}
 }
 
 func hasSkillManifest(dir string) bool {
