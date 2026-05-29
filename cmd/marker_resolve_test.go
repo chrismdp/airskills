@@ -104,3 +104,89 @@ func TestRenameSkillDirAcrossAgents_RenamesExistingDir(t *testing.T) {
 		}
 	}
 }
+
+func TestUpdateLocalMarkerForTransferRepointsExistingMarker(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	oldID := testUUID("old-home").String()
+	newID := testUUID("new-home").String()
+	if err := saveSyncState(&SyncState{
+		Version: 1,
+		Skills: map[string]*SyncEntry{
+			"home": {
+				SkillID:     oldID,
+				Version:     "1.0.3",
+				ContentHash: "oldhash",
+				OwnerKind:   "user",
+				OwnerSlug:   "chrismdp",
+			},
+		},
+	}); err != nil {
+		t.Fatalf("saveSyncState: %v", err)
+	}
+
+	err := updateLocalMarkerForTransfer("home", oldID, newID, "org", "parsons-home", "home", "1.0.4", "newhash")
+	if err != nil {
+		t.Fatalf("updateLocalMarkerForTransfer: %v", err)
+	}
+
+	entry := loadSyncState().Skills["home"]
+	if entry == nil {
+		t.Fatal("missing home marker")
+	}
+	if entry.SkillID != newID {
+		t.Fatalf("SkillID = %q, want %q", entry.SkillID, newID)
+	}
+	if entry.OwnerKind != "org" || entry.OwnerSlug != "parsons-home" {
+		t.Fatalf("owner = %s/%s, want org/parsons-home", entry.OwnerKind, entry.OwnerSlug)
+	}
+	if entry.Version != "1.0.4" || entry.ContentHash != "newhash" {
+		t.Fatalf("version/hash = %s/%s, want 1.0.4/newhash", entry.Version, entry.ContentHash)
+	}
+	if entry.Deleted || entry.MovedTo != "" {
+		t.Fatalf("marker still tombstoned: %+v", entry)
+	}
+}
+
+func TestUpdateLocalMarkerForTransferRepointsTransferTombstone(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	newID := testUUID("new-home").String()
+	if err := saveSyncState(&SyncState{
+		Version: 1,
+		Skills: map[string]*SyncEntry{
+			"home": {
+				Deleted: true,
+				MovedTo: "parsons-home/home",
+			},
+		},
+	}); err != nil {
+		t.Fatalf("saveSyncState: %v", err)
+	}
+
+	err := updateLocalMarkerForTransfer("home", testUUID("old-home").String(), newID, "org", "parsons-home", "home", "1.0.4", "newhash")
+	if err != nil {
+		t.Fatalf("updateLocalMarkerForTransfer: %v", err)
+	}
+
+	entry := loadSyncState().Skills["home"]
+	if entry == nil {
+		t.Fatal("missing home marker")
+	}
+	if entry.SkillID != newID {
+		t.Fatalf("SkillID = %q, want %q", entry.SkillID, newID)
+	}
+	if entry.OwnerKind != "org" || entry.OwnerSlug != "parsons-home" {
+		t.Fatalf("owner = %s/%s, want org/parsons-home", entry.OwnerKind, entry.OwnerSlug)
+	}
+	if entry.Version != "1.0.4" || entry.ContentHash != "newhash" {
+		t.Fatalf("version/hash = %s/%s, want 1.0.4/newhash", entry.Version, entry.ContentHash)
+	}
+	if entry.Deleted || entry.MovedTo != "" {
+		t.Fatalf("marker still tombstoned: %+v", entry)
+	}
+}

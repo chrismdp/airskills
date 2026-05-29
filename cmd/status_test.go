@@ -140,24 +140,6 @@ func TestClassifyForStatusBucketsInOtherSkillset(t *testing.T) {
 	}
 }
 
-func TestFindOrgSkillShadowsFlagsLocalSameNameOutsideEffectiveSet(t *testing.T) {
-	effective := []apiSkill{
-		{Id: testUUID("id-active"), Name: "active"},
-	}
-	orgSkills := []apiSkill{
-		{Id: testUUID("id-home"), Name: "home"},
-		{Id: testUUID("id-active"), Name: "active"},
-	}
-	local := map[string]string{"home": "/agent/skills/home"}
-	state := &SyncState{Skills: map[string]*SyncEntry{}}
-
-	got := findOrgSkillShadows(effective, orgSkills, local, state)
-	want := []string{"home shadows org-owned home"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("org shadows = %v, want %v", got, want)
-	}
-}
-
 // Obsolete after mig 047: cfg.Skillset is no longer plumbed through —
 // the server's /api/v1/skills always resolves to the user's single
 // implicit 'default' regardless of the param value. The test above

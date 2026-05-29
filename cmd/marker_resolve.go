@@ -111,19 +111,41 @@ type markerState struct {
 // `name` to equal the parent dir name, so renaming the dir would also
 // require rewriting `name` (a content change). Ownership and skill_id
 // are tracked in the marker; the dir stays stable.
-func updateLocalMarkerForTransfer(oldSkillID, newSkillID, newKind, newSlug string) error {
+func updateLocalMarkerForTransfer(localName, oldSkillID, newSkillID, newKind, newOwnerSlug, newSkillSlug, newVersion, newContentHash string) error {
 	state := loadSyncState()
+	movedTo := newOwnerSlug
+	if newSkillSlug != "" {
+		movedTo += "/" + newSkillSlug
+	}
+
 	for name, e := range state.Skills {
-		if e != nil && e.SkillID == oldSkillID {
-			e.SkillID = newSkillID
-			e.OwnerKind = newKind
-			e.OwnerSlug = newSlug
+		if e == nil {
+			continue
+		}
+		matchesOldID := oldSkillID != "" && e.SkillID == oldSkillID
+		matchesTransferTombstone := name == localName && e.Deleted && e.MovedTo == movedTo
+		if matchesOldID || matchesTransferTombstone {
+			repointMarkerToTransferredSkill(e, newSkillID, newKind, newOwnerSlug, newVersion, newContentHash)
 			state.Skills[name] = e
 			return saveSyncState(state)
 		}
 	}
 	// No marker on this machine — nothing to update.
 	return nil
+}
+
+func repointMarkerToTransferredSkill(e *SyncEntry, newSkillID, newKind, newOwnerSlug, newVersion, newContentHash string) {
+	e.SkillID = newSkillID
+	e.OwnerKind = newKind
+	e.OwnerSlug = newOwnerSlug
+	if newVersion != "" {
+		e.Version = newVersion
+	}
+	if newContentHash != "" {
+		e.ContentHash = newContentHash
+	}
+	e.Deleted = false
+	e.MovedTo = ""
 }
 
 // classifyMarkerSkill calls the server to learn what state a marker's skill

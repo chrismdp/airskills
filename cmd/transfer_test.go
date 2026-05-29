@@ -4,7 +4,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
+
+	"github.com/chrismdp/airskills/config"
+	"github.com/spf13/cobra"
 )
 
 // TestLookupCallerOrgIDMultiOrg verifies that lookupCallerOrgID works correctly
@@ -75,4 +81,189 @@ func TestLookupCallerOrgIDNotMember(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error when not a member of any org")
 	}
+}
+
+func TestTransferToOrgRepointsLocalTombstoneMarkerEndToEnd(t *testing.T) {
+	oldID := testUUID("old-home").String()
+	newID := testUUID("new-home").String()
+	home := setupTransferCommandTest(t, transferCommandFixture{
+		oldID: oldID,
+		newID: newID,
+	})
+	if err := saveSyncState(&SyncState{
+		Version: 1,
+		Skills: map[string]*SyncEntry{
+			"home": {
+				Deleted: true,
+				MovedTo: "parsons-home/home",
+			},
+		},
+	}); err != nil {
+		t.Fatalf("saveSyncState: %v", err)
+	}
+
+	runTransferCommand(t, "home", "parsons-home")
+
+	entry := loadSyncState().Skills["home"]
+	if entry == nil {
+		t.Fatal("missing home marker")
+	}
+	if entry.SkillID != newID {
+		t.Fatalf("SkillID = %q, want %q", entry.SkillID, newID)
+	}
+	if entry.OwnerKind != "org" || entry.OwnerSlug != "parsons-home" {
+		t.Fatalf("owner = %s/%s, want org/parsons-home", entry.OwnerKind, entry.OwnerSlug)
+	}
+	if entry.Version != "1.0.4" || entry.ContentHash != "newhash" {
+		t.Fatalf("version/hash = %s/%s, want 1.0.4/newhash", entry.Version, entry.ContentHash)
+	}
+	if entry.Deleted || entry.MovedTo != "" {
+		t.Fatalf("marker still tombstoned: %+v", entry)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".config", "airskills", "sync.json")); err != nil {
+		t.Fatalf("expected sync state written: %v", err)
+	}
+}
+
+func TestTransferToOrgRepointsExistingLocalMarkerEndToEnd(t *testing.T) {
+	oldID := testUUID("old-home").String()
+	newID := testUUID("new-home").String()
+	setupTransferCommandTest(t, transferCommandFixture{
+		oldID: oldID,
+		newID: newID,
+	})
+	if err := saveSyncState(&SyncState{
+		Version: 1,
+		Skills: map[string]*SyncEntry{
+			"home": {
+				SkillID:     oldID,
+				Version:     "1.0.3",
+				ContentHash: "oldhash",
+				OwnerKind:   "user",
+				OwnerSlug:   "chrismdp",
+			},
+		},
+	}); err != nil {
+		t.Fatalf("saveSyncState: %v", err)
+	}
+
+	runTransferCommand(t, "home", "parsons-home")
+
+	entry := loadSyncState().Skills["home"]
+	if entry == nil {
+		t.Fatal("missing home marker")
+	}
+	if entry.SkillID != newID {
+		t.Fatalf("SkillID = %q, want %q", entry.SkillID, newID)
+	}
+	if entry.OwnerKind != "org" || entry.OwnerSlug != "parsons-home" {
+		t.Fatalf("owner = %s/%s, want org/parsons-home", entry.OwnerKind, entry.OwnerSlug)
+	}
+	if entry.Version != "1.0.4" || entry.ContentHash != "newhash" {
+		t.Fatalf("version/hash = %s/%s, want 1.0.4/newhash", entry.Version, entry.ContentHash)
+	}
+	if entry.Deleted || entry.MovedTo != "" {
+		t.Fatalf("marker still tombstoned: %+v", entry)
+	}
+}
+
+type transferCommandFixture struct {
+	oldID string
+	newID string
+}
+
+func setupTransferCommandTest(t *testing.T, f transferCommandFixture) string {
+	t.Helper()
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/skills" && r.URL.Query().Get("scope") == "personal":
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"skills": []map[string]interface{}{
+					{
+						"id":           f.oldID,
+						"name":         "home",
+						"version":      "1.0.3",
+						"content_hash": "oldhash",
+					},
+				},
+			})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/organizations":
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"organizations": []map[string]interface{}{
+					{"id": "org-parsons-home", "slug": "parsons-home"},
+				},
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/skills/"+f.oldID+"/transfer":
+			var payload struct {
+				To struct {
+					Kind string `json:"kind"`
+					ID   string `json:"id"`
+				} `json:"to"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatalf("decode transfer payload: %v", err)
+			}
+			if payload.To.Kind != "org" || payload.To.ID != "org-parsons-home" {
+				t.Fatalf("transfer target = %s/%s, want org/org-parsons-home", payload.To.Kind, payload.To.ID)
+			}
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"id":           f.newID,
+				"name":         "home",
+				"version":      "1.0.4",
+				"content_hash": "newhash",
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	cfgDir := filepath.Join(home, ".config", "airskills")
+	if err := os.MkdirAll(cfgDir, 0700); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	cfgData, _ := json.Marshal(config.Config{APIURL: srv.URL})
+	if err := os.WriteFile(filepath.Join(cfgDir, "config.json"), cfgData, 0600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	tokenData, _ := json.Marshal(config.TokenData{
+		AccessToken:  "x",
+		RefreshToken: "y",
+		ExpiresAt:    time.Now().Add(time.Hour).Unix(),
+	})
+	if err := os.WriteFile(filepath.Join(cfgDir, "token.json"), tokenData, 0600); err != nil {
+		t.Fatalf("write token: %v", err)
+	}
+	return home
+}
+
+func runTransferCommand(t *testing.T, skillName, orgSlug string) {
+	t.Helper()
+
+	oldTransferToOrg := transferToOrg
+	oldTransferSlug := transferSlug
+	oldTransferYes := transferYes
+	t.Cleanup(func() {
+		transferToOrg = oldTransferToOrg
+		transferSlug = oldTransferSlug
+		transferYes = oldTransferYes
+	})
+
+	transferToOrg = orgSlug
+	transferSlug = ""
+	transferYes = true
+
+	cmd := &cobra.Command{}
+	cmd.Flags().Bool("to-user", false, "")
+	_ = captureStdout(t, func() {
+		if err := transferCmd.RunE(cmd, []string{skillName}); err != nil {
+			t.Fatalf("transfer: %v", err)
+		}
+	})
 }

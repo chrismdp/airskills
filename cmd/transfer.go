@@ -127,7 +127,16 @@ To restore the old slug, run 'airskills restore <old-slug>'.`,
 			newKind = "user"
 		}
 		if newSlug != "" && updated.Id.String() != "" {
-			if err := updateLocalMarkerForTransfer(skill.Id.String(), updated.Id.String(), newKind, newSlug); err != nil {
+			if err := updateLocalMarkerForTransfer(
+				skillName,
+				skill.Id.String(),
+				updated.Id.String(),
+				newKind,
+				newSlug,
+				updated.Name,
+				updated.Version,
+				strDeref(updated.ContentHash),
+			); err != nil {
 				fmt.Fprintf(os.Stderr, "  %s server transferred OK but local marker update failed: %v\n", yellow("!"), err)
 			}
 		}

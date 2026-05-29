@@ -42,7 +42,6 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	skillsCh := make(chan skillsResult, 1)
 	healthCh := make(chan healthResult, 1)
 	suggCh := make(chan int, 1)
-	orgCh := make(chan []apiSkill, 1)
 	// Ownership query: every skill the caller owns server-side,
 	// regardless of which personal skillset it belongs to. Used to
 	// label locals that are owned-but-not-in-the-active-skillset, so
@@ -65,15 +64,6 @@ func runStatus(cmd *cobra.Command, args []string) error {
 			return
 		}
 		ownedCh <- owned
-	}()
-
-	go func() {
-		orgSkills, err := client.listSkills("org")
-		if err != nil {
-			orgCh <- nil
-			return
-		}
-		orgCh <- orgSkills
 	}()
 
 	go func() {
@@ -108,13 +98,11 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		<-healthCh
 		<-suggCh
 		<-ownedCh
-		<-orgCh
 		return nil
 	}
 	hr := <-healthCh
 	pendingSuggestions := <-suggCh
 	ownedAll := <-ownedCh
-	orgSkills := <-orgCh
 
 	// Build the owned-elsewhere set: skills the caller owns server-side
 	// minus the ones already in the active skillset's listing. We key
@@ -127,7 +115,6 @@ func runStatus(cmd *cobra.Command, args []string) error {
 
 	hashLocal := func(p string) string { return computeMerkleHash(readSkillFiles(p)) }
 	buckets := classifyForStatus(sr.skills, localSkills, syncState, hashLocal, ownedElsewhereByName)
-	orgShadows := findOrgSkillShadows(sr.skills, orgSkills, localSkills, syncState)
 	toPush, toPull, toUpdate, upstream, untracked, inOtherSkillset := buckets.toPush, buckets.toPull, buckets.toUpdate, buckets.upstream, buckets.untracked, buckets.inOtherSkillset
 
 	needPush := len(toPush)
@@ -136,7 +123,6 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	needUntracked := len(untracked)
 	upstreamUpdates := len(upstream)
 	needInOther := len(inOtherSkillset)
-	needOrgShadows := len(orgShadows)
 	needPendingConflicts := len(pendingConflicts)
 
 	// Skip capture on the shell-prompt hot path (quiet mode is used by
@@ -151,7 +137,6 @@ func runStatus(cmd *cobra.Command, args []string) error {
 			"need_untracked":      needUntracked,
 			"upstream_updates":    upstreamUpdates,
 			"pending_suggestions": pendingSuggestions,
-			"org_shadows":         needOrgShadows,
 			"pending_conflicts":   needPendingConflicts,
 		})
 	}
@@ -160,7 +145,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	// auto-update, so isNewer above falsely flags an upgrade.
 	showLatestCLI := hr.latestCLI != "" && !autoUpdateDidFire.Load()
 
-	if needPush == 0 && needPull == 0 && needUpdate == 0 && needUntracked == 0 && upstreamUpdates == 0 && pendingSuggestions == 0 && needInOther == 0 && needOrgShadows == 0 && needPendingConflicts == 0 && !showLatestCLI {
+	if needPush == 0 && needPull == 0 && needUpdate == 0 && needUntracked == 0 && upstreamUpdates == 0 && pendingSuggestions == 0 && needInOther == 0 && needPendingConflicts == 0 && !showLatestCLI {
 		if !quiet {
 			fmt.Fprintf(os.Stderr, "[airskills] %s\n", green("✓ in sync"))
 			printAgentNextSteps(os.Stderr, []agentNextStep{
@@ -189,9 +174,6 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	}
 	if needInOther > 0 {
 		parts = append(parts, yellow(fmt.Sprintf("⚠ %d in other skillset", needInOther)))
-	}
-	if needOrgShadows > 0 {
-		parts = append(parts, yellow(fmt.Sprintf("⚠ %d org shadowed", needOrgShadows)))
 	}
 	if needPendingConflicts > 0 {
 		parts = append(parts, yellow(fmt.Sprintf("⚠ %d pending conflict", needPendingConflicts)))
@@ -230,13 +212,6 @@ func runStatus(cmd *cobra.Command, args []string) error {
 				fmt.Fprintf(os.Stderr, "    %s\n", n)
 			}
 		}
-		if needOrgShadows > 0 {
-			fmt.Fprintf(os.Stderr, "  %s (%d): local directories shadow org-owned skills — run 'airskills sync'; if it reports a conflict, move the local skill aside with 'airskills mv <name> <new-name>' then pull again\n",
-				yellow("org shadowed"), needOrgShadows)
-			for _, n := range orgShadows {
-				fmt.Fprintf(os.Stderr, "    %s\n", n)
-			}
-		}
 	}
 
 	if showLatestCLI {
@@ -260,9 +235,6 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		}
 		if pendingSuggestions > 0 {
 			steps = append(steps, agentNextStep{Cmd: "airskills review", Why: "review incoming suggestions"})
-		}
-		if needOrgShadows > 0 {
-			steps = append(steps, agentNextStep{Cmd: "airskills sync", Why: "surface org skill collisions and follow the mv-then-pull guidance"})
 		}
 		printAgentNextSteps(os.Stderr, steps)
 	}
@@ -305,43 +277,6 @@ func buildOwnedElsewhereByName(inSkillset []apiSkill, ownedAll []apiSkill, state
 			out[name] = true
 		}
 	}
-	return out
-}
-
-func findOrgSkillShadows(effective []apiSkill, orgSkills []apiSkill, localSkills map[string]string, syncState *SyncState) []string {
-	if len(orgSkills) == 0 || len(localSkills) == 0 {
-		return nil
-	}
-	effectiveIDs := map[string]bool{}
-	for _, s := range effective {
-		effectiveIDs[s.Id.String()] = true
-	}
-	trackedIDs := map[string]bool{}
-	if syncState != nil {
-		for _, entry := range syncState.Skills {
-			if entry != nil && entry.SkillID != "" {
-				trackedIDs[entry.SkillID] = true
-			}
-		}
-	}
-
-	seen := map[string]bool{}
-	var out []string
-	for _, s := range orgSkills {
-		id := s.Id.String()
-		if effectiveIDs[id] || trackedIDs[id] {
-			continue
-		}
-		if _, ok := localSkills[s.Name]; !ok {
-			continue
-		}
-		label := fmt.Sprintf("%s shadows org-owned %s", s.Name, s.Name)
-		if !seen[label] {
-			seen[label] = true
-			out = append(out, label)
-		}
-	}
-	sort.Strings(out)
 	return out
 }
 
