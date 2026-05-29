@@ -255,17 +255,10 @@ func TestRunStatusIgnoresStaleRememberedSkillset(t *testing.T) {
 }
 
 func TestRunStatusSurfacesPendingConflict(t *testing.T) {
-	tmp := t.TempDir()
-	t.Setenv("TMPDIR", tmp)
-	conflictDir := filepath.Join(tmp, "airskills-conflicts", "home")
-	if err := os.MkdirAll(conflictDir, 0700); err != nil {
-		t.Fatalf("MkdirAll conflict: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(conflictDir, "SKILL.md"), []byte("# remote"), 0600); err != nil {
-		t.Fatalf("write conflict SKILL.md: %v", err)
-	}
-
-	out := runStatusCapture(t, statusFixture{runningVersion: "0.6.1"})
+	out := runStatusCapture(t, statusFixture{
+		runningVersion:        "0.6.1",
+		pendingConflictSkills: []string{"home"},
+	})
 	if strings.Contains(out, "in sync") {
 		t.Fatalf("status must not say in sync with a pending conflict; got:\n%s", out)
 	}
@@ -309,13 +302,14 @@ func TestFinalizeAutoUpdateGatesOnNewVersion(t *testing.T) {
 // only set a subset; zero values are sensible defaults (no local
 // skills, no quiet mode).
 type statusFixture struct {
-	runningVersion  string
-	latestCLI       string
-	autoUpdated     bool
-	localSkills     []string
-	quiet           bool
-	rememberedSlug  string    // cfg.Skillset on disk before runStatus
-	skillsQuerySink *[]string // appended by httptest server on /api/v1/skills hits
+	runningVersion        string
+	latestCLI             string
+	autoUpdated           bool
+	localSkills           []string
+	pendingConflictSkills []string
+	quiet                 bool
+	rememberedSlug        string    // cfg.Skillset on disk before runStatus
+	skillsQuerySink       *[]string // appended by httptest server on /api/v1/skills hits
 }
 
 func runStatusCapture(t *testing.T, f statusFixture) string {
@@ -324,12 +318,20 @@ func runStatusCapture(t *testing.T, f statusFixture) string {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
-	if tmp := os.Getenv("TMPDIR"); tmp == "" || tmp == "/tmp" {
-		tmpDir := filepath.Join(home, "tmp")
-		if err := os.MkdirAll(tmpDir, 0700); err != nil {
-			t.Fatalf("MkdirAll tmp: %v", err)
+	tmpDir := filepath.Join(home, "tmp")
+	if err := os.MkdirAll(tmpDir, 0700); err != nil {
+		t.Fatalf("MkdirAll tmp: %v", err)
+	}
+	t.Setenv("TMPDIR", tmpDir)
+
+	for _, name := range f.pendingConflictSkills {
+		conflictDir := filepath.Join(tmpDir, "airskills-conflicts", name)
+		if err := os.MkdirAll(conflictDir, 0700); err != nil {
+			t.Fatalf("MkdirAll conflict: %v", err)
 		}
-		t.Setenv("TMPDIR", tmpDir)
+		if err := os.WriteFile(filepath.Join(conflictDir, "SKILL.md"), []byte("# remote"), 0600); err != nil {
+			t.Fatalf("write conflict SKILL.md: %v", err)
+		}
 	}
 
 	for _, name := range f.localSkills {
