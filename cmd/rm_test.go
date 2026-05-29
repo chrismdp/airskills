@@ -147,3 +147,92 @@ func TestRmDiscardsPendingConflictWhenNoSkillExists(t *testing.T) {
 		t.Fatalf("pending conflict dir still exists: %v", err)
 	}
 }
+
+// The dangerous case: a real installed+tracked skill AND a parked pending
+// conflict copy share the name "home". Bare `rm home` deletes the real
+// skill (its documented job). `rm home --pending` must discard ONLY the
+// parked copy and leave the installed skill and sync state untouched —
+// otherwise the resolution status recommends would destroy the user's
+// skill while leaving the conflict in place.
+func TestRmPendingDiscardsConflictNotInstalledSkill(t *testing.T) {
+	home := t.TempDir()
+	tmp := filepath.Join(home, "tmp")
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("TMPDIR", tmp)
+	t.Setenv("TMP", tmp)
+	t.Setenv("TEMP", tmp)
+
+	// Real installed skill across an agent dir.
+	skillDir := filepath.Join(home, ".claude", "skills", "home")
+	if err := os.MkdirAll(skillDir, 0755); err != nil {
+		t.Fatalf("MkdirAll skill: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: home\ndescription: real\n---\n# home\n"), 0644); err != nil {
+		t.Fatalf("write skill: %v", err)
+	}
+
+	// Tracked in sync state.
+	state := loadSyncState()
+	state.Skills["home"] = &SyncEntry{
+		SkillID:     testUUID("skill-home").String(),
+		Version:     "1.0.0",
+		ContentHash: "h1",
+		Tool:        "claude-code",
+	}
+	if err := saveSyncState(state); err != nil {
+		t.Fatalf("saveSyncState: %v", err)
+	}
+
+	// Parked pending conflict copy with the same name.
+	conflictDir := filepath.Join(tmp, "airskills-conflicts", "home")
+	if err := os.MkdirAll(conflictDir, 0700); err != nil {
+		t.Fatalf("MkdirAll conflict: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(conflictDir, "SKILL.md"), []byte("remote"), 0600); err != nil {
+		t.Fatalf("write conflict manifest: %v", err)
+	}
+
+	oldForce, oldKeepRemote, oldKeepLocal, oldPending := rmForce, rmKeepRemote, rmKeepLocal, rmPending
+	t.Cleanup(func() {
+		rmForce, rmKeepRemote, rmKeepLocal, rmPending = oldForce, oldKeepRemote, oldKeepLocal, oldPending
+	})
+	rmForce, rmKeepRemote, rmKeepLocal, rmPending = true, false, false, true
+
+	_ = captureStdout(t, func() {
+		if err := rmCmd.RunE(rmCmd, []string{"home"}); err != nil {
+			t.Fatalf("rm --pending: %v", err)
+		}
+	})
+
+	if _, err := os.Stat(conflictDir); !os.IsNotExist(err) {
+		t.Fatalf("--pending must discard the parked copy; it still exists: %v", err)
+	}
+	if _, err := os.Stat(skillDir); err != nil {
+		t.Fatalf("--pending must NOT touch the installed skill; got: %v", err)
+	}
+	if _, ok := loadSyncState().Skills["home"]; !ok {
+		t.Fatalf("--pending must NOT drop the sync state entry")
+	}
+}
+
+// --pending with no parked copy is a clear error, not a silent success
+// (and must never fall through to deleting the real skill).
+func TestRmPendingErrorsWhenNoConflict(t *testing.T) {
+	home := t.TempDir()
+	tmp := filepath.Join(home, "tmp")
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("TMPDIR", tmp)
+	t.Setenv("TMP", tmp)
+	t.Setenv("TEMP", tmp)
+
+	oldForce, oldPending := rmForce, rmPending
+	t.Cleanup(func() { rmForce, rmPending = oldForce, oldPending })
+	rmForce, rmPending = true, true
+
+	err := rmCmd.RunE(rmCmd, []string{"nope"})
+	if err == nil {
+		t.Fatal("rm --pending should error when no parked copy exists")
+	}
+}

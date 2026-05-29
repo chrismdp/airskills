@@ -1,11 +1,27 @@
 package cmd
 
 import (
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 )
+
+// printLingeringConflicts warns at the end of a sync run when parked
+// conflict copies still exist. Without it, sync finishes on "all up to
+// date" while temp copies linger — which reads as a clean state and is
+// half of what traps users in the status→sync→status loop. It names the
+// count and redirects to status (which carries the resolution menu);
+// it deliberately does NOT loop back to sync.
+func printLingeringConflicts(w io.Writer, names []string) {
+	if len(names) == 0 {
+		return
+	}
+	fmt.Fprintf(w, "\n%s %d pending conflict(s) still need resolving — sync does not clear these. Run 'airskills status' to see how.\n",
+		yellow("⚠"), len(names))
+}
 
 // pendingConflictNames finds remote copies left by add/pull conflict paths.
 // These dirs are deliberately outside sync.json, so status/doctor need to

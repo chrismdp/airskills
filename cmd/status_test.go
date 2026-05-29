@@ -252,6 +252,41 @@ func TestRunStatusSurfacesPendingConflict(t *testing.T) {
 	}
 }
 
+// Regression for the status→sync→status loop: when the only outstanding
+// item is a pending conflict, the headline must NOT tell the user to run
+// 'airskills sync'. Sync is a no-op for pending conflicts (it only
+// push/pulls), so pointing at it leaves the warning forever. The headline
+// must point at the real, safe resolution instead.
+func TestRunStatusPendingConflictDoesNotPointAtSync(t *testing.T) {
+	for _, quiet := range []bool{false, true} {
+		out := runStatusCapture(t, statusFixture{
+			runningVersion:        "0.6.1",
+			pendingConflictSkills: []string{"home"},
+			quiet:                 quiet,
+		})
+		if strings.Contains(out, "run 'airskills sync'") {
+			t.Fatalf("quiet=%v: headline must not point pending conflicts at sync; got:\n%s", quiet, out)
+		}
+		if !strings.Contains(out, "--pending") {
+			t.Fatalf("quiet=%v: headline must point at the safe --pending discard; got:\n%s", quiet, out)
+		}
+	}
+}
+
+// When there IS real sync work alongside a pending conflict, the headline
+// should still point at sync (the dominant actionable item); the conflict
+// detail is carried in the body.
+func TestRunStatusHeadlineStillSyncWhenSyncWorkPresent(t *testing.T) {
+	out := runStatusCapture(t, statusFixture{
+		runningVersion:        "0.6.1",
+		localSkills:           []string{"brand-new-local"}, // no remote → to push
+		pendingConflictSkills: []string{"home"},
+	})
+	if !strings.Contains(out, "run 'airskills sync'") {
+		t.Fatalf("headline should point at sync when push/pull work exists; got:\n%s", out)
+	}
+}
+
 // Direct unit test for the post-performUpdate gate: the flag must only
 // flip when an actual swap happened. ("", nil) is the rare-but-real
 // case where update_state.json said newer-available but the GitHub

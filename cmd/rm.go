@@ -13,6 +13,7 @@ import (
 var rmForce bool
 var rmKeepRemote bool
 var rmKeepLocal bool
+var rmPending bool
 
 var rmCmd = &cobra.Command{
 	Use:   "rm <name>",
@@ -27,12 +28,26 @@ propagate across agents).
 
 By default deletes both the local directory (across all detected agents)
 and the remote skill, then drops the entry from sync state. Use --keep-remote
-to delete only locally, or --keep-local to delete only on the server.`,
+to delete only locally, or --keep-local to delete only on the server.
+
+Use --pending to discard a parked pending-conflict copy (left in temp by a
+collision during 'add' or 'sync') WITHOUT touching the installed skill or the
+server. This is the safe way to clear an "N pending conflict" status warning
+when a real skill of the same name is installed.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name := args[0]
 		if err := validateSkillName(name); err != nil {
 			return err
+		}
+
+		// --pending discards ONLY the parked conflict copy in temp, never
+		// the installed skill or the server copy. This is the path status
+		// recommends, so it must be safe regardless of whether a real skill
+		// of the same name is installed (the common case — the conflict
+		// arose precisely because one is).
+		if rmPending {
+			return discardPendingConflict(name, rmForce)
 		}
 
 		syncState := loadSyncState()
@@ -43,27 +58,19 @@ to delete only locally, or --keep-local to delete only on the server.`,
 		_, hasLocal := localSkills[name]
 
 		if !tracked && !hasLocal {
-			pendingDirs := pendingConflictDirs(name)
-			if len(pendingDirs) == 0 {
+			if len(pendingConflictDirs(name)) == 0 {
 				return fmt.Errorf("no skill named %q found locally, in sync state, or in pending conflicts", name)
 			}
-			if !rmForce {
-				fmt.Printf("Discard pending conflict copy for %q? [y/N] ", name)
-				reader := bufio.NewReader(os.Stdin)
-				answer, _ := reader.ReadString('\n')
-				if strings.TrimSpace(strings.ToLower(answer)) != "y" {
-					fmt.Println("Aborted.")
-					return nil
-				}
-			}
-			removed, err := removePendingConflictDirs(name)
-			if err != nil {
-				return fmt.Errorf("discarding pending conflict: %w", err)
-			}
-			for _, p := range removed {
-				fmt.Printf("  %s discarded pending conflict %s\n", green("-"), p)
-			}
-			return nil
+			return discardPendingConflict(name, rmForce)
+		}
+
+		// A real skill is being deleted, but a parked conflict copy of the
+		// same name also exists. Make sure the user knows this command
+		// targets the installed skill, not that copy — and point at the
+		// safe path. Printed even under --force so it can't be missed.
+		if len(pendingConflictDirs(name)) > 0 {
+			fmt.Printf("  %s a pending conflict copy for %q also exists in temp. This command deletes the\n", yellow("⚠"), name)
+			fmt.Printf("    installed skill, NOT that copy. To discard only the parked copy, run: airskills rm %s --pending\n", name)
 		}
 
 		// Confirmation
@@ -125,7 +132,36 @@ func init() {
 	rmCmd.Flags().BoolVarP(&rmForce, "force", "f", false, "Skip confirmation")
 	rmCmd.Flags().BoolVar(&rmKeepRemote, "keep-remote", false, "Only delete locally; leave remote skill")
 	rmCmd.Flags().BoolVar(&rmKeepLocal, "keep-local", false, "Only delete remote; leave local files")
+	rmCmd.Flags().BoolVar(&rmPending, "pending", false, "Discard only the parked pending-conflict copy in temp; never touch the installed skill or server")
 	rootCmd.AddCommand(rmCmd)
+}
+
+// discardPendingConflict removes only the parked conflict copies for name
+// (the dirs under /tmp/airskills-conflicts*). It never touches the
+// installed skill or the server, so it is safe to recommend even when a
+// real same-named skill exists.
+func discardPendingConflict(name string, force bool) error {
+	if len(pendingConflictDirs(name)) == 0 {
+		return fmt.Errorf("no pending conflict copy named %q found in %s",
+			name, filepath.Join(os.TempDir(), "airskills-conflicts*"))
+	}
+	if !force {
+		fmt.Printf("Discard pending conflict copy for %q? Removes only the parked copy in temp; your installed skill is untouched. [y/N] ", name)
+		reader := bufio.NewReader(os.Stdin)
+		answer, _ := reader.ReadString('\n')
+		if strings.TrimSpace(strings.ToLower(answer)) != "y" {
+			fmt.Println("Aborted.")
+			return nil
+		}
+	}
+	removed, err := removePendingConflictDirs(name)
+	if err != nil {
+		return fmt.Errorf("discarding pending conflict: %w", err)
+	}
+	for _, p := range removed {
+		fmt.Printf("  %s discarded pending conflict %s\n", green("-"), p)
+	}
+	return nil
 }
 
 func removePendingConflictDirs(name string) ([]string, error) {

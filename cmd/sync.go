@@ -175,6 +175,13 @@ var syncCmd = &cobra.Command{
 		// guess — ask the user" affordance.
 		printPendingReviewSummary(verboseEnabled(syncVerbose))
 
+		// Parked conflict copies are not touched by push/pull, so a sync
+		// that's otherwise "all up to date" would leave them silently in
+		// place — exactly the state that makes `status` keep nagging.
+		// Surface them here so sync's output matches status' warning and
+		// points at the real resolution rather than another sync.
+		printLingeringConflicts(os.Stdout, pendingConflictNames())
+
 		telemetry.Capture("cli_sync", map[string]interface{}{
 			"pushed": canPush,
 		})

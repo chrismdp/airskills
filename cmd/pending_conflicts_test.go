@@ -1,12 +1,36 @@
 package cmd
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 )
+
+// sync must not finish silently while parked conflict copies remain — its
+// "all up to date" line otherwise reads as a clean state, which is half of
+// what sends users into the status→sync→status loop. It should name the
+// count and redirect to status (which carries the resolution menu).
+func TestPrintLingeringConflicts(t *testing.T) {
+	var buf bytes.Buffer
+	printLingeringConflicts(&buf, []string{"home", "dream"})
+	out := buf.String()
+	if !strings.Contains(out, "2") || !strings.Contains(out, "airskills status") {
+		t.Fatalf("expected count and status pointer, got:\n%s", out)
+	}
+	if strings.Contains(out, "airskills sync") {
+		t.Fatalf("must not loop the user back to sync, got:\n%s", out)
+	}
+
+	buf.Reset()
+	printLingeringConflicts(&buf, nil)
+	if buf.Len() != 0 {
+		t.Fatalf("no conflicts → no output, got:\n%s", buf.String())
+	}
+}
 
 func TestPendingConflictNamesFindsAddAndPullConflictDirs(t *testing.T) {
 	tmp := t.TempDir()

@@ -183,11 +183,23 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		parts = append(parts, cyan(fmt.Sprintf("? %d suggestions", pendingSuggestions)))
 	}
 
-	// Pick the most relevant hint for the one-line command: suggestions
-	// trumps sync because review is a separate workflow.
+	// Pick the headline command for the work that actually dominates.
+	// `sync` is correct ONLY when there's push/pull/update/untracked/upstream
+	// work — it's a no-op for both pending conflicts and suggestions, so
+	// pointing at it there sends the user into a status→sync→status loop
+	// (the warning never clears because sync never touches it). Order:
+	// real sync work → sync; else suggestions → review; else a pending
+	// conflict → the safe --pending discard (full resolution menu prints
+	// in the detail block below).
+	hasSyncWork := needPush > 0 || needPull > 0 || needUpdate > 0 || needUntracked > 0 || upstreamUpdates > 0
 	hint := "airskills sync"
-	if pendingSuggestions > 0 && needPush == 0 && needPull == 0 && needUpdate == 0 && needUntracked == 0 && upstreamUpdates == 0 {
+	switch {
+	case hasSyncWork:
+		hint = "airskills sync"
+	case pendingSuggestions > 0:
 		hint = "airskills review"
+	case needPendingConflicts > 0:
+		hint = "airskills rm <name> --pending"
 	}
 	fmt.Fprintf(os.Stderr, "[airskills] %s — run '%s'\n", strings.Join(parts, ", "), hint)
 
@@ -238,7 +250,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 			steps = append(steps, agentNextStep{Cmd: "airskills review", Why: "review incoming suggestions"})
 		}
 		if needPendingConflicts > 0 {
-			steps = append(steps, agentNextStep{Cmd: "airskills rm <name>", Why: "discard a stale pending conflict copy after reviewing it"})
+			steps = append(steps, agentNextStep{Cmd: "airskills rm <name> --pending", Why: "discard a parked pending-conflict copy (safe: never deletes the installed skill); sync does not clear these"})
 		}
 		printAgentNextSteps(os.Stderr, steps)
 	}
@@ -250,9 +262,15 @@ func printPendingConflictStatusGroup(w io.Writer, names []string) {
 	if len(names) == 0 {
 		return
 	}
-	fmt.Fprintf(w, "  %s (%d): temp remote copies kept for review; discard with 'airskills rm <name>'\n", yellow("pending conflicts"), len(names))
+	fmt.Fprintf(w, "  %s (%d): an incoming skill was parked because a local skill of the same name exists. 'airskills sync' will NOT clear these — resolve each:\n", yellow("pending conflicts"), len(names))
 	for _, n := range names {
-		fmt.Fprintf(w, "    %s  discard: airskills rm %s\n", n, n)
+		fmt.Fprintf(w, "    %s\n", n)
+		if dirs := pendingConflictDirs(n); len(dirs) > 0 {
+			fmt.Fprintf(w, "      incoming copy: %s\n", dirs[0])
+		}
+		fmt.Fprintf(w, "      • take incoming, overwrite local:  airskills pull --force %s   (or: airskills add <owner>/%s --force)\n", n, n)
+		fmt.Fprintf(w, "      • keep both:                        airskills add <owner>/%s --as <new-name>\n", n)
+		fmt.Fprintf(w, "      • merge wanted bits into local (or keep local as-is), then discard the copy:  airskills rm %s --pending\n", n)
 	}
 }
 
