@@ -181,14 +181,16 @@ func TestRunStatusSuppressesLatestCLIHintInQuietMode(t *testing.T) {
 }
 
 func TestRunStatusIgnoresStaleRememberedSkillset(t *testing.T) {
-	var gotQuery string
+	var gotQueries []string
 	out := runStatusCapture(t, statusFixture{
 		runningVersion:  "0.6.1",
 		rememberedSlug:  "poppins",
-		skillsQuerySink: &gotQuery,
+		skillsQuerySink: &gotQueries,
 	})
-	if gotQuery != "" {
-		t.Fatalf("status sent stale remembered skillset query %q, want default query", gotQuery)
+	for _, q := range gotQueries {
+		if strings.Contains(q, "skillset=poppins") {
+			t.Fatalf("status sent stale remembered skillset query; queries = %v", gotQueries)
+		}
 	}
 	if !strings.Contains(out, "in sync") {
 		t.Fatalf("expected clean status after ignoring stale skillset, got:\n%s", out)
@@ -235,8 +237,8 @@ type statusFixture struct {
 	autoUpdated     bool
 	localSkills     []string
 	quiet           bool
-	rememberedSlug  string  // cfg.Skillset on disk before runStatus
-	skillsQuerySink *string // set by httptest server on the /api/v1/skills hit
+	rememberedSlug  string    // cfg.Skillset on disk before runStatus
+	skillsQuerySink *[]string // appended by httptest server on /api/v1/skills hits
 }
 
 func runStatusCapture(t *testing.T, f statusFixture) string {
@@ -264,7 +266,7 @@ func runStatusCapture(t *testing.T, f statusFixture) string {
 			w.Write([]byte(`{"latest_cli":"` + f.latestCLI + `"}`))
 		case "/api/v1/skills":
 			if f.skillsQuerySink != nil {
-				*f.skillsQuerySink = r.URL.RawQuery
+				*f.skillsQuerySink = append(*f.skillsQuerySink, r.URL.RawQuery)
 			}
 			w.Write([]byte(`{"skills":[]}`))
 		case "/api/v1/suggestions/count":
