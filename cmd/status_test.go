@@ -82,9 +82,9 @@ func TestClassifyForStatusBucketsInOtherSkillset(t *testing.T) {
 		{Id: testUUID("id-active"), Name: "active-skill", ContentHash: strPtr("ha")},
 	}
 	local := map[string]string{
-		"active-skill":  "/agent/skills/active-skill",
-		"in-other":      "/agent/skills/in-other",
-		"never-pushed":  "/agent/skills/never-pushed",
+		"active-skill": "/agent/skills/active-skill",
+		"in-other":     "/agent/skills/in-other",
+		"never-pushed": "/agent/skills/never-pushed",
 	}
 	state := &SyncState{Skills: map[string]*SyncEntry{
 		"active-skill": {SkillID: testUUID("id-active").String(), ContentHash: "ha"},
@@ -177,6 +177,21 @@ func TestRunStatusSuppressesLatestCLIHintInQuietMode(t *testing.T) {
 	}
 	if strings.TrimSpace(out) != "" {
 		t.Errorf("quiet all-clean must produce no output; got:\n%s", out)
+	}
+}
+
+func TestRunStatusIgnoresStaleRememberedSkillset(t *testing.T) {
+	var gotQuery string
+	out := runStatusCapture(t, statusFixture{
+		runningVersion:  "0.6.1",
+		rememberedSlug:  "poppins",
+		skillsQuerySink: &gotQuery,
+	})
+	if gotQuery != "" {
+		t.Fatalf("status sent stale remembered skillset query %q, want default query", gotQuery)
+	}
+	if !strings.Contains(out, "in sync") {
+		t.Fatalf("expected clean status after ignoring stale skillset, got:\n%s", out)
 	}
 }
 

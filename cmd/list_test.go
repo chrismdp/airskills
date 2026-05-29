@@ -87,11 +87,7 @@ func TestListDefaultUsesEffectiveSkillsetListing(t *testing.T) {
 	}
 }
 
-// Regression: `airskills skillset use poppins` writes cfg.Skillset
-// locally, but `airskills list` was sending an empty slug and so the
-// server resolved to the caller's is_default skillset — reporting the
-// wrong skillset's skills. The remembered slug must flow through.
-func TestListUsesRememberedSkillsetFromConfig(t *testing.T) {
+func TestListIgnoresStaleRememberedSkillsetFromConfig(t *testing.T) {
 	var gotQuery string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/skills" {
@@ -134,7 +130,7 @@ func TestListUsesRememberedSkillsetFromConfig(t *testing.T) {
 			t.Fatalf("list: %v", err)
 		}
 	})
-	if gotQuery != "skillset=poppins" {
-		t.Fatalf("list ignored remembered skillset; gotQuery = %q, want skillset=poppins", gotQuery)
+	if gotQuery != "" {
+		t.Fatalf("list sent stale remembered skillset; gotQuery = %q, want default query", gotQuery)
 	}
 }

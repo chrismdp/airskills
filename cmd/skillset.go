@@ -54,19 +54,23 @@ func resolveSkillsetFlag(cfg *config.Config, flag string, _ io.Reader, writer io
 	return "", nil
 }
 
-// rememberedSkillsetSlug returns the user's last-used personal skillset
-// slug from local config (set by `airskills skillset use` or persisted
-// after the first sync), or empty if nothing is remembered. Read-only
-// commands that don't take --skillset (status, doctor, list, history,
-// update, export) use this so they describe the same skillset the next
-// sync/pull would touch — without it, the server resolved an empty
-// slug to is_default and silently reported the wrong skillset.
+// rememberedSkillsetSlug returns the user-side skillset slug to send to
+// /api/v1/skills. Since migration 047 collapsed user skillsets to one
+// implicit default, stale remembered non-default slugs must be ignored
+// here too. Otherwise read-only commands such as `status` can query a
+// removed skillset while `push`/`sync` query the default, making status
+// report phantom local changes.
 func rememberedSkillsetSlug() string {
 	cfg, err := config.Load()
 	if err != nil || cfg == nil {
 		return ""
 	}
-	return cfg.Skillset
+	if cfg.Skillset != "" && cfg.Skillset != "default" {
+		cfg.Skillset = ""
+		_ = cfg.Save()
+		return ""
+	}
+	return ""
 }
 
 // rememberSkillsetAfterSuccess persists the server-resolved skillset slug

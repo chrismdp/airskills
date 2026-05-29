@@ -381,11 +381,7 @@ func TestRenderSyncStateReportSurfacesNotableStates(t *testing.T) {
 	}
 }
 
-// Regression: doctor's gatherSyncState loaded config but threw it
-// away (`_ = cfg`), sending an empty slug to /api/v1/skills. The
-// server then resolved to the is_default skillset, so doctor's
-// sync-state section described the wrong skillset.
-func TestGatherSyncStateUsesRememberedSkillset(t *testing.T) {
+func TestGatherSyncStateIgnoresStaleRememberedSkillset(t *testing.T) {
 	var gotQuery string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/skills" {
@@ -421,8 +417,8 @@ func TestGatherSyncStateUsesRememberedSkillset(t *testing.T) {
 	if _, err := gatherSyncState(); err != nil {
 		t.Fatalf("gatherSyncState: %v", err)
 	}
-	if gotQuery != "skillset=poppins" {
-		t.Fatalf("gatherSyncState ignored remembered skillset; gotQuery = %q, want skillset=poppins", gotQuery)
+	if gotQuery != "" {
+		t.Fatalf("gatherSyncState sent stale remembered skillset; gotQuery = %q, want default query", gotQuery)
 	}
 }
 
