@@ -7,6 +7,42 @@ import (
 	"testing"
 )
 
+func TestValidatePullArgsRejectsPlainPositional(t *testing.T) {
+	pullForceFlag = false
+	pullVersionFlag = ""
+	t.Cleanup(func() {
+		pullForceFlag = false
+		pullVersionFlag = ""
+	})
+
+	err := validatePullArgs(pullCmd, []string{"home"})
+	if err == nil || (!strings.Contains(err.Error(), "accepts 0 arg") && !strings.Contains(err.Error(), "unknown command")) {
+		t.Fatalf("expected plain pull positional to be rejected, got %v", err)
+	}
+}
+
+func TestValidatePullArgsAllowsForceAndRequiresVersionSkill(t *testing.T) {
+	t.Cleanup(func() {
+		pullForceFlag = false
+		pullVersionFlag = ""
+	})
+
+	pullForceFlag = true
+	pullVersionFlag = ""
+	if err := validatePullArgs(pullCmd, []string{"home"}); err != nil {
+		t.Fatalf("pull --force should allow skill targets: %v", err)
+	}
+
+	pullForceFlag = false
+	pullVersionFlag = "abc123"
+	if err := validatePullArgs(pullCmd, []string{"home"}); err != nil {
+		t.Fatalf("pull --version should allow exactly one skill target: %v", err)
+	}
+	if err := validatePullArgs(pullCmd, nil); err == nil {
+		t.Fatal("pull --version should require one skill target")
+	}
+}
+
 // TestPullSkipsMissingLocal verifies that when a skill is tracked in sync state
 // by skill_id but its local directory has been removed, pull does NOT silently
 // re-download it. Instead it warns the user and skips.
@@ -30,7 +66,7 @@ func TestPullSkipsMissingLocal(t *testing.T) {
 	}
 	local := map[string]string{} // dir was deleted
 
-	actions, warnings , _ := decidePullActions(remote, local, state)
+	actions, warnings, _ := decidePullActions(remote, local, state)
 
 	if len(actions) != 0 {
 		t.Errorf("expected 0 pull actions for missing-local skill, got %d: %+v", len(actions), actions)
@@ -55,7 +91,7 @@ func TestPullDownloadsNewRemote(t *testing.T) {
 	}
 	local := map[string]string{}
 
-	actions, warnings , _ := decidePullActions(remote, local, state)
+	actions, warnings, _ := decidePullActions(remote, local, state)
 
 	if len(actions) != 1 {
 		t.Fatalf("expected 1 pull action for new skill, got %d", len(actions))
@@ -90,7 +126,7 @@ func TestPullDecidesLinkedForMatchingBytes(t *testing.T) {
 	}
 	local := map[string]string{"my-skill": skillDir}
 
-	actions, _ , _ := decidePullActions(remote, local, state)
+	actions, _, _ := decidePullActions(remote, local, state)
 	if len(actions) != 1 {
 		t.Fatalf("expected 1 action (linked), got %d: %+v", len(actions), actions)
 	}
@@ -115,7 +151,7 @@ func TestPullDecidesUntrackedConflictForDifferingBytes(t *testing.T) {
 	}
 	local := map[string]string{"my-skill": skillDir}
 
-	actions, _ , _ := decidePullActions(remote, local, state)
+	actions, _, _ := decidePullActions(remote, local, state)
 	if len(actions) != 1 {
 		t.Fatalf("expected 1 action (untracked-conflict), got %d", len(actions))
 	}
@@ -154,7 +190,7 @@ func TestPullDetectsUpdated(t *testing.T) {
 	}
 	local := map[string]string{"tracked-skill": skillDir}
 
-	actions, _ , _ := decidePullActions(remote, local, state)
+	actions, _, _ := decidePullActions(remote, local, state)
 	if len(actions) != 1 {
 		t.Fatalf("expected 1 action, got %d", len(actions))
 	}
@@ -188,7 +224,7 @@ func TestPullDetectsDiverged(t *testing.T) {
 	}
 	local := map[string]string{"tracked-skill": skillDir}
 
-	actions, _ , _ := decidePullActions(remote, local, state)
+	actions, _, _ := decidePullActions(remote, local, state)
 	if len(actions) != 1 {
 		t.Fatalf("expected 1 action, got %d", len(actions))
 	}
@@ -227,7 +263,7 @@ func TestPullAutoDetectClassification(t *testing.T) {
 	}
 	local := map[string]string{"tracked-skill": skillDir}
 
-	actions, warnings , _ := decidePullActions(remote, local, state)
+	actions, warnings, _ := decidePullActions(remote, local, state)
 	if len(warnings) != 0 {
 		t.Errorf("expected no warnings, got: %v", warnings)
 	}
@@ -266,7 +302,7 @@ func TestPullAutoDetectUpdatesMarker(t *testing.T) {
 	}
 	local := map[string]string{"tracked-skill": skillDir}
 
-	actions, _ , _ := decidePullActions(remote, local, state)
+	actions, _, _ := decidePullActions(remote, local, state)
 	if len(actions) != 1 || actions[0].reason != "auto-resolved" {
 		t.Fatalf("expected one auto-resolved action, got %+v", actions)
 	}
@@ -315,7 +351,7 @@ func TestPullAutoDetectSkipsTransferredSkills(t *testing.T) {
 	}
 	local := map[string]string{"tracked-skill": skillDir}
 
-	actions, _ , _ := decidePullActions(remote, local, state)
+	actions, _, _ := decidePullActions(remote, local, state)
 	// Should be skipped (Deleted=true), so no action
 	if len(actions) != 0 {
 		t.Errorf("expected 0 actions for Deleted skill, got %d: %+v", len(actions), actions)
@@ -362,7 +398,7 @@ func TestPullSkipsUpstreamOfLocalFork(t *testing.T) {
 	}
 	local := map[string]string{"shared-skill": skillDir}
 
-	actions, _ , _ := decidePullActions(remote, local, state)
+	actions, _, _ := decidePullActions(remote, local, state)
 
 	// The upstream MUST be filtered out — no action for it. The fork is
 	// tracked and in sync with the marker, so its action is "no-op"
@@ -415,7 +451,7 @@ func TestPullClassifiesCleanForkWhenUpstreamAdvanced(t *testing.T) {
 		},
 	}
 
-	actions, _ , _ := decidePullActions(remote, map[string]string{"shared-skill": skillDir}, state)
+	actions, _, _ := decidePullActions(remote, map[string]string{"shared-skill": skillDir}, state)
 	if len(actions) != 1 {
 		t.Fatalf("expected one upstream incorporate action, got %+v", actions)
 	}
@@ -465,7 +501,7 @@ func TestPullClassifiesEditedForkWhenUpstreamAdvanced(t *testing.T) {
 		},
 	}
 
-	actions, _ , _ := decidePullActions(remote, map[string]string{"shared-skill": skillDir}, state)
+	actions, _, _ := decidePullActions(remote, map[string]string{"shared-skill": skillDir}, state)
 	if len(actions) != 1 {
 		t.Fatalf("expected one upstream-advanced action, got %+v", actions)
 	}

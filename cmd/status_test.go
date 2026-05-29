@@ -140,6 +140,24 @@ func TestClassifyForStatusBucketsInOtherSkillset(t *testing.T) {
 	}
 }
 
+func TestFindOrgSkillShadowsFlagsLocalSameNameOutsideEffectiveSet(t *testing.T) {
+	effective := []apiSkill{
+		{Id: testUUID("id-active"), Name: "active"},
+	}
+	orgSkills := []apiSkill{
+		{Id: testUUID("id-home"), Name: "home"},
+		{Id: testUUID("id-active"), Name: "active"},
+	}
+	local := map[string]string{"home": "/agent/skills/home"}
+	state := &SyncState{Skills: map[string]*SyncEntry{}}
+
+	got := findOrgSkillShadows(effective, orgSkills, local, state)
+	want := []string{"home shadows org-owned home"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("org shadows = %v, want %v", got, want)
+	}
+}
+
 // Obsolete after mig 047: cfg.Skillset is no longer plumbed through —
 // the server's /api/v1/skills always resolves to the user's single
 // implicit 'default' regardless of the param value. The test above
@@ -236,6 +254,26 @@ func TestRunStatusIgnoresStaleRememberedSkillset(t *testing.T) {
 	}
 }
 
+func TestRunStatusSurfacesPendingConflict(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
+	conflictDir := filepath.Join(tmp, "airskills-conflicts", "home")
+	if err := os.MkdirAll(conflictDir, 0700); err != nil {
+		t.Fatalf("MkdirAll conflict: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(conflictDir, "SKILL.md"), []byte("# remote"), 0600); err != nil {
+		t.Fatalf("write conflict SKILL.md: %v", err)
+	}
+
+	out := runStatusCapture(t, statusFixture{runningVersion: "0.6.1"})
+	if strings.Contains(out, "in sync") {
+		t.Fatalf("status must not say in sync with a pending conflict; got:\n%s", out)
+	}
+	if !strings.Contains(out, "pending conflict") || !strings.Contains(out, "home") {
+		t.Fatalf("expected pending conflict detail, got:\n%s", out)
+	}
+}
+
 // Direct unit test for the post-performUpdate gate: the flag must only
 // flip when an actual swap happened. ("", nil) is the rare-but-real
 // case where update_state.json said newer-available but the GitHub
@@ -286,6 +324,13 @@ func runStatusCapture(t *testing.T, f statusFixture) string {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
+	if tmp := os.Getenv("TMPDIR"); tmp == "" || tmp == "/tmp" {
+		tmpDir := filepath.Join(home, "tmp")
+		if err := os.MkdirAll(tmpDir, 0700); err != nil {
+			t.Fatalf("MkdirAll tmp: %v", err)
+		}
+		t.Setenv("TMPDIR", tmpDir)
+	}
 
 	for _, name := range f.localSkills {
 		dir := filepath.Join(home, ".claude", "skills", name)

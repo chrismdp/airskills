@@ -49,6 +49,7 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 	// exit code stays gated on broken refs.
 	if states, err := gatherSyncState(); err == nil {
 		renderSyncStateReport(os.Stdout, states)
+		renderPendingConflictReport(os.Stdout, pendingConflictNames())
 		fmt.Println()
 	}
 
@@ -61,6 +62,17 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 		os.Exit(1)
 	}
 	return nil
+}
+
+func renderPendingConflictReport(w io.Writer, names []string) {
+	if len(names) == 0 {
+		return
+	}
+	fmt.Fprintf(w, "  %s pending conflict files in %s — merge them or discard the tmp copy.\n",
+		red("!"), filepath.Join(os.TempDir(), "airskills-conflicts*"))
+	for _, name := range names {
+		fmt.Fprintf(w, "    %s\n", name)
+	}
 }
 
 // renderEnvOverrides prints any active CLI environment overrides. No

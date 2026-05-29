@@ -21,7 +21,7 @@ var pullVersionFlag string
 func init() {
 	pullCmd.Flags().StringVar(&skillsetFlag, "skillset", "", "Personal skillset to pull against; sets the default for future runs (default: your last-used skillset)")
 	pullCmd.Flags().BoolVar(&pullForceFlag, "force", false, "Overwrite local with remote for diverged skills (backs up local first)")
-	pullCmd.Flags().StringVar(&pullVersionFlag, "version", "", "Pull a specific commit version of a skill: pull --version <commit-hash> <skill>")
+	pullCmd.Flags().StringVar(&pullVersionFlag, "version", "", "Restore a specific commit; use with exactly one skill: airskills pull --version <commit-hash> <skill>")
 	rootCmd.AddCommand(pullCmd)
 }
 
@@ -36,7 +36,18 @@ divergence and decided the remote copy is the truth. The mirror flag is
 'push --force', which means "my local wins, take it as-is". Both flags
 express the same intent — "I'm about to overwrite the other side, do it
 anyway" — pointed in opposite directions.`,
+	Args: validatePullArgs,
 	RunE: runPull,
+}
+
+func validatePullArgs(cmd *cobra.Command, args []string) error {
+	if pullForceFlag {
+		return nil
+	}
+	if pullVersionFlag != "" {
+		return cobra.ExactArgs(1)(cmd, args)
+	}
+	return cobra.NoArgs(cmd, args)
 }
 
 type conflictDetail struct {

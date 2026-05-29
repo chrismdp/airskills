@@ -296,12 +296,12 @@ local copy is backed up to ~/.airskills/undo/<timestamp>/ first.`,
 			fmt.Printf("  The new version from %s/%s is at:\n    %s\n\n",
 				ownerSlug, result.Slug, tmpPath)
 			if isTTY {
-				fmt.Println("  Ask your agent to read both files and incorporate anything")
+				fmt.Println("  Ask your agent to read both skill directories and incorporate anything")
 				fmt.Println("  worth keeping into your existing skill, or rename one to coexist.")
 			} else {
-				fmt.Printf("  AGENT INSTRUCTIONS: Read %s and %s.\n", localPath, tmpPath)
+				fmt.Printf("  AGENT INSTRUCTIONS: Read both skill directories: %s and %s.\n", filepath.Dir(localPath), filepath.Dir(tmpPath))
 				fmt.Println("  Ask the user one question at a time to resolve any ambiguity")
-				fmt.Println("  about which behaviours to keep, then patch the local SKILL.md.")
+				fmt.Println("  about which behaviours to keep, then patch the local skill tree.")
 			}
 			return nil
 		}
