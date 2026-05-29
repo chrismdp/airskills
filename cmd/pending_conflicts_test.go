@@ -10,6 +10,8 @@ import (
 func TestPendingConflictNamesFindsAddAndPullConflictDirs(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("TMPDIR", tmp)
+	t.Setenv("TMP", tmp)
+	t.Setenv("TEMP", tmp)
 
 	addDir := filepath.Join(tmp, "airskills-conflicts", "home")
 	pullDir := filepath.Join(tmp, "airskills-conflicts-123", "dream")

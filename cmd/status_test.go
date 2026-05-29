@@ -323,6 +323,8 @@ func runStatusCapture(t *testing.T, f statusFixture) string {
 		t.Fatalf("MkdirAll tmp: %v", err)
 	}
 	t.Setenv("TMPDIR", tmpDir)
+	t.Setenv("TMP", tmpDir)
+	t.Setenv("TEMP", tmpDir)
 
 	for _, name := range f.pendingConflictSkills {
 		conflictDir := filepath.Join(tmpDir, "airskills-conflicts", name)

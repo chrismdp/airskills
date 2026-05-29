@@ -1,0 +1,65 @@
+name: Close pull requests
+
+on:
+  pull_request_target:
+    types: [opened, reopened, ready_for_review, synchronize]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  close:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Explain contribution flow and close PR
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const body = [
+              "Thanks for taking the time to work on Airskills.",
+              "",
+              "Airskills does not use GitHub pull requests as the contribution intake path, so this PR is being closed automatically.",
+              "",
+              "The short version: please send the problem, context, and desired behavior first. The fastest supported routes are:",
+              "",
+              "- Open a GitHub issue for bugs, documentation gaps, reproducible CLI behavior, installer problems, or API-contract confusion.",
+              "- From the CLI, run `airskills feedback -m \"your detailed feedback\"` for product feedback, workflow friction, confusing output, or ideas that came up while using an agent.",
+              "- If an AI coding agent found the problem, ask the agent to file the issue or send the Airskills feedback on your behalf. Agent-authored reports are welcome when they include the exact commands, paths, observed output, and reasoning that led to the finding.",
+              "",
+              "Please include as much detail as possible:",
+              "",
+              "- What you were trying to do.",
+              "- The exact command or workflow you ran.",
+              "- The full output or error text, not just a summary.",
+              "- Your OS, shell, Airskills version, and agent/tool involved.",
+              "- Whether the skill was personal, org-owned, sourced from another user, or installed from GitHub.",
+              "- Any relevant local paths, with secrets removed.",
+              "- What you expected to happen.",
+              "- What actually happened.",
+              "- If you already have a patch, describe the approach and tradeoffs rather than opening it as a PR.",
+              "",
+              "The philosophy behind this is deliberate:",
+              "",
+              "Airskills is mostly a product and workflow surface, not just a library. A correct patch without the surrounding user story can easily make the CLI more complex, change sync semantics, or encode one user's local setup as product behavior. Issues and `airskills feedback` preserve the problem first: they let us understand the real workflow, compare it against the sync model, decide whether the fix belongs in the CLI, the platform, docs, telemetry, or agent instructions, and then ship a coherent change through the release path.",
+              "",
+              "This also keeps the public repository safer and quieter. We do not need to run CI on arbitrary fork code to learn that something is broken, and we do not want contributors spending time maintaining a branch while the product decision is still unclear. Detailed reports are higher leverage than drive-by patches for this project.",
+              "",
+              "If this PR contains useful information, please reopen it as an issue or send it through `airskills feedback` with the details above.",
+            ].join("\n");
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pr.number,
+              body,
+            });
+
+            await github.rest.pulls.update({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pr.number,
+              state: "closed",
+            });
