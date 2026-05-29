@@ -66,6 +66,21 @@ func conflictResolutionMessage(entries []conflictEntry, isAgent bool) string {
 	for _, e := range entries {
 		if e.kind == "untracked" {
 			fmt.Fprintf(&b, "\nConflict: %s exists locally and on the server, but airskills hasn't tracked it before — your local bytes differ from the server's.\n", e.name)
+			fmt.Fprintf(&b, "  Local:  %s\n", e.localDir)
+			fmt.Fprintf(&b, "  Remote: %s\n", e.remoteDir)
+			if isAgent {
+				fmt.Fprintf(&b, "\nYou are an agent. Read both skill directories, then ask the user what to call their existing local skill.\n")
+			} else {
+				fmt.Fprintf(&b, "\nAsk your agent to read both skill directories, then decide what to call your existing local skill.\n")
+			}
+			b.WriteString("\nRecommended path when the server/org skill should keep this name:\n")
+			fmt.Fprintf(&b, "  1. Move the existing local skill aside:\n")
+			fmt.Fprintf(&b, "       airskills mv %s <new-local-name>\n", e.name)
+			fmt.Fprintf(&b, "  2. Pull again so airskills installs the server/org skill as %s:\n", e.name)
+			b.WriteString("       airskills pull\n")
+			fmt.Fprintf(&b, "  3. If the old local skill has useful pieces, merge them from <new-local-name> back into %s, then push if needed.\n", e.name)
+			b.WriteString("\nDo not edit ~/.config/airskills/sync.json directly. Move content with CLI commands and normal file edits only.\n")
+			continue
 		} else {
 			fmt.Fprintf(&b, "\nConflict: %s has changed both locally and on the server.\n", e.name)
 		}

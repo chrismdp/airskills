@@ -231,7 +231,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 			}
 		}
 		if needOrgShadows > 0 {
-			fmt.Fprintf(os.Stderr, "  %s (%d): local directories shadow org-owned skills — run 'airskills add <org>/<skill>' to bind or rename the local skill\n",
+			fmt.Fprintf(os.Stderr, "  %s (%d): local directories shadow org-owned skills — run 'airskills sync'; if it reports a conflict, move the local skill aside with 'airskills mv <name> <new-name>' then pull again\n",
 				yellow("org shadowed"), needOrgShadows)
 			for _, n := range orgShadows {
 				fmt.Fprintf(os.Stderr, "    %s\n", n)
@@ -262,7 +262,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 			steps = append(steps, agentNextStep{Cmd: "airskills review", Why: "review incoming suggestions"})
 		}
 		if needOrgShadows > 0 {
-			steps = append(steps, agentNextStep{Cmd: "airskills add <org>/<skill>", Why: "bind an org skill that is shadowed by a local directory"})
+			steps = append(steps, agentNextStep{Cmd: "airskills sync", Why: "surface org skill collisions and follow the mv-then-pull guidance"})
 		}
 		printAgentNextSteps(os.Stderr, steps)
 	}

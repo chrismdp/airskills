@@ -137,6 +137,33 @@ func TestConflictResolutionMessageBothBranchesShowCommands(t *testing.T) {
 	}
 }
 
+func TestConflictResolutionMessageUntrackedRecommendsMoveThenPull(t *testing.T) {
+	msg := conflictResolutionMessage([]conflictEntry{
+		{
+			name:      "home",
+			localDir:  "/home/user/.claude/skills/home",
+			remoteDir: "/tmp/airskills-conflicts/home",
+			kind:      "untracked",
+		},
+	}, true)
+
+	for _, want := range []string{
+		"airskills mv home <new-local-name>",
+		"airskills pull",
+		"merge them from <new-local-name> back into home",
+		"Do not edit ~/.config/airskills/sync.json directly",
+	} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("untracked conflict message missing %q in:\n%s", want, msg)
+		}
+	}
+	for _, notWant := range []string{"push --force home", "pull --force home"} {
+		if strings.Contains(msg, notWant) {
+			t.Errorf("untracked conflict should not suggest destructive force path %q:\n%s", notWant, msg)
+		}
+	}
+}
+
 func TestConflictResolutionMessageTTYAddressesHuman(t *testing.T) {
 	msg := conflictResolutionMessage([]conflictEntry{
 		{name: "foo", localDir: "/local/foo", remoteDir: "/remote/foo"},
