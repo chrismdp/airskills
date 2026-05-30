@@ -257,10 +257,29 @@ func installOneGitHubSkill(owner, repo, githubURL string, skill foundSkill) erro
 		slug = repo // root-level skill uses repo name as slug
 	}
 
-	// Use repo owner as the namespace prefix (GitHub org/user).
-	dirName := namespacedSlug(owner, slug)
+	// Install under the bare slug — the on-disk dir name matches the skill
+	// slug so SKILL.md `name` stays equal to the dir (agentskills.io invariant).
+	dirName := slug
 	syncState := loadSyncState()
-	migrateToNamespacedDirs(syncState)
+
+	// Don't clobber a different skill already at this slug. Re-adding the SAME
+	// GitHub skill is a refresh; anything else (a different repo, a marketplace
+	// skill, or local work under the same name) is a conflict — save the
+	// incoming copy to tmp and abort rather than overwrite. (Namespaced dirs
+	// used to make these collisions impossible; the bare slug can collide.)
+	sameGitHubSkill := false
+	if existing, ok := syncState.Skills[dirName]; ok && existing != nil && existing.Source != nil && existing.Source.GitHubURL == githubURL {
+		sameGitHubSkill = true
+	}
+	if !sameGitHubSkill {
+		if conflictPath, conflict := detectAddCollision(dirName, "", syncState); conflict {
+			tmpPath, werr := writeConflictToTmp(dirName, skill.Files)
+			if werr != nil {
+				return fmt.Errorf("a different skill named %q already exists at %s; could not save the incoming GitHub skill to tmp: %w", dirName, conflictPath, werr)
+			}
+			return fmt.Errorf("a different skill named %q already exists (%s).\nSaved the incoming GitHub skill to %s — remove or rename the existing one, then retry.", dirName, conflictPath, tmpPath)
+		}
+	}
 
 	installed, err := installSkillToAgents(dirName, skill.Files)
 	if err != nil {

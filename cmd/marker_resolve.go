@@ -50,8 +50,6 @@ func removeSkillDirAcrossAgents(fullPath string) error {
 // renameSkillDirAcrossAgents renames `oldName` → `newName` in every agent's
 // global skills directory where `oldName` exists. Bails out (returning an
 // error) if `newName` already exists in any agent dir, to avoid clobber.
-//
-// Mirrors what `migrateToNamespacedDirs` does for legacy → namespaced moves.
 func renameSkillDirAcrossAgents(oldName, newName string) error {
 	if oldName == newName {
 		return nil

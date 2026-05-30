@@ -43,13 +43,19 @@ func init() {
 // doesn't already have it. Runs once on first sync after login. Errors are
 // swallowed — the guide is a convenience, not a hard dependency.
 func autoInstallGuide() {
-	dirName := namespacedSlug(guideOwner, guideSlug)
+	dirName := guideSlug
 	syncState := loadSyncState()
-	if _, ok := syncState.Skills[dirName]; ok {
-		return // already installed (namespaced key)
-	}
 	if _, ok := syncState.Skills[guideSlug]; ok {
-		return // already installed (old bare-slug key)
+		return // already installed
+	}
+	if _, ok := syncState.Skills[guideOwner+"-"+guideSlug]; ok {
+		return // already installed under the legacy namespaced key
+	}
+	// Never clobber a user's own skill that happens to be named airskills-guide
+	// (the bare slug can now collide with local work — namespacing used to avoid
+	// this). The guide is a convenience; skip silently rather than overwrite.
+	if _, conflict := detectAddCollision(dirName, "", syncState); conflict {
+		return
 	}
 
 	cfg, err := config.Load()

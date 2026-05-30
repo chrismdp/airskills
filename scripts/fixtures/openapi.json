@@ -819,8 +819,20 @@
             "format": "uuid"
           },
           "owner_id": {
-            "type": "string",
-            "format": "uuid"
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "null when the target is an org-owned skill (XOR with owner_org_id)."
+          },
+          "owner_org_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "set when the target is an org-owned skill; the org whose owners/admins review it."
           },
           "base_content_hash": {
             "type": "string"
@@ -867,6 +879,7 @@
           "owner_skill_id",
           "suggester_id",
           "owner_id",
+          "owner_org_id",
           "base_content_hash",
           "message",
           "status",
@@ -2874,7 +2887,7 @@
       },
       "post": {
         "summary": "Create a suggestion",
-        "description": "Offers the owner of a public skill a proposed change based on the caller's forked copy. The caller must own the suggester skill; suggestions against private skills are rejected to prevent drive-by disclosure.",
+        "description": "Proposes a change to a skill the caller doesn't own, based on their forked copy. The caller must own the suggester skill. For a PERSONAL target the skill must be public (drive-by disclosure protection). For an ORG-owned target the caller must be a plain member of the org — owners/admins have write access and push directly, so they cannot suggest.",
         "tags": [
           "suggestions"
         ],
@@ -2929,13 +2942,13 @@
             }
           },
           "400": {
-            "description": "Validation failed, target is the caller's own skill, or DB error."
+            "description": "Validation failed; the target is the caller's own skill; the caller is an owner/admin of the org target (push instead); or DB error."
           },
           "401": {
             "description": "Missing or invalid token"
           },
           "403": {
-            "description": "suggester_skill_id is not owned by the caller, or owner_skill is not public."
+            "description": "suggester_skill_id is not owned by the caller; the personal target is not public; or the caller is not a member of the owning org."
           },
           "404": {
             "description": "owner_skill_id not found"

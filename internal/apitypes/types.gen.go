@@ -845,11 +845,16 @@ type DeleteSkillResponseStatus string
 
 // EnrichedSuggestion defines model for EnrichedSuggestion.
 type EnrichedSuggestion struct {
-	BaseContentHash    string                   `json:"base_content_hash"`
-	CreatedAt          time.Time                `json:"created_at"`
-	Id                 openapi_types.UUID       `json:"id"`
-	Message            *string                  `json:"message"`
-	OwnerId            openapi_types.UUID       `json:"owner_id"`
+	BaseContentHash string             `json:"base_content_hash"`
+	CreatedAt       time.Time          `json:"created_at"`
+	Id              openapi_types.UUID `json:"id"`
+	Message         *string            `json:"message"`
+
+	// OwnerId null when the target is an org-owned skill (XOR with owner_org_id).
+	OwnerId *openapi_types.UUID `json:"owner_id"`
+
+	// OwnerOrgId set when the target is an org-owned skill; the org whose owners/admins review it.
+	OwnerOrgId         *openapi_types.UUID      `json:"owner_org_id"`
 	OwnerSkillId       openapi_types.UUID       `json:"owner_skill_id"`
 	OwnerSkillName     *string                  `json:"owner_skill_name"`
 	OwnerSkillSlug     *string                  `json:"owner_skill_slug"`
@@ -1402,18 +1407,23 @@ type SkillsetWithSkills struct {
 
 // Suggestion defines model for Suggestion.
 type Suggestion struct {
-	BaseContentHash  string             `json:"base_content_hash"`
-	CreatedAt        time.Time          `json:"created_at"`
-	Id               openapi_types.UUID `json:"id"`
-	Message          *string            `json:"message"`
-	OwnerId          openapi_types.UUID `json:"owner_id"`
-	OwnerSkillId     openapi_types.UUID `json:"owner_skill_id"`
-	ResponseMessage  *string            `json:"response_message"`
-	ReviewedAt       *time.Time         `json:"reviewed_at"`
-	Status           SuggestionStatus   `json:"status"`
-	SuggesterId      openapi_types.UUID `json:"suggester_id"`
-	SuggesterSkillId openapi_types.UUID `json:"suggester_skill_id"`
-	UpdatedAt        time.Time          `json:"updated_at"`
+	BaseContentHash string             `json:"base_content_hash"`
+	CreatedAt       time.Time          `json:"created_at"`
+	Id              openapi_types.UUID `json:"id"`
+	Message         *string            `json:"message"`
+
+	// OwnerId null when the target is an org-owned skill (XOR with owner_org_id).
+	OwnerId *openapi_types.UUID `json:"owner_id"`
+
+	// OwnerOrgId set when the target is an org-owned skill; the org whose owners/admins review it.
+	OwnerOrgId       *openapi_types.UUID `json:"owner_org_id"`
+	OwnerSkillId     openapi_types.UUID  `json:"owner_skill_id"`
+	ResponseMessage  *string             `json:"response_message"`
+	ReviewedAt       *time.Time          `json:"reviewed_at"`
+	Status           SuggestionStatus    `json:"status"`
+	SuggesterId      openapi_types.UUID  `json:"suggester_id"`
+	SuggesterSkillId openapi_types.UUID  `json:"suggester_skill_id"`
+	UpdatedAt        time.Time           `json:"updated_at"`
 }
 
 // SuggestionStatus defines model for Suggestion.Status.
