@@ -1696,13 +1696,10 @@ type PutApiV1SkillsIdArchiveParams struct {
 	XExpectedHash *string `json:"X-Expected-Hash,omitempty"`
 
 	// XContentHash Client-computed Merkle hash of the upload. Server cross-checks.
-	XContentHash   *string `json:"X-Content-Hash,omitempty"`
-	XCommitMessage *string `json:"X-Commit-Message,omitempty"`
-
-	// XName New display name applied alongside the push. For org-owned skills this must equal the (org-prefixed) slug.
-	XName        *string                                   `json:"X-Name,omitempty"`
-	XDescription *string                                   `json:"X-Description,omitempty"`
-	XVisibility  *PutApiV1SkillsIdArchiveParamsXVisibility `json:"X-Visibility,omitempty"`
+	XContentHash   *string                                   `json:"X-Content-Hash,omitempty"`
+	XCommitMessage *string                                   `json:"X-Commit-Message,omitempty"`
+	XDescription   *string                                   `json:"X-Description,omitempty"`
+	XVisibility    *PutApiV1SkillsIdArchiveParamsXVisibility `json:"X-Visibility,omitempty"`
 }
 
 // PutApiV1SkillsIdArchiveParamsXVisibility defines parameters for PutApiV1SkillsIdArchive.

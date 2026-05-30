@@ -2422,16 +2422,6 @@
           },
           {
             "schema": {
-              "type": "string",
-              "description": "New display name applied alongside the push. For org-owned skills this must equal the (org-prefixed) slug."
-            },
-            "required": false,
-            "description": "New display name applied alongside the push. For org-owned skills this must equal the (org-prefixed) slug.",
-            "name": "X-Name",
-            "in": "header"
-          },
-          {
-            "schema": {
               "type": "string"
             },
             "required": false,
