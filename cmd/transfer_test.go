@@ -83,20 +83,17 @@ func TestLookupCallerOrgIDNotMember(t *testing.T) {
 	}
 }
 
-func TestTransferToOrgRepointsLocalTombstoneMarkerEndToEnd(t *testing.T) {
+// TestTransferToOrgDropsTombstoneMarker: transferring to an org removes the
+// skill locally (it's now delivered through skillsets), so a leftover transfer
+// tombstone is dropped rather than repointed.
+func TestTransferToOrgDropsTombstoneMarker(t *testing.T) {
 	oldID := testUUID("old-home").String()
 	newID := testUUID("new-home").String()
-	home := setupTransferCommandTest(t, transferCommandFixture{
-		oldID: oldID,
-		newID: newID,
-	})
+	setupTransferCommandTest(t, transferCommandFixture{oldID: oldID, newID: newID})
 	if err := saveSyncState(&SyncState{
 		Version: 1,
 		Skills: map[string]*SyncEntry{
-			"home": {
-				Deleted: true,
-				MovedTo: "parsons-home/home",
-			},
+			"home": {Deleted: true, MovedTo: "parsons-home/home"},
 		},
 	}); err != nil {
 		t.Fatalf("saveSyncState: %v", err)
@@ -104,44 +101,22 @@ func TestTransferToOrgRepointsLocalTombstoneMarkerEndToEnd(t *testing.T) {
 
 	runTransferCommand(t, "home", "parsons-home")
 
-	entry := loadSyncState().Skills["home"]
-	if entry == nil {
-		t.Fatal("missing home marker")
-	}
-	if entry.SkillID != newID {
-		t.Fatalf("SkillID = %q, want %q", entry.SkillID, newID)
-	}
-	if entry.OwnerKind != "org" || entry.OwnerSlug != "parsons-home" {
-		t.Fatalf("owner = %s/%s, want org/parsons-home", entry.OwnerKind, entry.OwnerSlug)
-	}
-	if entry.Version != "1.0.4" || entry.ContentHash != "newhash" {
-		t.Fatalf("version/hash = %s/%s, want 1.0.4/newhash", entry.Version, entry.ContentHash)
-	}
-	if entry.Deleted || entry.MovedTo != "" {
-		t.Fatalf("marker still tombstoned: %+v", entry)
-	}
-	if _, err := os.Stat(filepath.Join(home, ".config", "airskills", "sync.json")); err != nil {
-		t.Fatalf("expected sync state written: %v", err)
+	if entry := loadSyncState().Skills["home"]; entry != nil {
+		t.Fatalf("expected home marker dropped after transfer to org, got %+v", entry)
 	}
 }
 
-func TestTransferToOrgRepointsExistingLocalMarkerEndToEnd(t *testing.T) {
+// TestTransferToOrgDropsMarkerWhenNoLocalDir: a tracked marker with no skill on
+// disk is dropped on transfer to org — there's nothing to back up, and the
+// skill is no longer a local personal skill.
+func TestTransferToOrgDropsMarkerWhenNoLocalDir(t *testing.T) {
 	oldID := testUUID("old-home").String()
 	newID := testUUID("new-home").String()
-	setupTransferCommandTest(t, transferCommandFixture{
-		oldID: oldID,
-		newID: newID,
-	})
+	setupTransferCommandTest(t, transferCommandFixture{oldID: oldID, newID: newID})
 	if err := saveSyncState(&SyncState{
 		Version: 1,
 		Skills: map[string]*SyncEntry{
-			"home": {
-				SkillID:     oldID,
-				Version:     "1.0.3",
-				ContentHash: "oldhash",
-				OwnerKind:   "user",
-				OwnerSlug:   "chrismdp",
-			},
+			"home": {SkillID: oldID, Version: "1.0.3", ContentHash: "oldhash", OwnerKind: "user", OwnerSlug: "chrismdp"},
 		},
 	}); err != nil {
 		t.Fatalf("saveSyncState: %v", err)
@@ -149,40 +124,20 @@ func TestTransferToOrgRepointsExistingLocalMarkerEndToEnd(t *testing.T) {
 
 	runTransferCommand(t, "home", "parsons-home")
 
-	entry := loadSyncState().Skills["home"]
-	if entry == nil {
-		t.Fatal("missing home marker")
-	}
-	if entry.SkillID != newID {
-		t.Fatalf("SkillID = %q, want %q", entry.SkillID, newID)
-	}
-	if entry.OwnerKind != "org" || entry.OwnerSlug != "parsons-home" {
-		t.Fatalf("owner = %s/%s, want org/parsons-home", entry.OwnerKind, entry.OwnerSlug)
-	}
-	if entry.Version != "1.0.4" || entry.ContentHash != "newhash" {
-		t.Fatalf("version/hash = %s/%s, want 1.0.4/newhash", entry.Version, entry.ContentHash)
-	}
-	if entry.Deleted || entry.MovedTo != "" {
-		t.Fatalf("marker still tombstoned: %+v", entry)
+	if entry := loadSyncState().Skills["home"]; entry != nil {
+		t.Fatalf("expected home marker dropped, got %+v", entry)
 	}
 }
 
-// TestTransferLinksUntrackedLocalSkillEndToEnd covers the transferring machine
-// when the skill is present on disk but no sync marker matches it (the marker
-// was never written, or an earlier sync cleared its skill_id). Before the fix
-// updateLocalMarkerForTransfer silently no-op'd, leaving the local dir orphaned
-// so the next sync saw the old skill_id archived and tombstoned it
-// ("upstream archived"). Now the CLI links the local skill to the new org copy
-// exactly as a pull would.
-func TestTransferLinksUntrackedLocalSkillEndToEnd(t *testing.T) {
+// TestTransferToOrgRemovesAndBacksUpLocalSkill: when the skill is present on
+// disk, transfer to org backs it up to ~/.airskills/undo, removes the local
+// dir across agents, and drops the marker — the org copy is re-acquired via a
+// skillset, not left orphaned on this machine.
+func TestTransferToOrgRemovesAndBacksUpLocalSkill(t *testing.T) {
 	oldID := testUUID("old-home").String()
 	newID := testUUID("new-home").String()
-	home := setupTransferCommandTest(t, transferCommandFixture{
-		oldID: oldID,
-		newID: newID,
-	})
+	home := setupTransferCommandTest(t, transferCommandFixture{oldID: oldID, newID: newID})
 
-	// Skill exists on disk...
 	localDir := filepath.Join(home, ".claude", "skills", "home")
 	if err := os.MkdirAll(localDir, 0700); err != nil {
 		t.Fatalf("MkdirAll local skill: %v", err)
@@ -190,31 +145,59 @@ func TestTransferLinksUntrackedLocalSkillEndToEnd(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(localDir, "SKILL.md"), []byte("---\nname: home\ndescription: test\n---\n\nbody\n"), 0600); err != nil {
 		t.Fatalf("write SKILL.md: %v", err)
 	}
-	// ...but nothing tracks it in the marker.
 	if err := saveSyncState(&SyncState{Version: 1, Skills: map[string]*SyncEntry{}}); err != nil {
 		t.Fatalf("saveSyncState: %v", err)
 	}
 
 	runTransferCommand(t, "home", "parsons-home")
 
+	if _, err := os.Stat(localDir); !os.IsNotExist(err) {
+		t.Fatalf("expected local skill dir removed, stat err = %v", err)
+	}
+	if entry := loadSyncState().Skills["home"]; entry != nil {
+		t.Fatalf("expected marker dropped, got %+v", entry)
+	}
+	matches, _ := filepath.Glob(filepath.Join(home, ".airskills", "undo", "*", "home", "*", "SKILL.md"))
+	if len(matches) == 0 {
+		t.Fatal("expected a backup under ~/.airskills/undo/<ts>/home/<agent>/SKILL.md")
+	}
+}
+
+// TestTransferToUserKeepsLocalLink: transferring an org skill back to the
+// caller's personal namespace keeps the local copy and repoints its marker to
+// personal ownership — it's now your skill, no skillset round-trip needed.
+func TestTransferToUserKeepsLocalLink(t *testing.T) {
+	oldID := testUUID("old-home").String()
+	newID := testUUID("new-home").String()
+	home := setupTransferCommandTest(t, transferCommandFixture{oldID: oldID, newID: newID})
+
+	localDir := filepath.Join(home, ".claude", "skills", "home")
+	if err := os.MkdirAll(localDir, 0700); err != nil {
+		t.Fatalf("MkdirAll local skill: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(localDir, "SKILL.md"), []byte("body"), 0600); err != nil {
+		t.Fatalf("write SKILL.md: %v", err)
+	}
+	if err := saveSyncState(&SyncState{Version: 1, Skills: map[string]*SyncEntry{
+		"home": {SkillID: oldID, Version: "1.0.3", ContentHash: "oldhash", OwnerKind: "org", OwnerSlug: "parsons-home"},
+	}}); err != nil {
+		t.Fatalf("saveSyncState: %v", err)
+	}
+
+	runTransferCommandToUser(t, "home")
+
 	entry := loadSyncState().Skills["home"]
 	if entry == nil {
-		t.Fatal("transfer left the local skill untracked; expected it linked to the org copy")
+		t.Fatal("expected home marker kept after transfer to user")
 	}
 	if entry.SkillID != newID {
 		t.Fatalf("SkillID = %q, want %q", entry.SkillID, newID)
 	}
-	if entry.OwnerKind != "org" || entry.OwnerSlug != "parsons-home" {
-		t.Fatalf("owner = %s/%s, want org/parsons-home", entry.OwnerKind, entry.OwnerSlug)
+	if entry.OwnerKind != "user" || entry.OwnerSlug != "chrismdp" {
+		t.Fatalf("owner = %s/%s, want user/chrismdp", entry.OwnerKind, entry.OwnerSlug)
 	}
-	if entry.Version != "1.0.4" || entry.ContentHash != "newhash" {
-		t.Fatalf("version/hash = %s/%s, want 1.0.4/newhash", entry.Version, entry.ContentHash)
-	}
-	if entry.Tool != "claude-code" {
-		t.Fatalf("Tool = %q, want claude-code", entry.Tool)
-	}
-	if entry.Deleted || entry.MovedTo != "" {
-		t.Fatalf("marker should be a clean link, got %+v", entry)
+	if _, err := os.Stat(localDir); err != nil {
+		t.Fatalf("expected local dir kept: %v", err)
 	}
 }
 
@@ -250,6 +233,11 @@ func setupTransferCommandTest(t *testing.T, f transferCommandFixture) string {
 					{"id": "org-parsons-home", "slug": "parsons-home"},
 				},
 			})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/me":
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"id":       testUUID("me-chrismdp").String(),
+				"username": "chrismdp",
+			})
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/skills/"+f.oldID+"/transfer":
 			var payload struct {
 				To struct {
@@ -260,8 +248,15 @@ func setupTransferCommandTest(t *testing.T, f transferCommandFixture) string {
 			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 				t.Fatalf("decode transfer payload: %v", err)
 			}
-			if payload.To.Kind != "org" || payload.To.ID != "org-parsons-home" {
-				t.Fatalf("transfer target = %s/%s, want org/org-parsons-home", payload.To.Kind, payload.To.ID)
+			switch payload.To.Kind {
+			case "org":
+				if payload.To.ID != "org-parsons-home" {
+					t.Fatalf("org transfer target ID = %q, want org-parsons-home", payload.To.ID)
+				}
+			case "user":
+				// personal-namespace transfer — target is the caller; accept.
+			default:
+				t.Fatalf("unexpected transfer kind %q", payload.To.Kind)
 			}
 			json.NewEncoder(w).Encode(map[string]interface{}{
 				"id":           f.newID,
@@ -312,6 +307,32 @@ func runTransferCommand(t *testing.T, skillName, orgSlug string) {
 
 	cmd := &cobra.Command{}
 	cmd.Flags().Bool("to-user", false, "")
+	_ = captureStdout(t, func() {
+		if err := transferCmd.RunE(cmd, []string{skillName}); err != nil {
+			t.Fatalf("transfer: %v", err)
+		}
+	})
+}
+
+func runTransferCommandToUser(t *testing.T, skillName string) {
+	t.Helper()
+
+	oldTransferToOrg := transferToOrg
+	oldTransferSlug := transferSlug
+	oldTransferYes := transferYes
+	t.Cleanup(func() {
+		transferToOrg = oldTransferToOrg
+		transferSlug = oldTransferSlug
+		transferYes = oldTransferYes
+	})
+
+	transferToOrg = ""
+	transferSlug = ""
+	transferYes = true
+
+	cmd := &cobra.Command{}
+	cmd.Flags().Bool("to-user", false, "")
+	_ = cmd.Flags().Set("to-user", "true")
 	_ = captureStdout(t, func() {
 		if err := transferCmd.RunE(cmd, []string{skillName}); err != nil {
 			t.Fatalf("transfer: %v", err)

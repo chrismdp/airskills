@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/chrismdp/airskills/telemetry"
 	"github.com/spf13/cobra"
@@ -30,6 +31,11 @@ The old <old-owner>/<slug> is archived; requests to it return 410 Gone
 (no redirect). Consumers with access see the new location and can choose
 whether to follow it; consumers without access see "upstream archived"
 and keep their local copy.
+
+On --to-org the skill becomes an org asset delivered through skillsets, so
+your local copy is removed (backed up to ~/.airskills/undo) — re-add it to a
+skillset you're assigned to in order to use it locally again. On --to-user the
+skill becomes your personal skill and the local copy stays linked.
 
 To restore the old slug, run 'airskills restore <old-slug>'.`,
 	Args: cobra.ExactArgs(1),
@@ -83,8 +89,12 @@ To restore the old slug, run 'airskills restore <old-slug>'.`,
 			fmt.Printf("\n  This is a permanent move: the old URL returns 410 Gone.\n")
 			fmt.Printf("  Consumers with access will be shown the new location and\n")
 			fmt.Printf("  can choose whether to follow it; consumers without access\n")
-			fmt.Printf("  see \"upstream archived\" and keep their local copy.\n\n")
-			fmt.Print("  Continue? [y/N] ")
+			fmt.Printf("  see \"upstream archived\" and keep their local copy.\n")
+			if transferToOrg != "" {
+				fmt.Printf("  Your local copy will be removed (backed up to ~/.airskills/undo);\n")
+				fmt.Printf("  re-add it to a skillset you're on to use it locally again.\n")
+			}
+			fmt.Print("\n  Continue? [y/N] ")
 
 			reader := bufio.NewReader(os.Stdin)
 			answer, _ := reader.ReadString('\n')
@@ -112,36 +122,49 @@ To restore the old slug, run 'airskills restore <old-slug>'.`,
 			return fmt.Errorf("invalid server response: %w", jsonErr)
 		}
 
-		// Update local marker. Under the v2 transfer model the server
-		// soft-deletes the original skill and creates a new row with a
-		// fresh skill_id; we repoint the marker so subsequent push/pull
-		// hit the new row. Other machines that sourced this skill will
-		// see the OLD skill_id as archived on next pull and warn.
-		newSlug := transferToOrg
-		newKind := "org"
-		if newSlug == "" {
-			profile, _ := client.getMe()
-			if profile != nil {
-				newSlug = profile.Username
+		// Reconcile the local copy. The two directions differ:
+		//
+		//   --to-org: the skill is now an org asset, delivered to members
+		//   through skillsets. A local copy linked to the org skill would be
+		//   orphaned — sync only re-pulls org skills that are in a skillset
+		//   assigned to the member. So remove the local copy (backed up to
+		//   ~/.airskills/undo) and tell the user how to get it back.
+		//
+		//   --to-user: the skill is now the caller's personal skill. Keep the
+		//   local copy and repoint its marker to personal ownership, so
+		//   subsequent push/pull hit the new row.
+		if transferToOrg != "" {
+			undoPath := backupAndRemoveLocalSkill(skillName)
+			fmt.Printf("\n  %s Transferred to org %s.\n", green("✓"), transferToOrg)
+			if undoPath != "" {
+				fmt.Printf("  Removed the local copy — backed up to %s/\n", undoPath)
 			}
-			newKind = "user"
-		}
-		if newSlug != "" && updated.Id.String() != "" {
-			if err := updateLocalMarkerForTransfer(
-				skillName,
-				skill.Id.String(),
-				updated.Id.String(),
-				newKind,
-				newSlug,
-				updated.Name,
-				updated.Version,
-				strDeref(updated.ContentHash),
-			); err != nil {
-				fmt.Fprintf(os.Stderr, "  %s server transferred OK but local marker update failed: %v\n", yellow("!"), err)
+			fmt.Printf("\n  It's now an org skill, delivered through skillsets. To use it locally\n")
+			fmt.Printf("  again, add it to a skillset and assign that skillset to yourself:\n")
+			fmt.Printf("    airskills org skillset add-skill <skillset> %s --org %s\n", updated.Name, transferToOrg)
+			fmt.Printf("    airskills org member skillsets <you> --add <skillset> --org %s\n", transferToOrg)
+			fmt.Printf("    airskills sync\n")
+		} else {
+			username := ""
+			if profile, _ := client.getMe(); profile != nil {
+				username = profile.Username
 			}
+			if username != "" && updated.Id.String() != "" {
+				if err := updateLocalMarkerForTransfer(
+					skillName,
+					skill.Id.String(),
+					updated.Id.String(),
+					"user",
+					username,
+					updated.Name,
+					updated.Version,
+					strDeref(updated.ContentHash),
+				); err != nil {
+					fmt.Fprintf(os.Stderr, "  %s server transferred OK but local marker update failed: %v\n", yellow("!"), err)
+				}
+			}
+			fmt.Printf("\n  %s Transferred to your personal namespace. Your local copy stays linked.\n", green("✓"))
 		}
-
-		fmt.Printf("\n  %s Transferred.\n", green("✓"))
 		telemetry.Capture("cli_transfer", map[string]interface{}{
 			"skill_id": skill.Id.String(),
 			"to_org":   transferToOrg,
@@ -149,6 +172,36 @@ To restore the old slug, run 'airskills restore <old-slug>'.`,
 		})
 		return nil
 	},
+}
+
+// backupAndRemoveLocalSkill is the local side of a --to-org transfer: the skill
+// no longer belongs to the caller personally, so its local copy must go. We
+// back it up to ~/.airskills/undo (never delete outright), remove the dir from
+// every agent, and drop its marker so it's no longer tracked as a local skill.
+// Returns the undo path (empty if the skill wasn't present locally, or backup
+// found nothing to copy). If the backup fails we leave everything in place.
+func backupAndRemoveLocalSkill(skillName string) string {
+	localSkills, _ := scanSkillsFromAgents()
+	localDir, present := localSkills[skillName]
+
+	undoPath := ""
+	if present {
+		ts := time.Now().UTC().Format("20060102T150405Z")
+		p, err := backupSkillToUndo(skillName, ts)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "  %s local backup failed, leaving local copy in place: %v\n", yellow("!"), err)
+			return ""
+		}
+		undoPath = p
+		_ = removeSkillDirAcrossAgents(localDir)
+	}
+
+	state := loadSyncState()
+	if _, ok := state.Skills[skillName]; ok {
+		delete(state.Skills, skillName)
+		_ = saveSyncState(state)
+	}
+	return undoPath
 }
 
 // findSkillByName looks up a skill by name across the user's personal skills
