@@ -151,7 +151,13 @@ func runPull(cmd *cobra.Command, args []string) error {
 		return runPullAnon(localSkills, syncState, mirrorConflictSet)
 	}
 
-	repairTransferTombstoneMarkers(client, localSkills, syncState)
+	// A transfer tombstone (Deleted + MovedTo, empty skill_id) is left behind
+	// on a machine that transferred a skill with an older CLI, or was offline
+	// when another machine did. It carries no skill_id, so decidePullActions
+	// can't match it to a tracked skill and treats the still-present local dir
+	// exactly like an untracked one: bytes matching the new org copy → relinked
+	// silently ("linked"); diverged → surfaced as an "untracked-conflict" via
+	// the normal conflict UX. No bespoke repair pass needed.
 
 	// Fetch the caller's skills scoped to their selected personal skillset
 	// (and any org skillsets they've been assigned to). Empty slug =>

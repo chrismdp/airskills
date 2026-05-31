@@ -1,9 +1,6 @@
 package cmd
 
 import (
-	"encoding/json"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -194,127 +191,7 @@ func TestUpdateLocalMarkerForTransferRepointsTransferTombstone(t *testing.T) {
 	}
 }
 
-func TestRepairTransferTombstoneMarkersRepointsExactLocalMatch(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
-
-	localDir := filepath.Join(home, ".claude", "skills", "home")
-	if err := os.MkdirAll(localDir, 0700); err != nil {
-		t.Fatalf("MkdirAll local skill: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(localDir, "SKILL.md"), []byte("---\nname: home\ndescription: test\n---\n\nbody\n"), 0600); err != nil {
-		t.Fatalf("write SKILL.md: %v", err)
-	}
-	localHash := computeMerkleHash(readSkillFiles(localDir))
-	newID := testUUID("new-home").String()
-	if err := saveSyncState(&SyncState{
-		Version: 1,
-		Skills: map[string]*SyncEntry{
-			"home": {
-				Deleted: true,
-				MovedTo: "parsons-home/home",
-			},
-		},
-	}); err != nil {
-		t.Fatalf("saveSyncState: %v", err)
-	}
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v1/resolve/parsons-home/home" {
-			http.NotFound(w, r)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"id":           newID,
-			"version":      "1.0.4",
-			"content_hash": localHash,
-			"current_owner": map[string]string{
-				"kind": "org",
-				"slug": "parsons-home",
-			},
-		})
-	}))
-	defer srv.Close()
-
-	client := &apiClient{baseURL: srv.URL, token: "test-token", http: srv.Client()}
-	repaired := repairTransferTombstoneMarkers(client, map[string]string{"home": localDir}, loadSyncState())
-	if repaired != 1 {
-		t.Fatalf("repaired = %d, want 1", repaired)
-	}
-
-	entry := loadSyncState().Skills["home"]
-	if entry == nil {
-		t.Fatal("missing home marker")
-	}
-	if entry.SkillID != newID {
-		t.Fatalf("SkillID = %q, want %q", entry.SkillID, newID)
-	}
-	if entry.OwnerKind != "org" || entry.OwnerSlug != "parsons-home" {
-		t.Fatalf("owner = %s/%s, want org/parsons-home", entry.OwnerKind, entry.OwnerSlug)
-	}
-	if entry.Version != "1.0.4" || entry.ContentHash != localHash {
-		t.Fatalf("version/hash = %s/%s, want 1.0.4/%s", entry.Version, entry.ContentHash, localHash)
-	}
-	if entry.Deleted || entry.MovedTo != "" {
-		t.Fatalf("marker still tombstoned: %+v", entry)
-	}
-}
-
-func TestRepairTransferTombstoneMarkersLeavesDivergedLocalTombstoned(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
-
-	localDir := filepath.Join(home, ".claude", "skills", "home")
-	if err := os.MkdirAll(localDir, 0700); err != nil {
-		t.Fatalf("MkdirAll local skill: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(localDir, "SKILL.md"), []byte("---\nname: home\ndescription: test\n---\n\nlocal edit\n"), 0600); err != nil {
-		t.Fatalf("write SKILL.md: %v", err)
-	}
-	if err := saveSyncState(&SyncState{
-		Version: 1,
-		Skills: map[string]*SyncEntry{
-			"home": {
-				Deleted: true,
-				MovedTo: "parsons-home/home",
-			},
-		},
-	}); err != nil {
-		t.Fatalf("saveSyncState: %v", err)
-	}
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v1/resolve/parsons-home/home" {
-			http.NotFound(w, r)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"id":           testUUID("new-home").String(),
-			"version":      "1.0.4",
-			"content_hash": "remotehash",
-			"current_owner": map[string]string{
-				"kind": "org",
-				"slug": "parsons-home",
-			},
-		})
-	}))
-	defer srv.Close()
-
-	client := &apiClient{baseURL: srv.URL, token: "test-token", http: srv.Client()}
-	repaired := repairTransferTombstoneMarkers(client, map[string]string{"home": localDir}, loadSyncState())
-	if repaired != 0 {
-		t.Fatalf("repaired = %d, want 0", repaired)
-	}
-
-	entry := loadSyncState().Skills["home"]
-	if entry == nil {
-		t.Fatal("missing home marker")
-	}
-	if !entry.Deleted || entry.MovedTo != "parsons-home/home" || entry.SkillID != "" {
-		t.Fatalf("marker was unexpectedly repaired: %+v", entry)
-	}
-}
+// Transfer tombstones (Deleted + MovedTo, empty skill_id) are reconciled by the
+// generic untracked-dir path in decidePullActions, not a bespoke repair pass.
+// The behaviour is locked in by TestPullTombstoneRelinksWhenBytesMatch and
+// TestPullTombstoneConflictsWhenBytesDiffer in pull_test.go.

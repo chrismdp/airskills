@@ -163,6 +163,73 @@ func TestPullDecidesUntrackedConflictForDifferingBytes(t *testing.T) {
 	}
 }
 
+// TestPullTombstoneRelinksWhenBytesMatch verifies that a transfer tombstone
+// (Deleted + MovedTo, empty skill_id) left on the transferring machine is
+// reconciled by the generic untracked-dir path: because it carries no
+// skill_id it can't match a tracked skill, so the still-present local dir is
+// treated exactly like an untracked one. Bytes matching the new org copy →
+// 'linked' (relinked silently on sync). This replaces the bespoke
+// repairTransferTombstoneMarkers pass.
+func TestPullTombstoneRelinksWhenBytesMatch(t *testing.T) {
+	dir := t.TempDir()
+	skillDir := filepath.Join(dir, "home")
+	os.MkdirAll(skillDir, 0755)
+	os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("# shared content"), 0644)
+	matchingHash := computeMerkleHash(readSkillFiles(skillDir))
+
+	state := &SyncState{Version: 1, Skills: map[string]*SyncEntry{
+		"home": {Deleted: true, MovedTo: "parsons-home/home"},
+	}}
+	remote := []apiSkill{
+		{Id: testUUID("org-home"), Name: "home", Version: "1.0.4", ContentHash: strPtr(matchingHash)},
+	}
+	local := map[string]string{"home": skillDir}
+
+	actions, _, diverged := decidePullActions(remote, local, state)
+	if len(actions) != 1 {
+		t.Fatalf("expected 1 action (linked), got %d: %+v", len(actions), actions)
+	}
+	if actions[0].reason != "linked" {
+		t.Errorf("expected reason 'linked', got %q", actions[0].reason)
+	}
+	if len(diverged) != 0 {
+		t.Errorf("expected no diverged slugs, got %v", diverged)
+	}
+}
+
+// TestPullTombstoneConflictsWhenBytesDiffer verifies the other half: a transfer
+// tombstone whose local bytes diverge from the new org copy is surfaced as an
+// 'untracked-conflict' — the same conflict UX as any diverged untracked dir,
+// rather than being silently re-bound or left as a dead "upstream archived".
+func TestPullTombstoneConflictsWhenBytesDiffer(t *testing.T) {
+	dir := t.TempDir()
+	skillDir := filepath.Join(dir, "home")
+	os.MkdirAll(skillDir, 0755)
+	os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("# my local edits"), 0644)
+
+	state := &SyncState{Version: 1, Skills: map[string]*SyncEntry{
+		"home": {Deleted: true, MovedTo: "parsons-home/home"},
+	}}
+	remote := []apiSkill{
+		{Id: testUUID("org-home"), Name: "home", Version: "1.0.4", ContentHash: strPtr("different-server-hash")},
+	}
+	local := map[string]string{"home": skillDir}
+
+	actions, _, diverged := decidePullActions(remote, local, state)
+	if len(actions) != 1 {
+		t.Fatalf("expected 1 action (untracked-conflict), got %d: %+v", len(actions), actions)
+	}
+	if actions[0].reason != "untracked-conflict" {
+		t.Errorf("expected reason 'untracked-conflict', got %q", actions[0].reason)
+	}
+	if actions[0].localDir != skillDir {
+		t.Errorf("expected localDir=%q, got %q", skillDir, actions[0].localDir)
+	}
+	if len(diverged) != 1 || diverged[0] != "home" {
+		t.Errorf("expected diverged=[home], got %v", diverged)
+	}
+}
+
 // TestPullDetectsUpdated verifies that a tracked skill whose remote hash has
 // changed is queued as 'updated' (when local hash still matches the marker).
 func TestPullDetectsUpdated(t *testing.T) {

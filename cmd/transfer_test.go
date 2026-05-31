@@ -167,6 +167,57 @@ func TestTransferToOrgRepointsExistingLocalMarkerEndToEnd(t *testing.T) {
 	}
 }
 
+// TestTransferLinksUntrackedLocalSkillEndToEnd covers the transferring machine
+// when the skill is present on disk but no sync marker matches it (the marker
+// was never written, or an earlier sync cleared its skill_id). Before the fix
+// updateLocalMarkerForTransfer silently no-op'd, leaving the local dir orphaned
+// so the next sync saw the old skill_id archived and tombstoned it
+// ("upstream archived"). Now the CLI links the local skill to the new org copy
+// exactly as a pull would.
+func TestTransferLinksUntrackedLocalSkillEndToEnd(t *testing.T) {
+	oldID := testUUID("old-home").String()
+	newID := testUUID("new-home").String()
+	home := setupTransferCommandTest(t, transferCommandFixture{
+		oldID: oldID,
+		newID: newID,
+	})
+
+	// Skill exists on disk...
+	localDir := filepath.Join(home, ".claude", "skills", "home")
+	if err := os.MkdirAll(localDir, 0700); err != nil {
+		t.Fatalf("MkdirAll local skill: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(localDir, "SKILL.md"), []byte("---\nname: home\ndescription: test\n---\n\nbody\n"), 0600); err != nil {
+		t.Fatalf("write SKILL.md: %v", err)
+	}
+	// ...but nothing tracks it in the marker.
+	if err := saveSyncState(&SyncState{Version: 1, Skills: map[string]*SyncEntry{}}); err != nil {
+		t.Fatalf("saveSyncState: %v", err)
+	}
+
+	runTransferCommand(t, "home", "parsons-home")
+
+	entry := loadSyncState().Skills["home"]
+	if entry == nil {
+		t.Fatal("transfer left the local skill untracked; expected it linked to the org copy")
+	}
+	if entry.SkillID != newID {
+		t.Fatalf("SkillID = %q, want %q", entry.SkillID, newID)
+	}
+	if entry.OwnerKind != "org" || entry.OwnerSlug != "parsons-home" {
+		t.Fatalf("owner = %s/%s, want org/parsons-home", entry.OwnerKind, entry.OwnerSlug)
+	}
+	if entry.Version != "1.0.4" || entry.ContentHash != "newhash" {
+		t.Fatalf("version/hash = %s/%s, want 1.0.4/newhash", entry.Version, entry.ContentHash)
+	}
+	if entry.Tool != "claude-code" {
+		t.Fatalf("Tool = %q, want claude-code", entry.Tool)
+	}
+	if entry.Deleted || entry.MovedTo != "" {
+		t.Fatalf("marker should be a clean link, got %+v", entry)
+	}
+}
+
 type transferCommandFixture struct {
 	oldID string
 	newID string
