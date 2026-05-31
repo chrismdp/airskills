@@ -108,6 +108,13 @@ func TestClassifyForStatusDoesNotPushTombstonedLocalSkill(t *testing.T) {
 	if len(got.toPush) != 0 {
 		t.Fatalf("toPush = %v, want empty for tombstoned moved/deleted marker", got.toPush)
 	}
+	// Fix 4 (cli-org-skill-wrongly-tombstoned-hides-edits.md): the local dir
+	// is still present, so it must be SURFACED (tombstoned bucket), never
+	// silently hidden — a wrongly tombstoned skill was invisible to
+	// status/push/list while diff still saw its edits.
+	if len(got.tombstoned) != 1 || got.tombstoned[0] != "home" {
+		t.Fatalf("tombstoned = %v, want [home] surfaced (present locally but marked transferred)", got.tombstoned)
+	}
 }
 
 // After `airskills skillset use poppins` the user's other 70+ skills

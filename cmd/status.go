@@ -117,6 +117,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	hashLocal := func(p string) string { return computeMerkleHash(readSkillFiles(p)) }
 	buckets := classifyForStatus(sr.skills, localSkills, syncState, hashLocal, ownedElsewhereByName)
 	toPush, toPull, toUpdate, upstream, untracked, inOtherSkillset := buckets.toPush, buckets.toPull, buckets.toUpdate, buckets.upstream, buckets.untracked, buckets.inOtherSkillset
+	tombstoned := buckets.tombstoned
 
 	// A pull conflict now parks its remote copy to the stable conflict path
 	// AND surfaces live in the "untracked" bucket (or "on server"/toUpdate
@@ -131,6 +132,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	upstreamUpdates := len(upstream)
 	needInOther := len(inOtherSkillset)
 	needPendingConflicts := len(pendingConflicts)
+	needTombstoned := len(tombstoned)
 
 	// Skip capture on the shell-prompt hot path (quiet mode is used by
 	// `eval "$(airskills status)"` in shell init). Capturing there would
@@ -145,6 +147,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 			"upstream_updates":    upstreamUpdates,
 			"pending_suggestions": pendingSuggestions,
 			"pending_conflicts":   needPendingConflicts,
+			"tombstoned":          needTombstoned,
 		})
 	}
 
@@ -152,7 +155,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	// auto-update, so isNewer above falsely flags an upgrade.
 	showLatestCLI := hr.latestCLI != "" && !autoUpdateDidFire.Load()
 
-	if needPush == 0 && needPull == 0 && needUpdate == 0 && needUntracked == 0 && upstreamUpdates == 0 && pendingSuggestions == 0 && needInOther == 0 && needPendingConflicts == 0 && !showLatestCLI {
+	if needPush == 0 && needPull == 0 && needUpdate == 0 && needUntracked == 0 && upstreamUpdates == 0 && pendingSuggestions == 0 && needInOther == 0 && needPendingConflicts == 0 && needTombstoned == 0 && !showLatestCLI {
 		if !quiet {
 			fmt.Fprintf(os.Stderr, "[airskills] %s\n", green("✓ in sync"))
 			printAgentNextSteps(os.Stderr, []agentNextStep{
@@ -188,6 +191,9 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	if pendingSuggestions > 0 {
 		parts = append(parts, cyan(fmt.Sprintf("? %d suggestions", pendingSuggestions)))
 	}
+	if needTombstoned > 0 {
+		parts = append(parts, yellow(fmt.Sprintf("⚠ %d marked transferred", needTombstoned)))
+	}
 
 	// Pick the headline command for the work that actually dominates.
 	// `sync` is correct ONLY when there's push/pull/update/untracked/upstream
@@ -197,7 +203,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	// real sync work → sync; else suggestions → review; else a pending
 	// conflict → the safe --pending discard (full resolution menu prints
 	// in the detail block below).
-	hasSyncWork := needPush > 0 || needPull > 0 || needUpdate > 0 || needUntracked > 0 || upstreamUpdates > 0
+	hasSyncWork := needPush > 0 || needPull > 0 || needUpdate > 0 || needUntracked > 0 || upstreamUpdates > 0 || needTombstoned > 0
 	hint := "airskills sync"
 	switch {
 	case hasSyncWork:
@@ -220,6 +226,13 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		printStatusGroup("upstream", upstream, cyan)
 		printStatusGroup("untracked", untracked, yellow)
 		printPendingConflictStatusGroup(os.Stderr, pendingConflicts)
+		if needTombstoned > 0 {
+			fmt.Fprintf(os.Stderr, "  %s (%d): present locally but marked transferred away. If it's back in your skillset, 'airskills sync' re-adopts it (divergence handled normally); otherwise 'airskills rm <name>' discards the local copy:\n",
+				yellow("marked transferred"), needTombstoned)
+			for _, n := range tombstoned {
+				fmt.Fprintf(os.Stderr, "    %s\n", n)
+			}
+		}
 		if needInOther > 0 {
 			active := rememberedSkillsetSlug()
 			if active == "" {
@@ -257,6 +270,9 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		}
 		if needPendingConflicts > 0 {
 			steps = append(steps, agentNextStep{Cmd: "airskills rm <name> --pending", Why: "discard a parked pending-conflict copy (safe: never deletes the installed skill); sync does not clear these"})
+		}
+		if needTombstoned > 0 {
+			steps = append(steps, agentNextStep{Cmd: "airskills sync", Why: "re-adopt a skill marked transferred but back in your skillset (divergence handled normally)"})
 		}
 		printAgentNextSteps(os.Stderr, steps)
 	}
@@ -346,6 +362,12 @@ func buildOwnedElsewhereByName(inSkillset []apiSkill, ownedAll []apiSkill, state
 // sync would surface a conflict (silent in this command before).
 type statusBuckets struct {
 	toPush, toPull, toUpdate, upstream, untracked, inOtherSkillset []string
+	// tombstoned: local dir present but its marker is a transfer tombstone
+	// (Deleted/MovedTo). Previously skipped silently, which let a wrongly
+	// tombstoned skill hide its local edits from status/push/list while diff
+	// still saw them. Surface it so it's never invisible. See
+	// cli-org-skill-wrongly-tombstoned-hides-edits.md.
+	tombstoned []string
 }
 
 // classifyForStatus is pure — no I/O — so it's unit-testable. The status
@@ -415,7 +437,12 @@ func classifyForStatus(remoteSkills []apiSkill, localSkills map[string]string, s
 			continue
 		}
 		if syncState != nil {
-			if entry := syncState.Skills[name]; entry != nil && entry.Deleted {
+			if entry := syncState.Skills[name]; entry != nil && (entry.Deleted || entry.MovedTo != "") {
+				// Local dir present but marker is a transfer tombstone.
+				// Don't bucket as "to push" (the marker claims it moved),
+				// but don't hide it either — surface so a wrongly tombstoned
+				// skill is visible and recoverable.
+				b.tombstoned = append(b.tombstoned, name)
 				continue
 			}
 		}
@@ -458,6 +485,7 @@ func classifyForStatus(remoteSkills []apiSkill, localSkills map[string]string, s
 	sort.Strings(b.upstream)
 	sort.Strings(b.untracked)
 	sort.Strings(b.inOtherSkillset)
+	sort.Strings(b.tombstoned)
 	return b
 }
 

@@ -154,6 +154,29 @@ func updateLocalMarkerForTransfer(localName, oldSkillID, newSkillID, newKind, ne
 	return saveSyncState(state)
 }
 
+// clearTransferTombstone un-tombstones a marker that was wrongly (or stalely)
+// flagged as transferred away. Used when a tracked skill_id reappears in the
+// caller's listing — e.g. an org skill re-added to a skillset — so the local
+// copy is tracked normally again. SkillID/Source are left intact; only the
+// tombstone flags, version, and owner namespace are refreshed. Divergence (if
+// any) is handled by the normal pull rules, not here.
+func clearTransferTombstone(e *SyncEntry, newVersion, newOwnerKind, newOwnerSlug string) {
+	if e == nil {
+		return
+	}
+	e.Deleted = false
+	e.MovedTo = ""
+	if newVersion != "" {
+		e.Version = newVersion
+	}
+	if newOwnerKind != "" {
+		e.OwnerKind = newOwnerKind
+	}
+	if newOwnerSlug != "" {
+		e.OwnerSlug = newOwnerSlug
+	}
+}
+
 func repointMarkerToTransferredSkill(e *SyncEntry, newSkillID, newKind, newOwnerSlug, newVersion, newContentHash string) {
 	e.SkillID = newSkillID
 	e.OwnerKind = newKind

@@ -81,9 +81,16 @@ type updateDetail struct {
 
 type pullEntry struct {
 	skill    apiSkill
-	reason   string // "new", "updated", "diverged", "transferred", "auto-resolved", "linked", "untracked-conflict"
+	reason   string // "new", "updated", "diverged", "auto-resolved", "linked", "untracked-conflict"
 	localDir string
 	marker   *SyncEntry
+	// reAdopt is set when the marker is a stale transfer tombstone
+	// (Deleted/MovedTo) whose skill_id is back in the caller's listing —
+	// e.g. the skill was re-added to a skillset. The action handler clears
+	// the tombstone so the skill is tracked normally again; divergence (if
+	// any) is surfaced by the normal rules. See
+	// cli-org-skill-wrongly-tombstoned-hides-edits.md.
+	reAdopt bool
 }
 
 type incomingDetail struct {
@@ -272,6 +279,10 @@ func runPull(cmd *cobra.Command, args []string) error {
 				if p.marker.Source == nil {
 					p.marker.Source = owners.sourceFor(&p.skill)
 				}
+				if p.reAdopt {
+					ownerKind, ownerSlug := owners.resolve(&p.skill)
+					clearTransferTombstone(p.marker, p.skill.Version, ownerKind, ownerSlug)
+				}
 			}
 			autoResolved++
 			if verbose {
@@ -326,6 +337,14 @@ func runPull(cmd *cobra.Command, args []string) error {
 		// recurs without piling up duplicates or re-downloading. Sweep
 		// stale copies first so old versions don't linger.
 		if p.reason == "diverged" || p.reason == "untracked-conflict" {
+			// Re-adoption: a tombstoned marker whose skill is back in the
+			// listing but whose local copy diverges. Clear the tombstone so
+			// the skill is tracked again; the divergence is still surfaced
+			// below by the normal conflict UX rather than silently shadowed.
+			if p.reAdopt && p.marker != nil {
+				ownerKind, ownerSlug := owners.resolve(&p.skill)
+				clearTransferTombstone(p.marker, p.skill.Version, ownerKind, ownerSlug)
+			}
 			remoteHash := strDeref(p.skill.ContentHash)
 			parkDir, needWrite := conflictNeedsRepark(p.skill.Name, remoteHash)
 			if needWrite {
@@ -390,67 +409,6 @@ func runPull(cmd *cobra.Command, args []string) error {
 			lines[i].status = "failed"
 			renderProgress(lines)
 			failed++
-			continue
-		}
-
-		if p.reason == "transferred" {
-			// Server-side transfer: old slug → new slug.
-			// Install new dir, then reconcile the old one.
-			newDirName := p.skill.Name
-			lines[i].status = "transferred"
-			lines[i].pct = 0.8
-			renderProgress(lines)
-
-			if _, err := installSkillToAgents(newDirName, files); err != nil {
-				lines[i].status = "failed"
-				renderProgress(lines)
-				failed++
-				continue
-			}
-
-			// Add marker for the new dir
-			ownerKind, ownerSlug := owners.resolve(&p.skill)
-			syncState.Skills[newDirName] = &SyncEntry{
-				SkillID:     p.skill.Id.String(),
-				Version:     p.skill.Version,
-				ContentHash: strDeref(p.skill.ContentHash),
-				Tool:        "claude-code",
-				OwnerKind:   ownerKind,
-				OwnerSlug:   ownerSlug,
-				Source:      owners.sourceFor(&p.skill),
-			}
-
-			// Reconcile old dir
-			oldDirName := filepath.Base(p.localDir)
-			if p.marker != nil && p.localDir != "" {
-				localFiles := readSkillFiles(p.localDir)
-				localHash := computeMerkleHash(localFiles)
-				if localHash == p.marker.ContentHash {
-					// No local edits — delete old dir across all agents
-					_ = removeSkillDirAcrossAgents(p.localDir)
-					delete(syncState.Skills, oldDirName)
-				} else {
-					// Local edits exist — mark deleted and warn
-					p.marker.Deleted = true
-					p.marker.MovedTo = newDirName
-					syncState.Skills[oldDirName] = p.marker
-					fmt.Fprintf(os.Stderr,
-						"\n  %s %s: local edits not pushed — skill transferred to %s. Merge manually into %s/ then rm -rf %s/\n",
-						yellow("!"), oldDirName, newDirName, newDirName, oldDirName)
-				}
-			}
-
-			lines[i].status = "done"
-			lines[i].size = fmt.Sprintf("%s → %s", oldDirName, newDirName)
-			lines[i].pct = 1
-			renderProgress(lines)
-			updated++
-			updateDetails = append(updateDetails, updateDetail{
-				name:       p.skill.Name,
-				oldVersion: p.marker.Version,
-				newVersion: p.skill.Version,
-				messages:   []string{"transferred"},
-			})
 			continue
 		}
 
@@ -813,13 +771,17 @@ func markSourceUpstreamIncorporated(marker *SyncEntry, remote apiSkill) {
 // no network calls. The hashLocal helper reads disk for divergence checks.
 //
 // Behaviour:
-//   - tracked + slug changed (server-side transfer): "transferred"
+//   - tracked (skill_id matches), name differs: same skill, server-side
+//     rename / owner normalisation — handled in place by the rules below,
+//     dir kept stable, never tombstoned
+//   - tracked + stale transfer tombstone (Deleted/MovedTo) but skill_id back
+//     in the listing: re-adopt (clear tombstone), then apply the rules below
 //   - tracked + local present + remote unchanged: skip
 //   - tracked + local present + only remote changed: "updated"
 //   - tracked + local present + both changed: "diverged"
 //   - tracked + local missing: warn and skip (treat as intentional removal —
 //     user should run 'airskills rm <name>' to delete server-side, or
-//     'airskills pull <name>' to restore)
+//     'airskills pull <name>' to restore); re-adopted tombstone reinstalls "new"
 //   - untracked + local with same name + bytes match: "linked" (silent claim)
 //   - untracked + local with same name + bytes differ: "untracked-conflict"
 //   - untracked + no local: "new"
@@ -864,20 +826,36 @@ func decidePullActions(remoteSkills []apiSkill, localSkills map[string]string, s
 		}
 
 		if trackedName != "" {
-			// Server-side transfer: slug changed from what we last tracked
-			if remote.Name != trackedName {
-				localDir := localSkills[trackedName]
-				actions = append(actions, pullEntry{
-					skill:    remote,
-					reason:   "transferred",
-					localDir: localDir,
-					marker:   syncState.Skills[trackedName],
-				})
-				continue
-			}
+			marker := syncState.Skills[trackedName]
+
+			// A matching skill_id means this is the SAME skill the caller
+			// still receives. Two cases used to be mishandled here:
+			//
+			//   - remote.Name != trackedName: a server-side rename or
+			//     owner-namespace normalisation. This is NOT a transfer
+			//     away — the skill is still in the listing. We keep the
+			//     existing local dir (per the no-rename-on-ownership-change
+			//     rule in marker_resolve.go) and reconcile in place by the
+			//     normal rules below, never tombstoning.
+			//   - marker is a stale transfer tombstone (Deleted/MovedTo) but
+			//     the skill_id is back in the listing (re-added to a
+			//     skillset). Re-adopt it: clear the tombstone and apply the
+			//     normal rules; divergence is surfaced like any other.
+			//
+			// Genuine v2 transfers mint a NEW skill_id and soft-delete the
+			// old, so the old id never reappears in the listing — a matching
+			// id is, by construction, not a move-out.
+			// See cli-org-skill-wrongly-tombstoned-hides-edits.md.
+			reAdopt := marker != nil && (marker.Deleted || marker.MovedTo != "")
 
 			localDir, exists := localSkills[trackedName]
 			if !exists {
+				if reAdopt {
+					// Skill back in the listing, local dir gone — reinstall
+					// fresh under its current name and re-track it.
+					actions = append(actions, pullEntry{skill: remote, reason: "new", reAdopt: true})
+					continue
+				}
 				warnings = append(warnings, fmt.Sprintf(
 					"%s: tracked but missing locally — run 'airskills rm %s' to delete server-side, or 'airskills pull %s' to restore",
 					trackedName, trackedName, trackedName,
@@ -885,7 +863,6 @@ func decidePullActions(remoteSkills []apiSkill, localSkills map[string]string, s
 				continue
 			}
 
-			marker := syncState.Skills[trackedName]
 			if marker.Source != nil && upstreamAdvanced(marker, remote) {
 				localFiles := readSkillFiles(localDir)
 				localHash := computeMerkleHash(localFiles)
@@ -893,16 +870,14 @@ func decidePullActions(remoteSkills []apiSkill, localSkills map[string]string, s
 				if localHash == marker.ContentHash {
 					reason = "upstream-updated"
 				}
-				actions = append(actions, pullEntry{skill: remote, reason: reason, localDir: localDir, marker: marker})
+				actions = append(actions, pullEntry{skill: remote, reason: reason, localDir: localDir, marker: marker, reAdopt: reAdopt})
 				continue
 			}
 			remoteHash := strDeref(remote.ContentHash)
-			if remoteHash == "" || marker.ContentHash == "" || remoteHash == marker.ContentHash {
-				continue
-			}
-
-			// Skip skills mid-transfer — handled by the transfer flow, not here.
-			if marker.Deleted || marker.MovedTo != "" {
+			// Synced and not tombstoned → nothing to do. A re-adoption must
+			// still clear the tombstone even when bytes already match, so it
+			// falls through to the classification below.
+			if !reAdopt && (remoteHash == "" || marker.ContentHash == "" || remoteHash == marker.ContentHash) {
 				continue
 			}
 
@@ -910,14 +885,14 @@ func decidePullActions(remoteSkills []apiSkill, localSkills map[string]string, s
 			localHash := computeMerkleHash(localFiles)
 
 			switch {
-			case localHash == remoteHash:
+			case remoteHash != "" && localHash == remoteHash:
 				// Auto-detect: local already matches remote bytes.
 				// Marker is stale from manual reconciliation — update silently.
-				actions = append(actions, pullEntry{skill: remote, reason: "auto-resolved", localDir: localDir, marker: marker})
-			case localHash == marker.ContentHash:
-				actions = append(actions, pullEntry{skill: remote, reason: "updated", localDir: localDir, marker: marker})
+				actions = append(actions, pullEntry{skill: remote, reason: "auto-resolved", localDir: localDir, marker: marker, reAdopt: reAdopt})
+			case marker.ContentHash != "" && localHash == marker.ContentHash:
+				actions = append(actions, pullEntry{skill: remote, reason: "updated", localDir: localDir, marker: marker, reAdopt: reAdopt})
 			default:
-				actions = append(actions, pullEntry{skill: remote, reason: "diverged", localDir: localDir, marker: marker})
+				actions = append(actions, pullEntry{skill: remote, reason: "diverged", localDir: localDir, marker: marker, reAdopt: reAdopt})
 				divergedSlugs = append(divergedSlugs, remote.Name)
 			}
 			continue

@@ -389,9 +389,15 @@ func TestPullAutoDetectUpdatesMarker(t *testing.T) {
 	}
 }
 
-// TestPullAutoDetectSkipsTransferredSkills verifies that skills with
-// Deleted=true are skipped by the auto-detect logic (handled by transfer flow).
-func TestPullAutoDetectSkipsTransferredSkills(t *testing.T) {
+// TestPullReadoptsTombstonedSkillBackInListing verifies the fix for
+// cli-org-skill-wrongly-tombstoned-hides-edits.md: a marker tombstoned as
+// transferred (Deleted=true) whose skill_id is back in the caller's listing
+// (e.g. re-added to a skillset) is RE-ADOPTED, not silently skipped. A
+// genuine v2 transfer mints a new skill_id, so a matching id is by
+// construction the same skill the caller still receives. With local bytes
+// matching remote, the re-adoption is a silent "auto-resolved" that clears the
+// tombstone.
+func TestPullReadoptsTombstonedSkillBackInListing(t *testing.T) {
 	dir := t.TempDir()
 	skillDir := filepath.Join(dir, "tracked-skill")
 	os.MkdirAll(skillDir, 0755)
@@ -408,7 +414,8 @@ func TestPullAutoDetectSkipsTransferredSkills(t *testing.T) {
 				SkillID:     testUUID("skill-1").String(),
 				Version:     "1.0.0",
 				ContentHash: "stale-marker-hash",
-				Deleted:     true, // mid-transfer
+				Deleted:     true, // wrongly tombstoned
+				MovedTo:     "some-org/tracked-skill",
 				Tool:        "claude-code",
 			},
 		},
@@ -419,9 +426,105 @@ func TestPullAutoDetectSkipsTransferredSkills(t *testing.T) {
 	local := map[string]string{"tracked-skill": skillDir}
 
 	actions, _, _ := decidePullActions(remote, local, state)
-	// Should be skipped (Deleted=true), so no action
-	if len(actions) != 0 {
-		t.Errorf("expected 0 actions for Deleted skill, got %d: %+v", len(actions), actions)
+	if len(actions) != 1 {
+		t.Fatalf("expected 1 re-adopt action, got %d: %+v", len(actions), actions)
+	}
+	if actions[0].reason != "auto-resolved" {
+		t.Errorf("expected reason 'auto-resolved' (bytes match), got %q", actions[0].reason)
+	}
+	if !actions[0].reAdopt {
+		t.Errorf("expected reAdopt=true so the tombstone is cleared")
+	}
+}
+
+// TestPullReadoptsTombstonedDivergedAppliesNormalRules verifies Chris's stated
+// rule: re-adding a transferred skill regains it as normal, and if it diverges
+// the normal divergence rules apply. The tombstone is cleared (reAdopt) AND the
+// divergence is surfaced rather than silently shadowed.
+func TestPullReadoptsTombstonedDivergedAppliesNormalRules(t *testing.T) {
+	dir := t.TempDir()
+	skillDir := filepath.Join(dir, "tracked-skill")
+	os.MkdirAll(skillDir, 0755)
+	os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("# my local edits"), 0644)
+
+	state := &SyncState{
+		Version: 1,
+		Skills: map[string]*SyncEntry{
+			"tracked-skill": {
+				SkillID:     testUUID("skill-1").String(),
+				Version:     "1.0.0",
+				ContentHash: "old-baseline-hash",
+				Deleted:     true,
+				MovedTo:     "some-org/tracked-skill",
+				Tool:        "claude-code",
+			},
+		},
+	}
+	remote := []apiSkill{
+		{Id: testUUID("skill-1"), Name: "tracked-skill", Version: "1.1.0", ContentHash: strPtr("different-server-hash")},
+	}
+	local := map[string]string{"tracked-skill": skillDir}
+
+	actions, _, diverged := decidePullActions(remote, local, state)
+	if len(actions) != 1 {
+		t.Fatalf("expected 1 action, got %d: %+v", len(actions), actions)
+	}
+	if actions[0].reason != "diverged" {
+		t.Errorf("expected reason 'diverged' (normal rules), got %q", actions[0].reason)
+	}
+	if !actions[0].reAdopt {
+		t.Errorf("expected reAdopt=true so the tombstone is cleared while the conflict is surfaced")
+	}
+	if len(diverged) != 1 || diverged[0] != "tracked-skill" {
+		t.Errorf("expected diverged=[tracked-skill], got %v", diverged)
+	}
+}
+
+// TestPullSameSkillIdRenameDoesNotTombstone verifies that a tracked skill whose
+// server-side name differs from the local dir name (a rename or owner-namespace
+// normalisation) but whose skill_id still matches is NOT classified as a
+// transfer-away. It is the same skill the caller still receives; local edits
+// must be reconciled in place by the normal rules, never tombstoned and
+// abandoned. Regression guard for cli-org-skill-wrongly-tombstoned-hides-edits.md.
+func TestPullSameSkillIdRenameDoesNotTombstone(t *testing.T) {
+	dir := t.TempDir()
+	skillDir := filepath.Join(dir, "home")
+	os.MkdirAll(skillDir, 0755)
+	os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("# my local edits"), 0644)
+
+	state := &SyncState{
+		Version: 1,
+		Skills: map[string]*SyncEntry{
+			"home": {
+				SkillID:     testUUID("skill-1").String(),
+				Version:     "1.0.0",
+				ContentHash: "baseline-hash",
+				Tool:        "claude-code",
+			},
+		},
+	}
+	// Same skill_id, but the server reports a different name (legacy
+	// "parsons-home-home" prefix vs the bare local dir "home").
+	remote := []apiSkill{
+		{Id: testUUID("skill-1"), Name: "parsons-home-home", Version: "1.1.0", ContentHash: strPtr("server-hash")},
+	}
+	local := map[string]string{"home": skillDir}
+
+	actions, _, _ := decidePullActions(remote, local, state)
+	if len(actions) != 1 {
+		t.Fatalf("expected 1 action, got %d: %+v", len(actions), actions)
+	}
+	if actions[0].reason == "transferred" {
+		t.Errorf("a same-skill_id rename must not be classified 'transferred'")
+	}
+	if actions[0].reason != "diverged" {
+		t.Errorf("expected normal 'diverged' rule for the in-place edit, got %q", actions[0].reason)
+	}
+	if actions[0].localDir != skillDir {
+		t.Errorf("expected the existing local dir preserved, got %q", actions[0].localDir)
+	}
+	if m := state.Skills["home"]; m.Deleted || m.MovedTo != "" {
+		t.Errorf("marker must not be tombstoned by classification: Deleted=%v MovedTo=%q", m.Deleted, m.MovedTo)
 	}
 }
 
