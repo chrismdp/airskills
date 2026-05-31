@@ -68,6 +68,7 @@ Also available as 'airskills show'.`,
 		if authHeader != "" {
 			req.Header.Set("Authorization", authHeader)
 		}
+		setStandardHeaders(req)
 
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
