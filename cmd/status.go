@@ -115,7 +115,8 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	ownedElsewhereByName := buildOwnedElsewhereByName(sr.skills, ownedAll, syncState)
 
 	hashLocal := func(p string) string { return computeMerkleHash(readSkillFiles(p)) }
-	buckets := classifyForStatus(sr.skills, localSkills, syncState, hashLocal, ownedElsewhereByName)
+	rows := classifySkills(sr.skills, localSkills, syncState, hashLocal)
+	buckets := projectStatusBuckets(rows, ownedElsewhereByName)
 	toPush, toPull, toUpdate, upstream, untracked, inOtherSkillset := buckets.toPush, buckets.toPull, buckets.toUpdate, buckets.upstream, buckets.untracked, buckets.inOtherSkillset
 	tombstoned := buckets.tombstoned
 
@@ -370,112 +371,62 @@ type statusBuckets struct {
 	tombstoned []string
 }
 
-// classifyForStatus is pure — no I/O — so it's unit-testable. The status
-// command needs six buckets:
+// projectStatusBuckets groups the unified classifier's rows into the status
+// command's display buckets. It is the projection the spec calls for: one
+// classifier (classifySkills / decideState), and every command — list,
+// doctor, status — reads from it, so they can no longer disagree. Pure: the
+// rows already carry every fact (presence + the divergence booleans).
 //
-//   - toPush:           local skill, no remote anywhere; OR tracked skill with local edits
-//   - toPull:           remote skill, no local
-//   - toUpdate:         tracked, marker hash differs from remote hash
-//   - upstream:         remote has an upstream update available (sourced)
-//   - untracked:        remote skill, local exists, no marker — needs reconciling
-//   - inOtherSkillset:  local skill that the user owns server-side, but
-//     the skill is not in the active personal skillset.
-//     Without this bucket the classifier dumped them in
-//     toPush, which lied — push would have collided on
-//     name. ownedElsewhereByName is the cross-reference
-//     (skill names the caller owns but that are not in
-//     remoteSkills); status fetches this via the
-//     personal-scope ownership query in runStatus.
-func classifyForStatus(remoteSkills []apiSkill, localSkills map[string]string, syncState *SyncState, hashLocal func(string) string, ownedElsewhereByName map[string]bool) statusBuckets {
-	skillIdToName := map[string]string{}
-	if syncState != nil {
-		for name, entry := range syncState.Skills {
-			if entry != nil && entry.SkillID != "" {
-				skillIdToName[entry.SkillID] = name
-			}
-		}
-	}
-
+//   - toPull:          available (remote, never installed here)
+//   - toPush:          tracked with local edits; a brand-new untracked local;
+//                      or an orphaned tracked skill the server dropped
+//   - toUpdate:        tracked, another of my machines pushed (RemoteMoved)
+//   - upstream:        a fork whose parent moved past upstream_base (forks only)
+//   - untracked:       a same-named server skill collides with an unmarked
+//                      local (adoptable or conflict)
+//   - inOtherSkillset: orthogonal skillset membership — an owned skill not in
+//                      the active skillset, surfaced via ownedElsewhereByName
+//                      so it isn't mislabelled "to push"
+//   - tombstoned:      displaced (marker is a transfer tombstone)
+//
+// A tracked-but-locally-deleted skill (available WITH a marker) is
+// deliberately silent — you removed it on purpose; status does not nag.
+func projectStatusBuckets(rows []SkillStateInfo, ownedElsewhereByName map[string]bool) statusBuckets {
 	var b statusBuckets
-	remoteByName := map[string]bool{}
-	accountedLocal := map[string]bool{}
-	for _, remote := range remoteSkills {
-		remoteByName[remote.Name] = true
-
-		if skillHasUpstreamUpdate(remote) {
-			b.upstream = append(b.upstream, remote.Name)
-		}
-
-		trackedName := skillIdToName[remote.Id.String()]
-
-		if trackedName != "" {
-			if _, exists := localSkills[trackedName]; !exists {
-				continue
+	for _, r := range rows {
+		switch r.State {
+		case StateAvailable:
+			// Never-installed remote → pull. A tracked skill whose local dir
+			// was deleted also reads as available, but carries a marker —
+			// stay silent on those, matching prior behaviour.
+			if r.Marker == nil {
+				b.toPull = append(b.toPull, r.Name)
 			}
-			accountedLocal[trackedName] = true
-			marker := syncState.Skills[trackedName]
-			remoteHash := strDeref(remote.ContentHash)
-			if marker != nil && marker.ContentHash != "" && remoteHash != "" && marker.ContentHash != remoteHash {
-				b.toUpdate = append(b.toUpdate, trackedName)
+		case StateTracked:
+			if r.LocalDirty {
+				b.toPush = append(b.toPush, r.Name)
 			}
-			continue
-		}
-
-		// No marker. If local dir exists with the same name, the next
-		// sync will surface a conflict — flag it now rather than going
-		// silent like the previous implementation did.
-		if _, exists := localSkills[remote.Name]; exists {
-			accountedLocal[remote.Name] = true
-			b.untracked = append(b.untracked, remote.Name)
-		} else {
-			b.toPull = append(b.toPull, remote.Name)
-		}
-	}
-
-	for name := range localSkills {
-		if accountedLocal[name] {
-			continue
-		}
-		if syncState != nil {
-			if entry := syncState.Skills[name]; entry != nil && (entry.Deleted || entry.MovedTo != "") {
-				// Local dir present but marker is a transfer tombstone.
-				// Don't bucket as "to push" (the marker claims it moved),
-				// but don't hide it either — surface so a wrongly tombstoned
-				// skill is visible and recoverable.
-				b.tombstoned = append(b.tombstoned, name)
-				continue
+			if r.RemoteMoved {
+				b.toUpdate = append(b.toUpdate, r.Name)
 			}
-		}
-		if remoteByName[name] {
-			continue
-		}
-		if ownedElsewhereByName[name] {
-			b.inOtherSkillset = append(b.inOtherSkillset, name)
-			continue
-		}
-		b.toPush = append(b.toPush, name)
-	}
-
-	// Detect locally-modified tracked skills. If a tracked skill's local
-	// content hash differs from the marker hash, it needs pushing — even
-	// though the remote knows about it. The previous implementation only
-	// caught new-skills-never-pushed (not-on-remote) and missed local edits
-	// to skills that already exist on the server.
-	if syncState != nil && hashLocal != nil {
-		for name, entry := range syncState.Skills {
-			if entry == nil || entry.ContentHash == "" {
-				continue
+			if r.UpstreamMoved {
+				b.upstream = append(b.upstream, r.Name)
 			}
-			if _, exists := localSkills[name]; !exists {
-				continue
+		case StateAdoptable, StateConflict:
+			b.untracked = append(b.untracked, r.Name)
+		case StateUntracked:
+			b.toPush = append(b.toPush, r.Name)
+		case StateOrphaned:
+			// Marker but no remote: a never-pushed new skill, or one the
+			// server dropped. Unless the caller owns it in another skillset
+			// (then it's not really gone — it's just out of the active set).
+			if ownedElsewhereByName[r.Name] {
+				b.inOtherSkillset = append(b.inOtherSkillset, r.Name)
+			} else {
+				b.toPush = append(b.toPush, r.Name)
 			}
-			// Already in toPush (not on remote) — don't duplicate
-			if remoteByName[name] || accountedLocal[name] {
-				localHash := hashLocal(localSkills[name])
-				if localHash != entry.ContentHash {
-					b.toPush = append(b.toPush, name)
-				}
-			}
+		case StateDisplaced:
+			b.tombstoned = append(b.tombstoned, r.Name)
 		}
 	}
 

@@ -14,27 +14,32 @@ import (
 
 func TestListStateLabel(t *testing.T) {
 	cases := []struct {
-		state SkillState
-		want  string
+		name string
+		info SkillStateInfo
+		want string
 	}{
-		{StateSynced, "synced"},
-		{StateModified, "modified"},
-		{StateModifiedPending, "modified*"},
-		{StateUntracked, "untracked"},
-		{StateLinked, "untracked"},
-		{StateUntrackedConflict, "untracked"},
-		{StateNotLocal, "—"},
+		{"clean tracked", SkillStateInfo{State: StateTracked}, "synced"},
+		{"local edits", SkillStateInfo{State: StateTracked, LocalDirty: true}, "modified"},
+		{"fork upstream moved", SkillStateInfo{State: StateTracked, Sourced: true, UpstreamMoved: true}, "modified*"},
+		{"fork upstream moved + local edits", SkillStateInfo{State: StateTracked, Sourced: true, LocalDirty: true, UpstreamMoved: true}, "modified*"},
+		// remoteMoved alone ("behind") is not surfaced in list — stays synced,
+		// matching the pre-refactor column which only compared local vs marker.
+		{"remote moved only", SkillStateInfo{State: StateTracked, RemoteMoved: true}, "synced"},
+		{"untracked", SkillStateInfo{State: StateUntracked}, "untracked"},
+		{"adoptable", SkillStateInfo{State: StateAdoptable}, "untracked"},
+		{"conflict", SkillStateInfo{State: StateConflict}, "untracked"},
+		{"available", SkillStateInfo{State: StateAvailable}, "—"},
 	}
 	for _, c := range cases {
-		got := listStateLabel(c.state)
+		got := listStateLabel(c.info)
 		if got != c.want {
-			t.Errorf("listStateLabel(%s) = %q, want %q", c.state, got, c.want)
+			t.Errorf("%s: listStateLabel = %q, want %q", c.name, got, c.want)
 		}
 	}
 }
 
 func TestListStateLabelUnknownDefaultsToDash(t *testing.T) {
-	if got := listStateLabel(SkillState("garbage")); got != "—" {
+	if got := listStateLabel(SkillStateInfo{State: SkillState("garbage")}); got != "—" {
 		t.Errorf("expected dash for unknown state, got %q", got)
 	}
 }

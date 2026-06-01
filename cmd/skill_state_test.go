@@ -10,10 +10,10 @@ import (
 // cross-state of every skill on the machine — both server-known skills
 // and untracked local directories — without any network calls.
 //
-// These tests pin the contract: every state in the enum is exercised at
-// least once, including the two new ones (linked, untracked-conflict)
-// and the modified vs modified-pending split that drives the resolve
-// flow.
+// These tests pin the contract: every presence state in the enum is
+// exercised at least once, and the tracked rows assert the divergence
+// booleans (LocalDirty / RemoteMoved / UpstreamMoved) that replaced the old
+// modified / modified-pending flat values.
 
 func findInfo(t *testing.T, results []SkillStateInfo, name string) SkillStateInfo {
 	t.Helper()
@@ -54,13 +54,18 @@ func TestClassifySynced(t *testing.T) {
 
 	got := classifySkills(remote, local, state, hash)
 	info := findInfo(t, got, "deploy-check")
-	if info.State != StateSynced {
-		t.Errorf("expected synced, got %s", info.State)
+	if info.State != StateTracked {
+		t.Errorf("expected tracked, got %s", info.State)
+	}
+	if info.LocalDirty || info.RemoteMoved || info.UpstreamMoved {
+		t.Errorf("expected a clean tracked skill, got dirty=%v remoteMoved=%v upstreamMoved=%v",
+			info.LocalDirty, info.RemoteMoved, info.UpstreamMoved)
 	}
 }
 
 func TestClassifyModifiedOwned(t *testing.T) {
-	// Owned (no Source). Local has diverged from marker.
+	// Owned (no Source). Local has diverged from marker → LocalDirty on the
+	// own axis (renders "modified").
 	state := &SyncState{
 		Version: 1,
 		Skills: map[string]*SyncEntry{
@@ -73,14 +78,17 @@ func TestClassifyModifiedOwned(t *testing.T) {
 
 	got := classifySkills(remote, local, state, hash)
 	info := findInfo(t, got, "my-skill")
-	if info.State != StateModified {
-		t.Errorf("expected modified, got %s", info.State)
+	if info.State != StateTracked || !info.LocalDirty || info.Sourced || info.UpstreamMoved {
+		t.Errorf("expected tracked+localDirty owned, got state=%s dirty=%v sourced=%v upstreamMoved=%v",
+			info.State, info.LocalDirty, info.Sourced, info.UpstreamMoved)
 	}
 }
 
-func TestClassifyModifiedSourcedResolved(t *testing.T) {
-	// Sourced. User has customised AND resolved against the current
-	// upstream hash. Quiet — modified, not pending.
+func TestClassifySourcedCustomisedOwnAxis(t *testing.T) {
+	// A sourced skill the user has customised, whose matched remote row is
+	// the upstream itself (no separate fork head). The customisation shows
+	// on the own axis (LocalDirty); the fork axis stays quiet because there
+	// is no separate parent head to have moved. Renders "modified".
 	state := &SyncState{
 		Version: 1,
 		Skills: map[string]*SyncEntry{
@@ -98,65 +106,113 @@ func TestClassifyModifiedSourcedResolved(t *testing.T) {
 
 	got := classifySkills(remote, local, state, hash)
 	info := findInfo(t, got, "heartbeat")
-	if info.State != StateModified {
-		t.Errorf("expected modified (sourced, resolved), got %s", info.State)
+	if info.State != StateTracked || !info.Sourced || !info.LocalDirty || info.UpstreamMoved {
+		t.Errorf("expected tracked sourced localDirty, upstream quiet; got state=%s sourced=%v dirty=%v upstreamMoved=%v",
+			info.State, info.Sourced, info.LocalDirty, info.UpstreamMoved)
+	}
+	if listStateLabel(info) != "modified" {
+		t.Errorf("expected list label 'modified', got %q", listStateLabel(info))
 	}
 }
 
-func TestClassifyModifiedPending(t *testing.T) {
-	// Sourced, customised, AND original moved past the resolved hash.
-	// Loud — pending review on next sync.
+func TestClassifyForkUpstreamMoved(t *testing.T) {
+	// A server-side fork (UpstreamContentHash populated = parent's live head)
+	// whose parent has moved past the version the user acknowledged
+	// (upstream_base). This is the unified replacement for modified-pending:
+	// UpstreamMoved is true and the list label is "modified*".
 	state := &SyncState{
 		Version: 1,
 		Skills: map[string]*SyncEntry{
 			"heartbeat": {
-				SkillID:      testUUID("id-1").String(),
-				ContentHash:  "h-marker",
+				SkillID:      testUUID("fork-1").String(),
+				ContentHash:  "h-fork-local",
 				ResolvedHash: "h-upstream-old",
-				Source:       &skillSource{Owner: "chrismdp", Slug: "heartbeat"},
+				Source:       &skillSource{Owner: "chrismdp", Slug: "heartbeat", ID: testUUID("parent-1").String()},
 			},
 		},
 	}
-	remote := []apiSkill{{Id: testUUID("id-1"), Name: "heartbeat", ContentHash: strPtr("h-upstream-new")}}
+	forkParent := testUUID("parent-1")
+	remote := []apiSkill{{
+		Id:                  testUUID("fork-1"),
+		Name:                "heartbeat",
+		ContentHash:         strPtr("h-fork-local"), // own head == base: own axis clean
+		ForkedFrom:          &forkParent,
+		UpstreamContentHash: strPtr("h-upstream-new"), // parent moved
+	}}
 	local := map[string]string{"heartbeat": "/disk/heartbeat"}
-	hash := stubHasher(map[string]string{"/disk/heartbeat": "h-customised"})
+	hash := stubHasher(map[string]string{"/disk/heartbeat": "h-fork-local"})
 
 	got := classifySkills(remote, local, state, hash)
 	info := findInfo(t, got, "heartbeat")
-	if info.State != StateModifiedPending {
-		t.Errorf("expected modified-pending, got %s", info.State)
+	if info.State != StateTracked || !info.UpstreamMoved {
+		t.Errorf("expected tracked + upstreamMoved, got state=%s upstreamMoved=%v", info.State, info.UpstreamMoved)
+	}
+	// Bug #1: clean own axis + upstream moved must NOT read as synced.
+	if info.LocalDirty {
+		t.Errorf("expected clean own axis (no local edits), got LocalDirty=true")
+	}
+	if listStateLabel(info) != "modified*" {
+		t.Errorf("expected list label 'modified*' for a clean fork whose upstream moved, got %q", listStateLabel(info))
 	}
 }
 
-func TestClassifyModifiedPendingMissingResolvedHash(t *testing.T) {
-	// Backwards-compat: existing markers from before this change have
-	// no ResolvedHash field. A sourced skill in that state with a
-	// divergence is treated as modified-pending — the safer default.
-	state := &SyncState{
-		Version: 1,
-		Skills: map[string]*SyncEntry{
-			"heartbeat": {
-				SkillID:     testUUID("id-1").String(),
-				ContentHash: "h-marker",
-				Source:      &skillSource{Owner: "chrismdp", Slug: "heartbeat"},
-				// ResolvedHash deliberately empty.
-			},
-		},
+func TestUpstreamBaseFallsBackToSourceHash(t *testing.T) {
+	// Back-compat: a marker written before ResolvedHash existed records the
+	// acknowledged upstream only in Source.UpstreamContentHash. The unified
+	// accessor must read it, so a fork whose parent matches that base reads
+	// as quiet (no false "upstream moved").
+	m := &SyncEntry{
+		ContentHash: "h-marker",
+		Source:      &skillSource{Owner: "chrismdp", Slug: "heartbeat", UpstreamContentHash: "h-parent"},
 	}
-	remote := []apiSkill{{Id: testUUID("id-1"), Name: "heartbeat", ContentHash: strPtr("h-upstream")}}
-	local := map[string]string{"heartbeat": "/disk/heartbeat"}
-	hash := stubHasher(map[string]string{"/disk/heartbeat": "h-customised"})
-
-	got := classifySkills(remote, local, state, hash)
-	info := findInfo(t, got, "heartbeat")
-	if info.State != StateModifiedPending {
-		t.Errorf("expected modified-pending for missing ResolvedHash, got %s", info.State)
+	r := &apiSkill{UpstreamContentHash: strPtr("h-parent")}
+	if got := markerUpstreamBase(m); got != "h-parent" {
+		t.Errorf("expected upstream_base to fall back to Source.UpstreamContentHash, got %q", got)
+	}
+	if skillUpstreamMoved(m, r) {
+		t.Errorf("expected upstream quiet when parent head equals the fallback base")
+	}
+	r.UpstreamContentHash = strPtr("h-parent-moved")
+	if !skillUpstreamMoved(m, r) {
+		t.Errorf("expected upstream moved when parent head differs from the fallback base")
 	}
 }
 
-func TestClassifyLinked(t *testing.T) {
-	// Local dir present, no marker, server has a skill with the same
-	// name and matching bytes — sync will silently link.
+func TestAddForceAdvancesUpstreamBase(t *testing.T) {
+	// The spec's named "add --force ResolvedHash gap": "take theirs" must
+	// advance BOTH base and upstream_base to the upstream version, so both
+	// axes are provably clean. The old --force path advanced only
+	// Source.UpstreamContentHash and left a stale ResolvedHash, so a fork
+	// kept reading "upstream available" until the next push.
+	parentHead := "h-upstream-current"
+	fork := &apiSkill{UpstreamContentHash: strPtr(parentHead)}
+
+	// Marker as the OLD --force path left it: customised acknowledgement
+	// (ResolvedHash) stale at an earlier upstream, Source updated only.
+	buggy := &SyncEntry{
+		ContentHash:  parentHead, // own copy is the taken bytes — own axis clean
+		ResolvedHash: "h-upstream-old",
+		Source:       &skillSource{Owner: "alice", Slug: "thing", UpstreamContentHash: parentHead},
+	}
+	if !skillUpstreamMoved(buggy, fork) {
+		t.Fatal("test premise broken: the stale-ResolvedHash marker should read upstream-moved")
+	}
+
+	// Marker as the FIXED --force path leaves it: ResolvedHash advanced to
+	// the taken upstream too. Both axes clean → no false "upstream available".
+	fixed := &SyncEntry{
+		ContentHash:  parentHead,
+		ResolvedHash: parentHead,
+		Source:       &skillSource{Owner: "alice", Slug: "thing", UpstreamContentHash: parentHead},
+	}
+	if skillUpstreamMoved(fixed, fork) {
+		t.Error("after add --force advances ResolvedHash, the fork must read clean, not upstream-moved")
+	}
+}
+
+func TestClassifyAdoptable(t *testing.T) {
+	// Local dir present, no marker, server has a skill with the same name
+	// and matching bytes — sync will silently link (adoptable).
 	state := &SyncState{Version: 1, Skills: map[string]*SyncEntry{}}
 	remote := []apiSkill{{Id: testUUID("id-1"), Name: "drive-by", ContentHash: strPtr("h-match")}}
 	local := map[string]string{"drive-by": "/disk/drive-by"}
@@ -164,14 +220,14 @@ func TestClassifyLinked(t *testing.T) {
 
 	got := classifySkills(remote, local, state, hash)
 	info := findInfo(t, got, "drive-by")
-	if info.State != StateLinked {
-		t.Errorf("expected linked, got %s", info.State)
+	if info.State != StateAdoptable {
+		t.Errorf("expected adoptable, got %s", info.State)
 	}
 }
 
-func TestClassifyUntrackedConflict(t *testing.T) {
-	// Local dir present, no marker, server has a skill with the same
-	// name but the bytes differ — surfaces via the conflict UX.
+func TestClassifyConflict(t *testing.T) {
+	// Local dir present, no marker, server has a skill with the same name
+	// but the bytes differ — surfaces via the conflict UX.
 	state := &SyncState{Version: 1, Skills: map[string]*SyncEntry{}}
 	remote := []apiSkill{{Id: testUUID("id-1"), Name: "drive-by", ContentHash: strPtr("h-server")}}
 	local := map[string]string{"drive-by": "/disk/drive-by"}
@@ -179,8 +235,8 @@ func TestClassifyUntrackedConflict(t *testing.T) {
 
 	got := classifySkills(remote, local, state, hash)
 	info := findInfo(t, got, "drive-by")
-	if info.State != StateUntrackedConflict {
-		t.Errorf("expected untracked-conflict, got %s", info.State)
+	if info.State != StateConflict {
+		t.Errorf("expected conflict, got %s", info.State)
 	}
 }
 
@@ -207,8 +263,8 @@ func TestClassifyNotLocal(t *testing.T) {
 
 	got := classifySkills(remote, local, state, hash)
 	info := findInfo(t, got, "available")
-	if info.State != StateNotLocal {
-		t.Errorf("expected not-local, got %s", info.State)
+	if info.State != StateAvailable {
+		t.Errorf("expected available, got %s", info.State)
 	}
 }
 
@@ -230,8 +286,8 @@ func TestClassifyMatchesByIDNotName(t *testing.T) {
 	// Result keyed under the local dir name (old-name). The Remote
 	// pointer reflects the renamed server skill.
 	info := findInfo(t, got, "old-name")
-	if info.State != StateSynced {
-		t.Errorf("expected synced after server-side rename, got %s", info.State)
+	if info.State != StateTracked || info.LocalDirty {
+		t.Errorf("expected clean tracked after server-side rename, got state=%s dirty=%v", info.State, info.LocalDirty)
 	}
 	if info.Remote == nil || info.Remote.Name != "new-name" {
 		t.Errorf("expected Remote.Name='new-name', got %+v", info.Remote)

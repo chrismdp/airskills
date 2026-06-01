@@ -29,7 +29,8 @@ func TestClassifyForStatusFlagsTrackedOnServerNoMarker(t *testing.T) {
 	}
 	state := &SyncState{Skills: map[string]*SyncEntry{}}
 
-	got := classifyForStatus(remote, local, state, nil, nil)
+	hash := stubHasher(map[string]string{"/agent/skills/foo": "local-bytes"})
+	got := projectStatusBuckets(classifySkills(remote, local, state, hash), nil)
 	if !reflect.DeepEqual(got.untracked, []string{"foo"}) {
 		t.Fatalf("untracked = %v, want [foo]", got.untracked)
 	}
@@ -56,7 +57,16 @@ func TestClassifyForStatusBuckets(t *testing.T) {
 		"tracked-changed": {SkillID: testUUID("id-tracked-changed").String(), ContentHash: "h-old"},
 	}}
 
-	got := classifyForStatus(remote, local, state, nil, nil)
+	// On-disk hashes: clean tracked skills match their markers (no local
+	// edits → no toPush); tracked-changed is clean locally but its remote
+	// moved (→ toUpdate).
+	hash := stubHasher(map[string]string{
+		"/agent/skills/tracked-clean":   "h-clean",
+		"/agent/skills/tracked-changed": "h-old",
+		"/agent/skills/untracked-skill": "h-local",
+		"/agent/skills/local-only":      "h-local",
+	})
+	got := projectStatusBuckets(classifySkills(remote, local, state, hash), nil)
 	if !reflect.DeepEqual(got.toPush, []string{"local-only"}) {
 		t.Errorf("toPush = %v, want [local-only]", got.toPush)
 	}
@@ -82,12 +92,12 @@ func TestClassifyForStatusDoesNotPushTrackedLocalAlias(t *testing.T) {
 		"home": {SkillID: testUUID("id-home").String(), ContentHash: "h-home"},
 	}}
 
-	got := classifyForStatus(remote, local, state, func(path string) string {
+	got := projectStatusBuckets(classifySkills(remote, local, state, func(path string) string {
 		if path != "/agent/skills/home" {
 			t.Fatalf("unexpected hash path %q", path)
 		}
 		return "h-home"
-	}, nil)
+	}), nil)
 	if len(got.toPush) != 0 {
 		t.Fatalf("toPush = %v, want empty for tracked skill matched by id under a different remote name", got.toPush)
 	}
@@ -104,7 +114,8 @@ func TestClassifyForStatusDoesNotPushTombstonedLocalSkill(t *testing.T) {
 		"home": {Deleted: true, MovedTo: "parsons-home/home"},
 	}}
 
-	got := classifyForStatus(nil, local, state, nil, nil)
+	hash := stubHasher(map[string]string{"/agent/skills/home": "h-home"})
+	got := projectStatusBuckets(classifySkills(nil, local, state, hash), nil)
 	if len(got.toPush) != 0 {
 		t.Fatalf("toPush = %v, want empty for tombstoned moved/deleted marker", got.toPush)
 	}
@@ -138,7 +149,12 @@ func TestClassifyForStatusBucketsInOtherSkillset(t *testing.T) {
 	}}
 	ownedElsewhere := map[string]bool{"in-other": true}
 
-	got := classifyForStatus(remote, local, state, nil, ownedElsewhere)
+	hash := stubHasher(map[string]string{
+		"/agent/skills/active-skill": "ha",
+		"/agent/skills/in-other":     "hb",
+		"/agent/skills/never-pushed": "h-new",
+	})
+	got := projectStatusBuckets(classifySkills(remote, local, state, hash), ownedElsewhere)
 	if !reflect.DeepEqual(got.inOtherSkillset, []string{"in-other"}) {
 		t.Errorf("inOtherSkillset = %v, want [in-other]", got.inOtherSkillset)
 	}

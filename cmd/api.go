@@ -163,18 +163,12 @@ func testUUID(s string) openapi_types.UUID {
 	return uuid.NewSHA1(uuid.Nil, []byte(s))
 }
 
-// skillHasUpstreamUpdate reports whether a forked skill's pinned upstream
-// hash has drifted from the parent's live hash. Free function rather
-// than a method because apiSkill is an alias for the codegen'd
-// apitypes.Skill — methods can't hang off a type alias to an
-// imported type.
-func skillHasUpstreamUpdate(s apiSkill) bool {
-	if s.ForkedFrom == nil || s.UpstreamContentHash == nil || s.ContentHash == nil {
-		return false
-	}
-	return *s.ContentHash != "" && *s.UpstreamContentHash != "" &&
-		*s.ContentHash != *s.UpstreamContentHash
-}
+// The old skillHasUpstreamUpdate lived here. It compared a fork's own
+// content hash against its parent's live hash — a comparison that is always
+// true for a fork (a fork's content always differs from its parent, that's
+// what diverged means), so it could not distinguish "I customised" from "the
+// parent moved" (spec bug #2). The correct signal is skillUpstreamMoved in
+// cmd/skill_state.go: parent_head ≠ upstream_base.
 
 // pullUpstream tells the server to advance this skill's pin to the parent's latest.
 func (c *apiClient) pullUpstream(skillID string) (*apiSkill, error) {

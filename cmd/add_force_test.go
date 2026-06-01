@@ -39,9 +39,11 @@ func TestAddCmdHasForceFlag(t *testing.T) {
 // the listing API.
 func TestPendingReviewSummaryUsesAddForce(t *testing.T) {
 	pending := []SkillStateInfo{{
-		Name:  "my-fork",
-		State: StateModifiedPending,
-		Local: true,
+		Name:          "my-fork",
+		State:         StateTracked,
+		Local:         true,
+		Sourced:       true,
+		UpstreamMoved: true,
 		Marker: &SyncEntry{
 			Source: &skillSource{Owner: "alice", Slug: "my-fork"},
 		},

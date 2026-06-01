@@ -320,8 +320,8 @@ func TestWalkBrokenRefsDetectsUnknown(t *testing.T) {
 func TestRenderSyncStateReportSummarisesSynced(t *testing.T) {
 	var buf strings.Builder
 	renderSyncStateReport(&buf, []SkillStateInfo{
-		{Name: "a", State: StateSynced},
-		{Name: "b", State: StateSynced},
+		{Name: "a", State: StateTracked},
+		{Name: "b", State: StateTracked},
 	})
 	out := buf.String()
 	if !strings.Contains(out, "2 synced") {
@@ -332,10 +332,12 @@ func TestRenderSyncStateReportSummarisesSynced(t *testing.T) {
 func TestRenderSyncStateReportSurfacesNotableStates(t *testing.T) {
 	var buf strings.Builder
 	renderSyncStateReport(&buf, []SkillStateInfo{
-		{Name: "owned-edited", State: StateModified},
+		{Name: "owned-edited", State: StateTracked, LocalDirty: true},
 		{
-			Name:  "sourced-pending",
-			State: StateModifiedPending,
+			Name:          "sourced-pending",
+			State:         StateTracked,
+			Sourced:       true,
+			UpstreamMoved: true,
 			Marker: &SyncEntry{
 				Version: "1.2.0",
 				Source:  &skillSource{Owner: "chrismdp", Slug: "sourced-pending"},
@@ -345,15 +347,15 @@ func TestRenderSyncStateReportSurfacesNotableStates(t *testing.T) {
 		{Name: "drive-by", State: StateUntracked},
 		{
 			Name:   "matches-server",
-			State:  StateLinked,
+			State:  StateAdoptable,
 			Remote: &apiSkill{Version: "1.0.8"},
 		},
 		{
 			Name:   "name-collides",
-			State:  StateUntrackedConflict,
+			State:  StateConflict,
 			Remote: &apiSkill{Version: "2.1.0"},
 		},
-		{Name: "elsewhere", State: StateNotLocal},
+		{Name: "elsewhere", State: StateAvailable},
 	})
 	out := buf.String()
 	for _, want := range []string{

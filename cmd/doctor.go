@@ -43,10 +43,10 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 	// at an old version.
 	renderEnvOverrides(os.Stdout)
 
-	// Sync state: classify every known skill and surface any that are
-	// in a non-trivial state (modified, modified-pending, untracked,
-	// linked, untracked-conflict, not-local). Informational only —
-	// exit code stays gated on broken refs.
+	// Sync state: classify every known skill and surface any that are in a
+	// non-trivial state (local edits, upstream moved, untracked, adoptable,
+	// conflict, available). Informational only — exit code stays gated on
+	// broken refs.
 	if states, err := gatherSyncState(); err == nil {
 		renderSyncStateReport(os.Stdout, states)
 		renderPendingConflictReport(os.Stdout, pendingConflictNames())
@@ -140,41 +140,48 @@ func renderSyncStateReport(w io.Writer, states []SkillStateInfo) {
 	bang := red("!")
 	syncedCount := 0
 	for _, s := range sorted {
-		if s.State == StateSynced {
-			syncedCount++
+		// Tracked skills: the divergence booleans drive the line, not a flat
+		// state value. A clean, non-moved tracked skill collapses into the
+		// synced summary; everything else names its cause and action.
+		if s.State == StateTracked {
+			switch {
+			case s.UpstreamMoved:
+				// A fork whose upstream moved past what the user acknowledged.
+				// Shown whether or not there are also local edits — the cell
+				// the old encoding dropped to "synced" (spec bug #1).
+				source := s.Marker.Source
+				fromVer := s.Marker.Version
+				toVer := ""
+				if s.Remote != nil {
+					toVer = s.Remote.Version
+				}
+				versionTransition := versionMoved(fromVer, toVer)
+				fmt.Fprintf(w, "  %s %s — customised copy of %s/%s. Original%s since you resolved. Review and 'airskills resolve %s', or 'pull --force' to drop your customised copy.\n",
+					bang, s.Name, source.Owner, source.Slug, versionTransition, s.Name)
+			case s.LocalDirty && s.Sourced:
+				// Sourced + locally modified — unpublished customisations to a
+				// sourced skill.
+				fmt.Fprintf(w, "  %s %s — customised copy of %s/%s. Local has unpublished changes; run 'airskills push' to publish.\n",
+					bang, s.Name, s.Marker.Source.Owner, s.Marker.Source.Slug)
+			case s.LocalDirty:
+				fmt.Fprintf(w, "  %s %s — local has unpublished changes. Run 'airskills push' to publish.\n",
+					bang, s.Name)
+			default:
+				syncedCount++
+			}
 			continue
 		}
 		switch s.State {
-		case StateModified:
-			if s.Marker != nil && s.Marker.Source != nil {
-				// Sourced + already resolved + locally modified — the user
-				// has unpublished customisations to a sourced skill.
-				fmt.Fprintf(w, "  %s %s — customised copy of %s/%s. Local has unpublished changes; run 'airskills push' to publish.\n",
-					bang, s.Name, s.Marker.Source.Owner, s.Marker.Source.Slug)
-			} else {
-				fmt.Fprintf(w, "  %s %s — local has unpublished changes. Run 'airskills push' to publish.\n",
-					bang, s.Name)
-			}
-		case StateModifiedPending:
-			source := s.Marker.Source
-			fromVer := s.Marker.Version
-			toVer := ""
-			if s.Remote != nil {
-				toVer = s.Remote.Version
-			}
-			versionTransition := versionMoved(fromVer, toVer)
-			fmt.Fprintf(w, "  %s %s — customised copy of %s/%s. Original%s since you resolved. Review and 'airskills resolve %s', or 'pull --force' to drop your customised copy.\n",
-				bang, s.Name, source.Owner, source.Slug, versionTransition, s.Name)
 		case StateUntracked:
 			fmt.Fprintf(w, "  %s %s — local exists, not tracked. No matching skill on the server.\n",
 				bang, s.Name)
-		case StateLinked:
+		case StateAdoptable:
 			fmt.Fprintf(w, "  %s %s — local exists, not tracked. Original%s matches bytes — next sync will link.\n",
 				bang, s.Name, versionLabel(s.Remote))
-		case StateUntrackedConflict:
+		case StateConflict:
 			fmt.Fprintf(w, "  %s %s — local exists, not tracked. Original%s differs — next sync will surface conflict.\n",
 				bang, s.Name, versionLabel(s.Remote))
-		case StateNotLocal:
+		case StateAvailable:
 			fmt.Fprintf(w, "  %s %s — on server, not installed here ('airskills sync' or 'airskills add').\n",
 				bang, s.Name)
 		}

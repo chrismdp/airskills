@@ -36,7 +36,10 @@ func printPendingReviewSummary(_ bool) {
 	}
 	var pending []SkillStateInfo
 	for _, s := range states {
-		if s.State == StateModifiedPending {
+		// Pending review = a fork whose upstream has moved past what the user
+		// last acknowledged. UpstreamMoved is the unified signal that
+		// replaced the modified-pending state.
+		if s.UpstreamMoved {
 			pending = append(pending, s)
 		}
 	}

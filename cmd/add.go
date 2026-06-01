@@ -216,6 +216,14 @@ local copy is backed up to ~/.airskills/undo/<timestamp>/ first.`,
 				entry.Source.UpstreamSkillID = result.ID
 				entry.Source.UpstreamContentHash = newHash
 				entry.Source.UpstreamVersion = result.Version
+				// "Take theirs" advances BOTH axes: base (ContentHash, above)
+				// AND upstream_base. The canonical upstream_base field is
+				// ResolvedHash; without setting it, the unified upstreamMoved
+				// signal would keep reading "upstream available" against the
+				// stale Source hash until the next push (spec's named add
+				// --force ResolvedHash gap). Setting it makes both axes
+				// provably clean — clean own copy, acknowledged upstream.
+				entry.ResolvedHash = newHash
 				if entry.SkillID == "" {
 					entry.SkillID = result.ID
 				}

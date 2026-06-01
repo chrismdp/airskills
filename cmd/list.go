@@ -76,38 +76,49 @@ Use --deleted to show soft-deleted skills.`,
 		syncState := loadSyncState()
 		hashLocal := func(p string) string { return computeMerkleHash(readSkillFiles(p)) }
 		states := classifySkills(skills, localNames, syncState, hashLocal)
-		stateByName := map[string]SkillState{}
+		infoByName := map[string]SkillStateInfo{}
 		for _, st := range states {
-			stateByName[st.Name] = st.State
+			infoByName[st.Name] = st
 		}
 
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 		fmt.Fprintln(w, "NAME\tDESCRIPTION\tVERSION\tSTATE")
 		for _, s := range skills {
-			state := stateByName[s.Name]
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", s.Name, truncateDescription(strDeref(s.Description), 60), s.Version, listStateLabel(state))
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", s.Name, truncateDescription(strDeref(s.Description), 60), s.Version, listStateLabel(infoByName[s.Name]))
 		}
 		w.Flush()
 		return nil
 	},
 }
 
-// listStateLabel maps a classifier SkillState to the short label that
-// appears in `airskills list`'s STATE column. It compresses transient
-// pull-time states (linked, untracked-conflict) back into "untracked"
-// because — from the perspective of a user reading list — those are
-// just untracked dirs the next sync will resolve.
-func listStateLabel(s SkillState) string {
-	switch s {
-	case StateSynced:
-		return "synced"
-	case StateModified:
-		return "modified"
-	case StateModifiedPending:
-		return "modified*"
-	case StateUntracked, StateLinked, StateUntrackedConflict:
+// listStateLabel maps one unified-model row to the short label that appears
+// in `airskills list`'s STATE column. It projects the presence state and the
+// divergence booleans onto the same five labels the column always used:
+//
+//   - "synced"    — tracked, no local edits and no upstream move
+//   - "modified"  — tracked with local edits not yet pushed
+//   - "modified*" — a fork whose upstream moved past what you acknowledged
+//     (shown whether or not you also have local edits — this is the case the
+//     old 1-D encoding could not name, so `list` used to say "synced" while
+//     `status` said "upstream": spec bug #1)
+//   - "untracked" — presence states with no marker (untracked / adoptable /
+//     conflict), which a user reading `list` just sees as untracked dirs the
+//     next sync resolves
+//   - "—"         — server-only (available)
+func listStateLabel(info SkillStateInfo) string {
+	switch info.State {
+	case StateTracked:
+		switch {
+		case info.UpstreamMoved:
+			return "modified*"
+		case info.LocalDirty:
+			return "modified"
+		default:
+			return "synced"
+		}
+	case StateUntracked, StateAdoptable, StateConflict:
 		return "untracked"
-	case StateNotLocal:
+	case StateAvailable:
 		return "—"
 	}
 	return "—"
