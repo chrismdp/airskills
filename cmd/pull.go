@@ -132,6 +132,19 @@ func runPull(cmd *cobra.Command, args []string) error {
 	if scanned, scanErr := scanSkillsFromAgents(); scanErr == nil {
 		propagatePartialRenames(scanned, syncState)
 	}
+	// Detect files the user hand-deleted (present on the remote baseline,
+	// missing from a local copy) BEFORE the mirror, which would otherwise
+	// resurrect them from a sibling agent dir. Interactive terminals get a
+	// prompt; headless runs keep the files and print a hint (never destroy
+	// without confirmation). Requires the server baseline, so logged-in
+	// only. This same call covers `sync` (which runs runPull).
+	if loggedIn {
+		decision := deletionKeep
+		if isTTY {
+			decision = deletionAsk
+		}
+		resolveIntraSkillDeletions(client, syncState, decision, nil)
+	}
 	mirrorConflictSet := map[string]bool{}
 	_, mirrorConflicts, restoreHints := mirrorLocalSkills(syncState)
 	printMirrorConflicts(mirrorConflicts)

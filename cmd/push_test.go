@@ -346,6 +346,11 @@ func runPushConflictScenario(t *testing.T, cmdName string, source *skillSource) 
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/skills/"+skillID+"/raw":
 			w.Header().Set("Content-Type", "text/plain")
 			fmt.Fprint(w, "---\nname: borrowed\ndescription: test\n---\n\nremote body\n")
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/skills/"+skillID:
+			// Manifest for the intra-skill deletion resolver: same file set
+			// as local (just SKILL.md), so it finds no deletion and no-ops.
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{"id":%q,"files":[{"path":"SKILL.md","size":10}]}`, skillID)
 		default:
 			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
 		}

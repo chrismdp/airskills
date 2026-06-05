@@ -746,6 +746,34 @@ func (c *apiClient) getSkill(id string) (*apiSkill, error) {
 	return &skill, nil
 }
 
+// getSkillFilePaths returns the relative paths of every file the server
+// holds for a skill — the remote manifest, paths only (no file bodies).
+// GET /api/v1/skills/:id returns a SkillDetail whose `files` array carries
+// path + size for each stored file. The deletion resolver uses this as the
+// baseline to spot files the user removed locally, far cheaper than
+// downloading the whole archive.
+func (c *apiClient) getSkillFilePaths(id string) ([]string, error) {
+	body, err := c.get(fmt.Sprintf("/api/v1/skills/%s", id))
+	if err != nil {
+		return nil, err
+	}
+	var detail struct {
+		Files []struct {
+			Path string `json:"path"`
+		} `json:"files"`
+	}
+	if err := json.Unmarshal(body, &detail); err != nil {
+		return nil, err
+	}
+	paths := make([]string, 0, len(detail.Files))
+	for _, f := range detail.Files {
+		if f.Path != "" {
+			paths = append(paths, f.Path)
+		}
+	}
+	return paths, nil
+}
+
 // getVersionHistory fetches the commit history for a skill.
 func (c *apiClient) getVersionHistory(skillID string) ([]apitypes.SkillCommit, error) {
 	body, err := c.get(fmt.Sprintf("/api/v1/skills/%s/versions", skillID))
@@ -776,10 +804,10 @@ func (c *apiClient) getVersionContent(skillID, commitID string) (map[string][]by
 // already exists in the caller's user-or-org-inherited skill set.
 // Push surfaces this with a hint pointing at `airskills mv`.
 type SkillConflictError struct {
-	Slug             string // the slug that conflicted (the one the user tried to create)
-	Source           string // "user" or "org" — where the conflicting skill lives
-	OwnerOrOrgSlug  string  // org slug when Source=="org"; empty otherwise
-	ServerMessage    string // verbatim server `message` if present
+	Slug           string // the slug that conflicted (the one the user tried to create)
+	Source         string // "user" or "org" — where the conflicting skill lives
+	OwnerOrOrgSlug string // org slug when Source=="org"; empty otherwise
+	ServerMessage  string // verbatim server `message` if present
 }
 
 func (e *SkillConflictError) Error() string {
@@ -873,9 +901,9 @@ func parseSkillConflict(apiErr error) *SkillConflictError {
 		Error        string `json:"error"`
 		Message      string `json:"message"`
 		ConflictWith *struct {
-			Source           string `json:"source"`
-			OwnerOrOrgSlug  string `json:"owner_or_org_slug"`
-			Slug             string `json:"slug"`
+			Source         string `json:"source"`
+			OwnerOrOrgSlug string `json:"owner_or_org_slug"`
+			Slug           string `json:"slug"`
 		} `json:"conflict_with"`
 	}
 	if err := json.Unmarshal([]byte(msg[idx:]), &body); err != nil || body.ConflictWith == nil {

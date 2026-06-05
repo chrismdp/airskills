@@ -191,6 +191,21 @@ config).`,
 			if scanned, scanErr := scanSkillsFromAgents(); scanErr == nil {
 				propagatePartialRenames(scanned, syncState)
 			}
+			// Resolve hand-deleted files before the mirror resurrects them
+			// from a sibling agent dir (see resolveIntraSkillDeletions).
+			// --force removes permanently; a terminal prompts; headless keeps
+			// + hints. In a `sync` run this branch is skipped (syncActiveConflicts
+			// is non-nil), so the pull-phase call above handles it once.
+			deletionDec := deletionKeep
+			if pushForce {
+				deletionDec = deletionRemove
+			} else if isTTY {
+				deletionDec = deletionAsk
+			}
+			// Scope deletion handling to the named skills on a scoped push,
+			// so `push <skill> --force` can never remove files from a skill
+			// the user didn't name. args is nil for a full push (all skills).
+			resolveIntraSkillDeletions(client, syncState, deletionDec, args)
 			_, mirrorConflicts, restoreHints := mirrorLocalSkills(syncState)
 			printMirrorConflicts(mirrorConflicts)
 			printMirrorRestoreHints(restoreHints)

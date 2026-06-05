@@ -16,8 +16,8 @@ var rmKeepLocal bool
 var rmPending bool
 
 var rmCmd = &cobra.Command{
-	Use:   "rm <name>",
-	Short: "Remove a skill locally and on the server",
+	Use:   "rm <name> | <name>/<path>",
+	Short: "Remove a skill, or a single file within a skill, locally and on the server",
 	Long: `Removes a skill from this machine and from your airskills.ai account.
 
 Use this instead of 'rm -rf ~/.claude/skills/<name>'. Hand-deleting an
@@ -30,12 +30,28 @@ By default deletes both the local directory (across all detected agents)
 and the remote skill, then drops the entry from sync state. Use --keep-remote
 to delete only locally, or --keep-local to delete only on the server.
 
+FILE-LEVEL REMOVAL: pass a path inside a skill — 'airskills rm triage/scripts/foo.sh'
+— to remove one file rather than the whole skill. Hand-deleting a file then
+pushing does NOT work: the mirror resurrects it from any sibling agent dir
+that still has a copy. This command deletes the file from EVERY detected agent
+copy first (so the mirror has nothing to copy back), then pushes the skill so
+the server and the marker drop it too. Use --keep-remote to remove the file
+only locally without pushing. SKILL.md cannot be removed this way — to delete
+the whole skill, run 'airskills rm <skill>'.
+
 Use --pending to discard a parked pending-conflict copy (left in temp by a
 collision during 'add' or 'sync') WITHOUT touching the installed skill or the
 server. This is the safe way to clear an "N pending conflict" status warning
 when a real skill of the same name is installed.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// Path form ('<skill>/<file>') removes a single file within a skill
+		// rather than the whole skill. Branch before validateSkillName, which
+		// rejects the '/' a path form requires.
+		if strings.Contains(args[0], "/") {
+			return runRemoveSkillFile(args[0])
+		}
+
 		name := args[0]
 		if err := validateSkillName(name); err != nil {
 			return err
@@ -136,6 +152,77 @@ func init() {
 	rootCmd.AddCommand(rmCmd)
 }
 
+// runRemoveSkillFile handles the path form of `airskills rm` —
+// `<skill>/<relpath>` — which removes a single file from a skill rather
+// than the whole skill. It deletes the file from every detected agent copy
+// (defeating the sync mirror, which would otherwise resurrect it from a
+// sibling dir) and then pushes the skill so the server and marker drop it
+// too. --keep-remote stops before the push for a local-only removal.
+func runRemoveSkillFile(arg string) error {
+	parts := strings.SplitN(arg, "/", 2)
+	name, relPath := parts[0], parts[1]
+
+	if err := validateSkillName(name); err != nil {
+		return err
+	}
+	if err := validateSkillFileRelPath(relPath); err != nil {
+		return err
+	}
+	if rmKeepLocal {
+		return fmt.Errorf("--keep-local is not supported for file-level removal; a file is removed locally and the change pushed (use --keep-remote to skip the push)")
+	}
+	if rmPending {
+		return fmt.Errorf("--pending applies to whole-skill conflict copies, not single files")
+	}
+
+	// The skill must be installed locally — file removal operates on the
+	// working tree, then pushes it.
+	localSkills, _ := scanSkillsFromAgents()
+	if _, ok := localSkills[name]; !ok {
+		return fmt.Errorf("no skill named %q found locally", name)
+	}
+
+	if !rmForce {
+		scope := "all detected agent copies, then push the change"
+		if rmKeepRemote {
+			scope = "all detected agent copies (local only; not pushed)"
+		}
+		fmt.Printf("Remove %s from skill %q in %s? [y/N] ", relPath, name, scope)
+		reader := bufio.NewReader(os.Stdin)
+		answer, _ := reader.ReadString('\n')
+		if strings.TrimSpace(strings.ToLower(answer)) != "y" {
+			fmt.Println("Aborted.")
+			return nil
+		}
+	}
+
+	removed, err := removeLocalSkillFile(name, relPath)
+	if err != nil {
+		return err
+	}
+	for _, p := range removed {
+		fmt.Printf("  %s removed %s\n", green("-"), p)
+	}
+
+	if rmKeepRemote {
+		fmt.Printf("  %s removed locally only. Run 'airskills push %s' to drop it on the server too.\n", yellow("!"), name)
+		return nil
+	}
+
+	// Push the now-smaller skill so the server and marker hash drop the file.
+	// The mirror inside push sees every agent copy already missing the file,
+	// so it finds a single consistent version and won't restore anything.
+	fmt.Printf("  %s pushing %s to drop the file on the server...\n", dim("·"), name)
+	// The user has already decided to delete; stop the push's deletion
+	// resolver from spotting the now-missing file and offering to restore it.
+	suppressDeletionPrompt = true
+	defer func() { suppressDeletionPrompt = false }()
+	if err := pushCmd.RunE(pushCmd, []string{name}); err != nil {
+		return fmt.Errorf("file removed locally, but push failed: %w\n  Run 'airskills push %s' to finish dropping it on the server.", err, name)
+	}
+	return nil
+}
+
 // discardPendingConflict removes only the parked conflict copies for name
 // (the dirs under /tmp/airskills-conflicts*). It never touches the
 // installed skill or the server, so it is safe to recommend even when a
@@ -177,6 +264,107 @@ func removePendingConflictDirs(name string) ([]string, error) {
 		removed = append(removed, dir)
 	}
 	return removed, nil
+}
+
+// validateSkillFileRelPath checks a path-form argument to `airskills rm`
+// (the part after `<skill>/`). It must be a safe relative path inside the
+// skill directory — never absolute, never escaping via "..", never empty,
+// and never the SKILL.md manifest (removing that silently breaks the skill;
+// use `airskills rm <skill>` to delete the whole thing).
+func validateSkillFileRelPath(relPath string) error {
+	if relPath == "" {
+		return fmt.Errorf("file path within the skill is required")
+	}
+	if filepath.IsAbs(relPath) {
+		return fmt.Errorf("file path %q must be relative to the skill directory", relPath)
+	}
+	clean := filepath.ToSlash(filepath.Clean(relPath))
+	if clean == ".." || strings.HasPrefix(clean, "../") || strings.Contains(clean, "/../") {
+		return fmt.Errorf("file path %q must not escape the skill directory", relPath)
+	}
+	if clean == "." {
+		return fmt.Errorf("file path %q is not a file within the skill", relPath)
+	}
+	if clean == "SKILL.md" {
+		return fmt.Errorf("refusing to remove the skill manifest SKILL.md — to delete the whole skill run: airskills rm <skill>")
+	}
+	return nil
+}
+
+// removeLocalSkillFile deletes a single file (relPath) from the named skill
+// in every detected agent directory, then prunes any parent directories the
+// deletion left empty (up to, but never including, the skill root).
+//
+// Deleting from EVERY agent copy is the whole point: the sync mirror fans a
+// skill back out from any sibling agent dir that still has a copy, so a
+// hand-`rm` of one file in one dir is silently resurrected. Removing the
+// file everywhere first gives the mirror nothing to copy back, and the
+// follow-on push drops it from the server and updates the marker hash.
+//
+// Returns the absolute paths actually removed. Errors if the file existed in
+// no agent copy (so the caller can tell the user nothing happened) or if the
+// path is unsafe.
+func removeLocalSkillFile(name, relPath string) ([]string, error) {
+	if err := validateSkillName(name); err != nil {
+		return nil, err
+	}
+	if err := validateSkillFileRelPath(relPath); err != nil {
+		return nil, err
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, err
+	}
+
+	clean := filepath.FromSlash(filepath.Clean(relPath))
+
+	var removed []string
+	seen := map[string]bool{}
+
+	for _, a := range agents {
+		globalPath := resolveGlobalDir(home, a.GlobalDir)
+		if seen[globalPath] {
+			continue
+		}
+		seen[globalPath] = true
+
+		skillDir := filepath.Join(globalPath, name)
+		target := filepath.Join(skillDir, clean)
+		info, statErr := os.Stat(target)
+		if statErr != nil || info.IsDir() {
+			continue
+		}
+		if err := os.Remove(target); err != nil {
+			return removed, fmt.Errorf("removing %s: %w", target, err)
+		}
+		removed = append(removed, target)
+		pruneEmptyParents(skillDir, filepath.Dir(target))
+	}
+
+	if len(removed) == 0 {
+		return nil, fmt.Errorf("no file %q found in any installed copy of skill %q", relPath, name)
+	}
+	return removed, nil
+}
+
+// pruneEmptyParents removes now-empty directories from `dir` upward, stopping
+// before `root` (the skill directory, which is never removed). Best-effort:
+// stops at the first non-empty dir or any error.
+func pruneEmptyParents(root, dir string) {
+	for {
+		if dir == root || !strings.HasPrefix(dir, root+string(os.PathSeparator)) {
+			return
+		}
+		entries, err := os.ReadDir(dir)
+		if err != nil || len(entries) > 0 {
+			return
+		}
+		if err := os.Remove(dir); err != nil {
+			return
+		}
+		dir = filepath.Dir(dir)
+	}
 }
 
 // validateSkillName rejects empty strings, path separators, and traversal

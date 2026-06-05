@@ -70,6 +70,105 @@ func TestRemoveLocalSkillRefusesPathTraversal(t *testing.T) {
 	}
 }
 
+func TestRemoveLocalSkillFileRemovesAcrossAgents(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
+
+	// Same multi-file skill installed in two agent dirs. The whole point of
+	// file-level rm is that deleting from one copy alone is futile — the
+	// mirror fan-out resurrects it from any sibling that still has the file.
+	claudeSkill := filepath.Join(dir, ".claude", "skills", "triage")
+	cursorSkill := filepath.Join(dir, ".cursor", "skills", "triage")
+	for _, d := range []string{claudeSkill, cursorSkill} {
+		if err := os.MkdirAll(filepath.Join(d, "scripts"), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(d, "SKILL.md"), []byte("# triage"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(d, "scripts", "dispatch-email.sh"), []byte("echo hi"), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	removed, err := removeLocalSkillFile("triage", "scripts/dispatch-email.sh")
+	if err != nil {
+		t.Fatalf("removeLocalSkillFile: %v", err)
+	}
+	if len(removed) != 2 {
+		t.Errorf("expected file removed from 2 agent dirs, got %d: %v", len(removed), removed)
+	}
+	for _, d := range []string{claudeSkill, cursorSkill} {
+		if _, err := os.Stat(filepath.Join(d, "scripts", "dispatch-email.sh")); !os.IsNotExist(err) {
+			t.Errorf("file still present in %s", d)
+		}
+		// SKILL.md must survive — we removed one file, not the skill.
+		if _, err := os.Stat(filepath.Join(d, "SKILL.md")); err != nil {
+			t.Errorf("SKILL.md should survive file-level rm in %s: %v", d, err)
+		}
+		// The now-empty scripts/ dir should be pruned so it doesn't linger.
+		if _, err := os.Stat(filepath.Join(d, "scripts")); !os.IsNotExist(err) {
+			t.Errorf("empty parent dir scripts/ should be pruned in %s", d)
+		}
+	}
+}
+
+func TestRemoveLocalSkillFileKeepsNonEmptyParent(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
+
+	skill := filepath.Join(dir, ".claude", "skills", "triage")
+	if err := os.MkdirAll(filepath.Join(skill, "scripts"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(skill, "SKILL.md"), []byte("# triage"), 0644)
+	os.WriteFile(filepath.Join(skill, "scripts", "a.sh"), []byte("a"), 0755)
+	os.WriteFile(filepath.Join(skill, "scripts", "b.sh"), []byte("b"), 0755)
+
+	if _, err := removeLocalSkillFile("triage", "scripts/a.sh"); err != nil {
+		t.Fatalf("removeLocalSkillFile: %v", err)
+	}
+	// scripts/ still holds b.sh, so it must NOT be pruned.
+	if _, err := os.Stat(filepath.Join(skill, "scripts", "b.sh")); err != nil {
+		t.Errorf("sibling file b.sh should survive: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(skill, "scripts")); err != nil {
+		t.Errorf("non-empty parent dir should not be pruned: %v", err)
+	}
+}
+
+func TestRemoveLocalSkillFileRefusesBadPaths(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
+
+	// Traversal, absolute, empty, and the manifest itself must all be refused
+	// — the manifest because removing it would silently break the skill (use
+	// `airskills rm <skill>` to delete the whole thing).
+	cases := []string{"../etc/passwd", "/abs/path", "", "scripts/../../escape", "SKILL.md"}
+	for _, rel := range cases {
+		if _, err := removeLocalSkillFile("triage", rel); err == nil {
+			t.Errorf("removeLocalSkillFile(triage, %q) should have errored", rel)
+		}
+	}
+}
+
+func TestRemoveLocalSkillFileErrorsWhenMissing(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
+
+	skill := filepath.Join(dir, ".claude", "skills", "triage")
+	os.MkdirAll(skill, 0755)
+	os.WriteFile(filepath.Join(skill, "SKILL.md"), []byte("# triage"), 0644)
+
+	if _, err := removeLocalSkillFile("triage", "scripts/nope.sh"); err == nil {
+		t.Error("removeLocalSkillFile should error when the file is in no agent copy")
+	}
+}
+
 func TestRmDropsSyncStateEntry(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
