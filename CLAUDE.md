@@ -4,6 +4,15 @@ Go CLI for airskills. Public repo: `github.com/chrismdp/airskills`.
 
 The platform (Next.js API server) is a separate private repo. E2e tests live there.
 
+## Tickets live in the platform repo, never here
+
+This is a **public** repo. Do not commit tickets, change-docs, hypotheses, or
+proposals (`doc/changes/`, `doc/proposals/`, etc.) here — they leak internal
+platform detail (API endpoints, RPC names, migration numbers). All such docs go
+in the private `platform` repo's `doc/` tree, even for CLI-side work; prefix the
+filename with `cli-` so it's clear which side it covers. The only docs that
+belong in this repo are user-facing reference (`*.mdx`) and this file.
+
 ## Source of truth: the agentskills.io spec
 
 Airskills builds **to** the open Agent Skills format at
