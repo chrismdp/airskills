@@ -258,7 +258,20 @@
               "string",
               "null"
             ],
-            "format": "uuid"
+            "format": "uuid",
+            "description": "Parent skill of a genuine fork. Always references a live skill — transfer relocation is moved_to, not lineage."
+          },
+          "backup": {
+            "type": "boolean",
+            "description": "True on hidden overlay-backup forks (the CLI's transparent copy of a member's edits to a non-owned skill — plumbing, never rendered as a row). False on deliberate forks and everything else."
+          },
+          "moved_to": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Forward pointer from a transferred tombstone to its successor row. null on live skills."
           },
           "pinned_archive_path": {
             "type": [
@@ -315,6 +328,8 @@
           "tool_formats",
           "archive_size",
           "forked_from",
+          "backup",
+          "moved_to",
           "pinned_archive_path",
           "created_at",
           "updated_at",
@@ -848,7 +863,8 @@
             "enum": [
               "pending",
               "accepted",
-              "declined"
+              "declined",
+              "withdrawn"
             ]
           },
           "response_message": {
@@ -2047,6 +2063,10 @@
                     "type": "string",
                     "format": "uuid"
                   },
+                  "backup": {
+                    "type": "boolean",
+                    "description": "Marks a hidden overlay-backup fork (the CLI's transparent copy of a member's local edits to a non-owned skill). Requires forked_from. Deliberate forks (airskills fork) omit it."
+                  },
                   "github_url": {
                     "type": "string",
                     "maxLength": 512,
@@ -2275,6 +2295,13 @@
                   "make_deps_public": {
                     "type": "boolean",
                     "description": "When making a skill public, also publicise any private dependencies in one atomic update."
+                  },
+                  "backup": {
+                    "type": "boolean",
+                    "enum": [
+                      false
+                    ],
+                    "description": "Promote a hidden overlay-backup fork to a visible skill (backup: false). One direction only — a visible skill can never be flipped to backup."
                   }
                 }
               }
@@ -2822,7 +2849,8 @@
               "enum": [
                 "pending",
                 "accepted",
-                "declined"
+                "declined",
+                "withdrawn"
               ],
               "description": "Filter by lifecycle state."
             },
@@ -2979,7 +3007,8 @@
               "enum": [
                 "pending",
                 "accepted",
-                "declined"
+                "declined",
+                "withdrawn"
               ],
               "description": "Filter by lifecycle state."
             },
@@ -3064,8 +3093,8 @@
         }
       },
       "put": {
-        "summary": "Resolve a suggestion (accept / decline)",
-        "description": "Owner-only. Setting status auto-stamps reviewed_at. Accepting a suggestion does NOT change the skill — the owner reviews, edits locally if desired, pushes, then marks resolved.",
+        "summary": "Resolve a suggestion (accept / decline / withdraw)",
+        "description": "accept/decline are owner verbs and auto-stamp reviewed_at; withdrawn is the suggester verb, allowed only on their own still-pending suggestion (no reviewed_at — it isn't a review). Accepting a suggestion does NOT change the skill — the owner reviews, edits locally if desired, pushes, then marks resolved.",
         "tags": [
           "suggestions"
         ],
@@ -3098,7 +3127,8 @@
                     "type": "string",
                     "enum": [
                       "accepted",
-                      "declined"
+                      "declined",
+                      "withdrawn"
                     ]
                   },
                   "response_message": {

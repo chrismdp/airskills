@@ -78,6 +78,9 @@ func runPullKeepLocal(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("fetching skills: %w", err)
 	}
 	rememberSkillsetAfterSuccess(cfg, resolvedSlug)
+	// Hidden backup forks are overlay plumbing — adopting one as tracked
+	// identity would orphan the overlay's server-side copy.
+	remoteSkills = dropBackupRows(remoteSkills)
 
 	toPull, _, _ := decidePullActions(remoteSkills, localSkills, syncState, nil)
 	conflicts := map[string]pullEntry{}
@@ -122,6 +125,7 @@ func runPullKeepLocal(cmd *cobra.Command, args []string) error {
 			entry.LocalAlias = prev.LocalAlias
 			entry.SuggestionID = prev.SuggestionID
 			entry.SuggestDeclined = prev.SuggestDeclined
+			entry.Backup = prev.Backup
 		}
 		seedCopyLedgerFromDisk(entry, dirName)
 		syncState.Skills[dirName] = entry

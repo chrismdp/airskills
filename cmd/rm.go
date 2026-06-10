@@ -89,13 +89,24 @@ when a real skill of the same name is installed.`,
 			fmt.Printf("    installed skill, NOT that copy. To discard only the parked copy, run: airskills rm %s --pending\n", name)
 		}
 
+		// Overlay markers track a skill the caller does NOT own (the marker's
+		// skill_id is the org's/other user's upstream). rm must never delete
+		// the upstream — the server-side thing that belongs to the caller is
+		// their hidden backup fork (and any pending suggestion), so that is
+		// what gets cleaned up.
+		isOverlay := tracked && isOverlayMarker(entry)
+
 		// Confirmation
 		if !rmForce {
 			parts := []string{}
 			if hasLocal && !rmKeepLocal {
 				parts = append(parts, "local files")
 			}
-			if tracked && entry.SkillID != "" && !rmKeepRemote {
+			if isOverlay && !rmKeepRemote {
+				if entry.Backup != nil {
+					parts = append(parts, "your backup copy of this non-owned skill (the upstream is untouched)")
+				}
+			} else if tracked && entry.SkillID != "" && !rmKeepRemote {
 				parts = append(parts, "remote skill")
 			}
 			if len(parts) == 0 {
@@ -112,7 +123,23 @@ when a real skill of the same name is installed.`,
 
 		// Delete on server first — if it fails, leave local intact so the user
 		// can retry without ending up in a half-deleted state.
-		if tracked && entry.SkillID != "" && !rmKeepRemote {
+		if isOverlay && !rmKeepRemote {
+			if entry.Backup != nil || entry.SuggestionID != "" {
+				client, err := newAPIClientAuto()
+				if err != nil {
+					return fmt.Errorf("removing your backup copy requires login: %w", err)
+				}
+				if !retireSuggestion(client, entry.SuggestionID) {
+					return fmt.Errorf("could not withdraw the pending suggestion for %q — try again (deleting the backup first would break the owner's review)", name)
+				}
+				if entry.Backup != nil {
+					if err := client.del(fmt.Sprintf("/api/v1/skills/%s", entry.Backup.SkillID)); err != nil {
+						return fmt.Errorf("deleting your backup copy: %w", err)
+					}
+					fmt.Printf("  %s your backup copy deleted (the upstream skill is untouched)\n", green("✓"))
+				}
+			}
+		} else if tracked && entry.SkillID != "" && !rmKeepRemote {
 			client, err := newAPIClientAuto()
 			if err != nil {
 				return fmt.Errorf("server delete requires login: %w", err)

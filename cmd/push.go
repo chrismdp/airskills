@@ -52,21 +52,34 @@ type pendingSuggestionPrompt struct {
 	source           *skillSource
 }
 
-// pendingShadowFork captures the inputs the drain pass needs to fork an
-// edit-on-upstream skill into the caller's namespace, upload the local
-// content to the fork, and submit a suggestion against the upstream.
-// See cli-org-member-suggest-via-shadow-fork.md (Option B). The prompt
-// + sequential API calls live in the drain pass so stdin and the user
-// summary aren't racing across goroutines.
-type pendingShadowFork struct {
+// pendingBackup captures the inputs the drain pass needs to back up a
+// member's edits on a non-owned skill into their hidden backup fork and
+// (when upstream hasn't advanced) offer the one suggest question. See
+// cli-one-skill-overlay-and-lineage-split.md. The prompt + sequential API
+// calls live in the drain pass so stdin and the user summary aren't racing
+// across goroutines.
+type pendingBackup struct {
 	name        string
-	dir         string
 	archive     []byte
 	contentHash string
-	archiveSize int64
 	source      *skillSource
-	prevMarker  *SyncEntry
-	progressIdx int
+	// advanced is true when the upstream moved past the marker's baseline —
+	// the 3-way state. The backup still happens unconditionally; only the
+	// suggestion is skipped (pointed at the incoming flow instead).
+	advanced bool
+	// ownerKind/ownerSlug backfill the marker's namespace fields when the
+	// self-heal path resolved them (a marker that lost its Source also
+	// lost its owner fields). Empty = leave the marker's values alone.
+	ownerKind string
+	ownerSlug string
+}
+
+// isOverlayMarker reports whether a marker is the overlay shape for a
+// non-owned skill: tracked by the UPSTREAM's id, local edits (if any)
+// held as an overlay backed up in a hidden fork. The explicit-fork shape
+// (SkillID != upstream id) is a first-class personal skill instead.
+func isOverlayMarker(m *SyncEntry) bool {
+	return m != nil && m.Source != nil && m.SkillID != "" && m.SkillID == sourceUpstreamID(m.Source)
 }
 
 var pushForce bool
@@ -306,7 +319,12 @@ config).`,
 				continue
 			}
 			if s.marker != nil && s.marker.SkillID != "" && !effectiveSkillIDs[s.marker.SkillID] {
-				if s.marker.Source != nil {
+				if isOverlayMarker(s.marker) {
+					// Overlay tracking a user-owned upstream: those never
+					// appear in the caller's effective listing. Keep the
+					// identity — the overlay routing handles it (backup
+					// path; promote if the upstream is truly gone).
+				} else if s.marker.Source != nil {
 					s.marker.SkillID = ""
 				} else {
 					skippedCandidates = append(skippedCandidates, skippedCandidate{
@@ -377,13 +395,30 @@ config).`,
 		// for a run where nothing changed — the unchanged check inside each
 		// goroutine still fires correctly, but the user sees the full local
 		// count. Only filter tracked, non-deleted skills with a known hash;
-		// new skills (no marker) and shadow-fork / deleted markers must go
-		// through the goroutine so their full logic still runs.
+		// new skills (no marker) and deleted markers must go through the
+		// goroutine so their full logic still runs.
+		//
+		// Overlay markers (non-owned skills tracked at the upstream id) are
+		// "diverged" relative to the UPSTREAM hash, not the marker hash: an
+		// admin promotion must fold standing divergence in even with no
+		// fresh local edit, so divergence keeps the skill in the push set.
+		// Only a converged overlay (local == upstream) is unchanged.
 		var unchangedCount int
 		var pending []skillEntry
 		for _, s := range skills {
 			if s.marker != nil && !s.marker.Deleted && s.marker.ContentHash != "" {
-				if computeMerkleHash(readSkillFiles(s.dir)) == s.marker.ContentHash {
+				localHash := computeMerkleHash(readSkillFiles(s.dir))
+				if isOverlayMarker(s.marker) {
+					if baseline := markerUpstreamBase(s.marker); baseline != "" {
+						if localHash == baseline {
+							unchangedCount++
+							continue
+						}
+					} else if localHash == s.marker.ContentHash {
+						unchangedCount++
+						continue
+					}
+				} else if localHash == s.marker.ContentHash {
 					unchangedCount++
 					continue
 				}
@@ -410,8 +445,9 @@ config).`,
 		var mu sync.Mutex
 		var wg sync.WaitGroup
 		var warnings []string
+		var foldedIn []string
 		var pendingPrompts []pendingSuggestionPrompt
-		var pendingShadowForks []pendingShadowFork
+		var pendingBackups []pendingBackup
 		// Lazy owner lookup for the 403 self-heal below. Safe to share
 		// across goroutines: init is sync.Once-guarded and the maps are
 		// read-only afterwards.
@@ -537,6 +573,50 @@ config).`,
 					return
 				}
 
+				var sizeWarning string
+				contentHash := computeMerkleHash(localFiles)
+
+				// Skip unchanged skills (content hash matches what we last
+				// pushed) BEFORE building an archive. Overlay markers are
+				// exempt: their dirty signal is divergence from the
+				// UPSTREAM, not from the marker hash — the routing block
+				// below decides what (if anything) to do.
+				if s.marker != nil && !isOverlayMarker(s.marker) && s.marker.ContentHash != "" && s.marker.ContentHash == contentHash {
+					if sizeWarning != "" {
+						mu.Lock()
+						warnings = append(warnings, sizeWarning)
+						mu.Unlock()
+					}
+					lines[i].status = "unchanged"
+					lines[i].pct = 1
+					renderProgress(lines)
+					return
+				}
+
+				// Overlay steady state (diverged, already backed up and
+				// answered) is a clean no-op for a MEMBER — return before
+				// paying for an archive nobody will upload. Admins never
+				// take this exit: their standing divergence folds in below.
+				if s.marker != nil && isOverlayMarker(s.marker) &&
+					s.marker.Backup != nil && s.marker.Backup.ContentHash == contentHash &&
+					(s.marker.SuggestionID != "" || s.marker.SuggestDeclined) {
+					upstreamRemote := remoteByID[s.marker.SkillID]
+					isAdmin := false
+					if upstreamRemote != nil && upstreamRemote.OrgId != nil {
+						if role, ok := owners.orgRole(upstreamRemote.OrgId.String()); ok {
+							isAdmin = role == "owner" || role == "admin"
+						} else {
+							isAdmin = true // role data unavailable — let the routing below decide
+						}
+					}
+					if !isAdmin && (upstreamRemote == nil || !upstreamAdvanced(s.marker, *upstreamRemote)) {
+						lines[i].status = "backed up"
+						lines[i].pct = 1
+						renderProgress(lines)
+						return
+					}
+				}
+
 				lines[i].status = "compressing"
 				lines[i].pct = 0.2
 				renderProgress(lines)
@@ -552,23 +632,7 @@ config).`,
 
 				archiveSize := int64(len(archive))
 
-				var sizeWarning string
-				contentHash := computeMerkleHash(localFiles)
-
-				// Skip unchanged skills (content hash matches what we last pushed)
-				if s.marker != nil && s.marker.ContentHash != "" && s.marker.ContentHash == contentHash {
-					if sizeWarning != "" {
-						mu.Lock()
-						warnings = append(warnings, sizeWarning)
-						mu.Unlock()
-					}
-					lines[i].status = "unchanged"
-					lines[i].pct = 1
-					renderProgress(lines)
-					return
-				}
-
-				if s.marker != nil && s.marker.Source != nil && !pushForceSuggest {
+				if s.marker != nil && s.marker.Source != nil && !pushForceSuggest && !isOverlayMarker(s.marker) {
 					if remote := remoteForUpstreamCheck(s.marker, remoteByID); remote != nil && upstreamAdvanced(s.marker, *remote) {
 						src := s.marker.Source.Owner + "/" + s.marker.Source.Slug
 						mu.Lock()
@@ -583,28 +647,73 @@ config).`,
 					}
 				}
 
-				// Skill tracked at the upstream directly (org-member sync, a
-				// keep-local adoption, or a self-healed marker). The caller
-				// MAY have write access — org owners/admins do — and the CLI
-				// can't see roles, so don't pre-decide: fall through and try
-				// the direct upload. The server's verdict IS the role check:
-				// an accepted write updates the org skill in place; a 403
-				// routes the edit into the transparent-backup + suggest path
-				// in the error handler below. Only edit-while-suggestion-
-				// pending stops here — amending an open suggestion is out of
-				// scope, so leave the upstream alone and say nothing happened.
-				if s.marker != nil && s.marker.Source != nil &&
-					s.marker.SkillID != "" && s.marker.SkillID == s.marker.Source.ID &&
-					s.marker.SuggestionID != "" {
-					mu.Lock()
-					warnings = append(warnings, fmt.Sprintf(
-						"%s: a suggestion to %s/%s is still pending — local edits NOT pushed. Wait for the owner to accept/decline, then re-edit.",
-						s.name, s.marker.Source.Owner, s.marker.Source.Slug))
-					mu.Unlock()
-					lines[i].status = "pending suggestion"
-					lines[i].pct = 1
-					renderProgress(lines)
-					return
+				// Overlay marker (non-owned skill tracked at the upstream's
+				// id, local edits as an overlay): route by the caller's ROLE
+				// instead of probing the server with a doomed upload. The
+				// per-org role is already in /api/v1/organizations.
+				//   - org owner/admin → fall through to a direct in-place
+				//     write (expected-hash = the upstream baseline, set
+				//     below); the fold-in after a successful write retires
+				//     any backup fork + pending suggestion.
+				//   - member, or a user-owned upstream → never upload to the
+				//     upstream; queue the backup drain. Standing divergence
+				//     that is already backed up and answered is a clean
+				//     no-op: one status line, zero API writes.
+				overlayAdvanced := false
+				if isOverlayMarker(s.marker) {
+					upstreamRemote := remoteByID[s.marker.SkillID]
+					if upstreamRemote != nil {
+						overlayAdvanced = upstreamAdvanced(s.marker, *upstreamRemote)
+					}
+					// A "Source" pointing at the caller's OWN skill should
+					// never exist (e.g. written by `add <own>/<slug>` during
+					// a transient /me failure). Heal it here — it is plain
+					// owned tracking — or push would loop forever trying to
+					// back the caller's own skill up against itself.
+					if upstreamRemote != nil && upstreamRemote.OrgId == nil {
+						if kind, _ := owners.resolve(upstreamRemote); kind == "user" {
+							s.marker.Source = nil
+						}
+					}
+				}
+				if isOverlayMarker(s.marker) {
+					upstreamRemote := remoteByID[s.marker.SkillID]
+					adminWrite := false
+					if upstreamRemote != nil && upstreamRemote.OrgId != nil {
+						if role, ok := owners.orgRole(upstreamRemote.OrgId.String()); ok {
+							adminWrite = role == "owner" || role == "admin"
+						} else {
+							// Org data unavailable (transient): fall back to
+							// the server's verdict — try the direct write, a
+							// 403 routes into the backup path below. An
+							// admin must not lose write access to one flaky
+							// endpoint; a member pays one doomed upload in
+							// this rare case only.
+							adminWrite = true
+						}
+					}
+					if !adminWrite {
+						if s.marker.Backup != nil && s.marker.Backup.ContentHash == contentHash &&
+							!overlayAdvanced && (s.marker.SuggestionID != "" || s.marker.SuggestDeclined) {
+							lines[i].status = "backed up"
+							lines[i].pct = 1
+							renderProgress(lines)
+							return
+						}
+						mu.Lock()
+						pendingBackups = append(pendingBackups, pendingBackup{
+							name:        s.name,
+							archive:     archive,
+							contentHash: contentHash,
+							source:      s.marker.Source,
+							advanced:    overlayAdvanced && !pushForceSuggest,
+						})
+						mu.Unlock()
+						lines[i].status = "backing up"
+						lines[i].pct = 0.5
+						renderProgress(lines)
+						return
+					}
 				}
 
 				// Detect rename via orphan-hash BEFORE classifying isNew. If a
@@ -752,6 +861,15 @@ config).`,
 				if !pushForce && s.marker.ContentHash != "" {
 					expectedHash = s.marker.ContentHash
 				}
+				// Admin direct write to a non-owned upstream: the conflict
+				// guard is the UPSTREAM baseline, not the local marker hash —
+				// a 409 here means the upstream advanced underneath and the
+				// answer is the incoming flow, not a retry.
+				if isOverlayMarker(s.marker) && !pushForce {
+					if baseline := markerUpstreamBase(s.marker); baseline != "" {
+						expectedHash = baseline
+					}
+				}
 
 				updated, statusCode, err := client.putArchive(
 					s.marker.SkillID, archive, expectedHash, contentHash,
@@ -759,40 +877,41 @@ config).`,
 				if err != nil {
 					// 403 on a skill that's still alive in the caller's
 					// effective set isn't a transfer — the caller just can't
-					// write it (org member; the server's rejection is the
-					// role check the API doesn't expose). Route the edit
-					// into the transparent-backup + suggest path instead of
-					// dead-ending on a "moved" warning whose suggested fix
-					// (`add --force`) would discard the user's edits. A
-					// marker tracking the upstream keeps its Source (the
-					// original suggestion baseline); a marker that lost its
-					// Source (e.g. written by an older `pull --force`) gets
-					// it backfilled — but only when the skill is provably
+					// write it. The role data said admin (or the marker had
+					// no Source at all, e.g. written by an older `pull
+					// --force`) but the server disagreed — its verdict wins:
+					// route the edit into the backup + suggest path instead
+					// of dead-ending on a "moved" warning whose suggested
+					// fix (`add --force`) would discard the user's edits.
+					// Source is backfilled only when the skill is provably
 					// non-owned, so a quota-style 403 on the caller's own
 					// skill can't fork it.
 					if statusCode == 403 {
 						var src *skillSource
-						if s.marker.Source != nil && s.marker.SkillID == s.marker.Source.ID {
+						var healKind, healSlug string
+						if isOverlayMarker(s.marker) {
 							src = s.marker.Source
 						} else if s.marker.Source == nil {
 							if remote, ok := remoteByID[s.marker.SkillID]; ok {
 								src = owners.sourceForNonOwned(remote)
+								if src != nil {
+									healKind, healSlug = owners.resolve(remote)
+								}
 							}
 						}
 						if src != nil {
 							mu.Lock()
-							pendingShadowForks = append(pendingShadowForks, pendingShadowFork{
+							pendingBackups = append(pendingBackups, pendingBackup{
 								name:        s.name,
-								dir:         s.dir,
 								archive:     archive,
 								contentHash: contentHash,
-								archiveSize: archiveSize,
 								source:      src,
-								prevMarker:  s.marker,
-								progressIdx: i,
+								advanced:    overlayAdvanced && !pushForceSuggest,
+								ownerKind:   healKind,
+								ownerSlug:   healSlug,
 							})
 							mu.Unlock()
-							lines[i].status = "fork-suggest"
+							lines[i].status = "backing up"
 							lines[i].pct = 0.5
 							renderProgress(lines)
 							return
@@ -873,6 +992,23 @@ config).`,
 							return
 						}
 
+						// Admin direct write rejected on the upstream
+						// baseline: the upstream advanced underneath. The
+						// answer is the incoming flow, not a conflict park
+						// and not a retry against the newer hash.
+						if isOverlayMarker(s.marker) {
+							src := s.marker.Source.Owner + "/" + s.marker.Source.Slug
+							mu.Lock()
+							warnings = append(warnings, fmt.Sprintf(
+								"%s: upstream %s advanced underneath — review it with 'airskills add %s --force' (drops your edits) or merge and re-push.",
+								s.name, src, src))
+							mu.Unlock()
+							lines[i].status = "incoming"
+							lines[i].pct = 1
+							renderProgress(lines)
+							return
+						}
+
 						lines[i].status = "CONFLICT"
 						renderProgress(lines)
 
@@ -922,7 +1058,7 @@ config).`,
 				// from Source.ID) — a successful direct write to the
 				// upstream itself (org owner/admin) has nothing to suggest.
 				if s.marker.Source != nil && s.marker.SuggestionID == "" &&
-					s.marker.SkillID != s.marker.Source.ID {
+					s.marker.SkillID != sourceUpstreamID(s.marker.Source) {
 					mu.Lock()
 					pendingPrompts = append(pendingPrompts, pendingSuggestionPrompt{
 						name:             s.name,
@@ -930,6 +1066,47 @@ config).`,
 						source:           s.marker.Source,
 					})
 					mu.Unlock()
+				}
+
+				// Admin fold-in: the direct write landed the divergence
+				// upstream, so the overlay's backup fork and any pending
+				// suggestion are superseded by the user's own push. Retire
+				// both (best-effort — tolerate losing a race with the owner
+				// accepting) and refresh the Source baseline: upstream now
+				// equals what we wrote.
+				if isOverlayMarker(s.marker) {
+					hadDebt := s.marker.Backup != nil || s.marker.SuggestionID != ""
+					var foldNotes []string
+					// The suggestion must be retired BEFORE the fork goes —
+					// deleting the fork under a still-pending suggestion
+					// breaks the owner's review. A transient withdraw
+					// failure keeps both for the next sync's sweep.
+					if retireSuggestion(client, s.marker.SuggestionID) {
+						s.marker.SuggestionID = ""
+						if s.marker.Backup != nil {
+							if derr := client.del("/api/v1/skills/" + s.marker.Backup.SkillID); derr != nil {
+								foldNotes = append(foldNotes, fmt.Sprintf(
+									"%s: backup copy could not be removed (%v) — it will be retired on a later sync.", s.name, derr))
+							}
+							s.marker.Backup = nil
+						}
+					} else {
+						foldNotes = append(foldNotes, fmt.Sprintf(
+							"%s: the pending suggestion could not be withdrawn — backup kept; it will be retired on a later sync.", s.name))
+					}
+					s.marker.SuggestDeclined = false
+					s.marker.Source.ContentHash = contentHash
+					s.marker.Source.UpstreamContentHash = contentHash
+					if updated != nil {
+						s.marker.Source.UpstreamVersion = updated.Version
+					}
+					if hadDebt {
+						mu.Lock()
+						foldedIn = append(foldedIn, fmt.Sprintf("%s: your edits are folded into %s/%s",
+							s.name, s.marker.Source.Owner, s.marker.Source.Slug))
+						warnings = append(warnings, foldNotes...)
+						mu.Unlock()
+					}
 				}
 				if updated != nil {
 					s.marker.Version = updated.Version
@@ -983,13 +1160,14 @@ config).`,
 
 		wg.Wait()
 
-		// Shadow-fork drain: for each non-owned skill the user has edited,
-		// fork the upstream into the caller's namespace, upload the edit
-		// to the fork, and submit a suggestion. Sequential because each
-		// step (prompt, three API calls per skill) is serial — and racing
-		// stdin across goroutines is not acceptable.
-		if len(pendingShadowForks) > 0 {
-			drainShadowForks(client, pendingShadowForks, syncState, &mu, &created, &failed, &createdNames, &warnings)
+		// Backup drain: for each non-owned skill with unwritable divergence,
+		// back the edits up into the hidden backup fork and (when upstream
+		// hasn't advanced) offer the one suggest question. Sequential
+		// because each step (prompt, API calls per skill) is serial — and
+		// racing stdin across goroutines is not acceptable.
+		var backedUp int64
+		if len(pendingBackups) > 0 {
+			backedUp = drainBackups(client, pendingBackups, syncState, owners, &failed, &warnings)
 		}
 
 		// Drain sequentially so goroutines don't race on stdin. In a headless
@@ -1047,6 +1225,9 @@ config).`,
 			for _, n := range createdNames {
 				fmt.Printf("  %s %s\n", green("+"), n)
 			}
+		}
+		if backedUp > 0 {
+			parts = append(parts, green(fmt.Sprintf("%d backed up", backedUp)))
 		}
 		if linked > 0 {
 			parts = append(parts, fmt.Sprintf("%d linked", linked))
@@ -1109,6 +1290,9 @@ config).`,
 		}
 		for _, a := range transient {
 			fmt.Printf("  %s %s: couldn't verify server state — will retry next sync.\n", dim("?"), a.name)
+		}
+		for _, f := range foldedIn {
+			fmt.Printf("  %s %s\n", green("✓"), f)
 		}
 		for _, w := range earlyWarnings {
 			fmt.Printf("  %s %s\n", yellow("!"), w)
@@ -1374,83 +1558,177 @@ func newPushMatcher(dir string) *ignoreMatcher {
 // Without this, a `mv ~/.claude/skills/X ~/.claude/skills/Y` while
 // `~/.cursor/skills/X` still exists would silently push Y as a brand-new
 // skill on the server, leaving the original X skill orphaned.
-// drainShadowForks executes the fork-then-suggest flow for each non-owned
-// skill the user has edited locally. Each entry runs sequentially: fork
-// the upstream into the caller's namespace, upload the edited bytes to
-// the fork, submit a suggestion against the upstream, then rewrite the
-// marker so the local dir is now tracked to the fork. Source stays
-// pointing at the upstream so subsequent edits keep going through the
-// suggest path and the (separate) incorporate-upstream-changes ticket
-// has the link it needs.
+// drainBackups backs each queued skill's local edits up into the caller's
+// hidden backup fork (creating or updating it), then runs the suggestion
+// step: the one [Y/n] question for fresh divergence, a silent supersede
+// when a pending suggestion's bytes changed, or a pointer at the incoming
+// flow when the upstream advanced (the backup NEVER waits on the 3-way
+// state — unbacked edits are the one forbidden outcome).
 //
-// Best-effort across failures: if createSkill works but the upload or
-// suggestion call fails, the marker still records the new fork id —
-// otherwise the next push would re-fork and accumulate duplicate rows.
-// Errors are surfaced via the shared warnings slice.
-func drainShadowForks(
+// The marker keeps tracking the UPSTREAM: SkillID/OwnerKind/OwnerSlug are
+// never touched here. The only marker identity change is the promote path
+// (upstream unresolvable at fork-create time): the edits become a visible
+// personal skill the marker flips to, Source kept for lineage.
+//
+// Returns the number of skills whose edits were (or already were) safely
+// backed up. Errors are surfaced via the shared warnings slice.
+func drainBackups(
 	client *apiClient,
-	queue []pendingShadowFork,
+	queue []pendingBackup,
 	syncState *SyncState,
-	mu *sync.Mutex,
-	created *int64,
+	owners *ownerResolver,
 	failed *int64,
-	createdNames *[]string,
 	warnings *[]string,
-) {
-	// One profile fetch per push run, shared across queue entries — we
-	// need the caller's username for the summary line and the rewritten
-	// marker.
-	profile, profileErr := client.getMe()
-	var callerUsername string
-	if profileErr == nil && profile != nil {
-		callerUsername = profile.Username
-	}
-
+) int64 {
 	reader := bufio.NewReader(os.Stdin)
+	var backedUp int64
 
 	for _, p := range queue {
-		// 1+2. Back up the edit unconditionally: create the fork in the
-		// caller's namespace and upload the local content to it. The fork
-		// is plumbing, not a user decision — nothing the user typed (or
-		// declined) should ever lose their edited copy. expectedHash is
-		// empty: the fork is brand-new and has no prior hash to conflict
-		// on.
-		fork, err := client.createSkill(p.source.Slug, "", []string{"claude-code"}, p.source.ID, "")
-		lineageDropped := false
-		if err != nil && strings.Contains(err.Error(), "forked_from skill") {
-			// The server can't resolve the upstream as a fork parent —
-			// deleted, or moved somewhere the caller can't read. The backup
-			// matters more than the lineage: retry as a plain personal copy.
-			// No reachable upstream also means no suggestion to send.
-			fork, err = client.createSkill(p.source.Slug, "", []string{"claude-code"}, "", "")
-			lineageDropped = true
+		entry := syncState.Skills[p.name]
+		if entry == nil {
+			entry = &SyncEntry{Tool: "claude-code"}
 		}
-		if err != nil {
-			mu.Lock()
+		backup := entry.Backup
+		freshEdit := backup == nil || backup.ContentHash != p.contentHash
+
+		// 1. Ensure the backup fork exists. Unconditional on divergence —
+		// nothing the user types (or declines) may lose their edited copy.
+		if backup == nil {
+			fork, err := client.createBackupFork(p.source.Slug, sourceUpstreamID(p.source))
+			if err != nil {
+				var sc *SkillConflictError
+				if errors.As(err, &sc) {
+					// Another device already created the backup row for this
+					// upstream — adopt it instead of failing.
+					if adopted := findCallerBackupRow(client, sourceUpstreamID(p.source)); adopted != nil {
+						backup = &backupRef{SkillID: adopted.Id.String(), ContentHash: strDeref(adopted.ContentHash)}
+					}
+				}
+				if backup == nil && strings.Contains(err.Error(), "forked_from skill") {
+					// Upstream unresolvable (deleted, or moved somewhere the
+					// caller can't read): the upstream-lost transition. The
+					// edits become a VISIBLE personal skill the marker flips
+					// to — never a quiet second row.
+					if perr := promoteEditsToPersonalSkill(client, syncState, entry, &p, owners.callerUsername(), warnings); perr != nil {
+						*warnings = append(*warnings, fmt.Sprintf(
+							"%s: could not save your edits to your account: %v. Local edit kept; nothing pushed upstream.",
+							p.name, perr))
+						atomic.AddInt64(failed, 1)
+					} else {
+						backedUp++
+					}
+					continue
+				}
+				if backup == nil {
+					*warnings = append(*warnings, fmt.Sprintf(
+						"%s: could not save your edits to your account: %v. Local edit kept; nothing pushed upstream.",
+						p.name, err))
+					atomic.AddInt64(failed, 1)
+					continue
+				}
+			} else {
+				// The server may resolve a stale fork parent to its current
+				// row (transfer = soft-delete + create, so a marker can lag
+				// a move). The returned lineage is canonical — follow it on
+				// the Source AND on the marker identity, which for an
+				// overlay IS the upstream id.
+				if fork.ForkedFrom != nil && fork.ForkedFrom.String() != sourceUpstreamID(p.source) {
+					resolved := fork.ForkedFrom.String()
+					if entry.SkillID == sourceUpstreamID(p.source) {
+						entry.SkillID = resolved
+					}
+					p.source.ID = resolved
+					p.source.UpstreamSkillID = resolved
+				}
+				backup = &backupRef{SkillID: fork.Id.String()}
+			}
+		}
+
+		// 2. Upload the local bytes to the backup fork, expected-hash
+		// guarded by the backup's last known hash so two diverged devices
+		// surface both copies instead of silently overwriting each other.
+		if backup.ContentHash != p.contentHash {
+			expected := backup.ContentHash
+			if updated, status, aerr := client.putArchive(backup.SkillID, p.archive, expected, p.contentHash); aerr != nil {
+				if status == 409 {
+					*warnings = append(*warnings, fmt.Sprintf(
+						"%s: your backup copy already holds DIFFERENT edits (another device?). Neither copy was overwritten — compare them with 'airskills diff %s' and re-push the merged result.",
+						p.name, p.name))
+					entry.Backup = backup
+					syncState.Skills[p.name] = entry
+					atomic.AddInt64(failed, 1)
+					continue
+				}
+				*warnings = append(*warnings, fmt.Sprintf(
+					"%s: your edits could not be backed up: %v. Re-run push to retry.", p.name, aerr))
+				entry.Backup = backup
+				syncState.Skills[p.name] = entry
+				atomic.AddInt64(failed, 1)
+				continue
+			} else if updated != nil && updated.ContentHash != "" {
+				backup.ContentHash = updated.ContentHash
+			} else {
+				backup.ContentHash = p.contentHash
+			}
+		}
+
+		entry.Source = p.source
+		entry.Backup = backup
+		entry.ContentHash = p.contentHash
+		if entry.SkillID == "" {
+			entry.SkillID = sourceUpstreamID(p.source)
+		}
+		if p.ownerKind != "" {
+			entry.OwnerKind = p.ownerKind
+			entry.OwnerSlug = p.ownerSlug
+		}
+		entry.Deleted = false
+		entry.MovedTo = ""
+		seedCopyLedgerFromDisk(entry, p.name)
+		syncState.Skills[p.name] = entry
+		backedUp++
+
+		// 3. The suggestion step.
+		if p.advanced {
+			src := p.source.Owner + "/" + p.source.Slug
 			*warnings = append(*warnings, fmt.Sprintf(
-				"%s: could not save your edits to your account: %v. Local edit kept; nothing pushed upstream.",
-				p.name, err))
-			mu.Unlock()
-			atomic.AddInt64(failed, 1)
+				"%s: edits backed up, but upstream %s advanced — no suggestion sent. Review upstream with 'airskills add %s --force' (drops your local edits) or merge and re-push.",
+				p.name, src, src))
 			continue
 		}
 
-		// The server may resolve a stale fork parent to its current row
-		// (transfer = soft-delete + create, so a marker can lag a move).
-		// The returned lineage is canonical: suggest against it and follow
-		// the move on the marker's Source so future syncs track the live
-		// upstream.
-		if fork.ForkedFrom != nil && fork.ForkedFrom.String() != p.source.ID {
-			p.source.ID = fork.ForkedFrom.String()
+		if entry.SuggestionID != "" {
+			if freshEdit {
+				// Supersede: withdraw the stale pending suggestion and
+				// re-suggest the new bytes so base_content_hash stays
+				// honest. Losing the race with an accept is fine — but a
+				// transient withdraw failure keeps the id (the pending row
+				// would block the fresh suggestion on the pending-only
+				// unique index, and losing the id would strand it forever).
+				if !retireSuggestion(client, entry.SuggestionID) {
+					*warnings = append(*warnings, fmt.Sprintf(
+						"%s: edits backed up, but the open suggestion could not be updated — re-run push to retry.", p.name))
+					continue
+				}
+				entry.SuggestionID = ""
+				if suggestionID, serr := createOrAdoptSuggestion(
+					client, backup.SkillID, sourceUpstreamID(p.source), sourceBaselineHash(p.source)); serr != nil {
+					*warnings = append(*warnings, fmt.Sprintf(
+						"%s: your edits are saved but updating the suggestion failed: %v. Re-run push to retry.", p.name, serr))
+				} else {
+					entry.SuggestionID = suggestionID
+					fmt.Printf("  %s %s: edits saved; suggestion to %s/%s updated\n",
+						green("✓"), p.name, p.source.Owner, p.source.Slug)
+				}
+			}
+			continue
 		}
 
-		updated, _, archiveErr := client.putArchive(fork.Id.String(), p.archive, "", p.contentHash)
-
-		// 3. The only real decision: suggest the edit to the upstream
-		// owner? Headless runs answer yes (matches the pre-existing
+		// The only real decision: suggest the edit to the upstream owner?
+		// Headless runs answer yes (matches the pre-existing
 		// non-interactive behaviour); interactive runs get the question.
-		suggest := !lineageDropped
-		if suggest && isTTY {
+		suggest := true
+		if isTTY {
 			fmt.Printf("\n  %s — suggest your edits to %s/%s? [Y/n] ", p.name, p.source.Owner, p.source.Slug)
 			answer, _ := reader.ReadString('\n')
 			answer = strings.TrimSpace(strings.ToLower(answer))
@@ -1458,84 +1736,98 @@ func drainShadowForks(
 				suggest = false
 			}
 		}
-
-		// base_content_hash is the upstream baseline we last sync'd
-		// (stored on the marker's Source).
-		var suggestErr error
-		suggestionID := ""
-		if suggest {
-			suggestion, serr := client.createSuggestion(
-				fork.Id.String(), p.source.ID, p.source.ContentHash, "")
-			suggestErr = serr
-			if suggestion != nil {
-				suggestionID = suggestion.Id.String()
-			}
+		if !suggest {
+			entry.SuggestDeclined = true
+			fmt.Printf("  %s %s: edits saved; no suggestion sent\n", green("✓"), p.name)
+			continue
 		}
-
-		// 4. Rewrite the marker even on partial failure — the fork now
-		// exists server-side and must be tracked, otherwise the next
-		// push would re-fork.
-		mu.Lock()
-		entry := syncState.Skills[p.name]
-		if entry == nil {
-			entry = &SyncEntry{Tool: "claude-code"}
-		}
-		entry.SkillID = fork.Id.String()
-		entry.OwnerKind = "user"
-		if callerUsername != "" {
-			entry.OwnerSlug = callerUsername
-		}
-		entry.Source = p.source // unchanged — keeps the upstream link for future syncs
-		entry.ContentHash = p.contentHash
-		if updated != nil {
-			entry.Version = updated.Version
-			if updated.ContentHash != "" {
-				entry.ContentHash = updated.ContentHash
-			}
+		entry.SuggestDeclined = false
+		if suggestionID, serr := createOrAdoptSuggestion(
+			client, backup.SkillID, sourceUpstreamID(p.source), sourceBaselineHash(p.source)); serr != nil {
+			*warnings = append(*warnings, fmt.Sprintf(
+				"%s: your edits are saved but the suggestion failed: %v. Re-run push to retry.", p.name, serr))
 		} else {
-			entry.Version = fork.Version
-		}
-		if suggestionID != "" {
 			entry.SuggestionID = suggestionID
+			fmt.Printf("  %s %s: edits saved; suggestion sent to %s/%s\n",
+				green("✓"), p.name, p.source.Owner, p.source.Slug)
 		}
-		// A suggestion skipped because the upstream is unreachable is not
-		// a user decline — don't record one.
-		entry.SuggestDeclined = !suggest && !lineageDropped
-		entry.Deleted = false
-		entry.MovedTo = ""
-		seedCopyLedgerFromDisk(entry, p.name)
-		syncState.Skills[p.name] = entry
+	}
 
-		if lineageDropped {
-			*warnings = append(*warnings, fmt.Sprintf(
-				"%s: upstream %s/%s is gone or not accessible — your edits are saved as a personal copy, but no suggestion was sent.",
-				p.name, p.source.Owner, p.source.Slug))
-		}
-		if archiveErr != nil {
-			*warnings = append(*warnings, fmt.Sprintf(
-				"%s: your edits are saved but the upload failed: %v. Re-run push to retry the upload.",
-				p.name, archiveErr))
-		}
-		if suggestErr != nil {
-			*warnings = append(*warnings, fmt.Sprintf(
-				"%s: your edits are saved but the suggestion failed: %v. Re-run push to retry.",
-				p.name, suggestErr))
-		}
+	return backedUp
+}
 
-		atomic.AddInt64(created, 1)
-		*createdNames = append(*createdNames, p.name)
-		mu.Unlock()
-
-		if archiveErr == nil && suggestErr == nil {
-			if suggest {
-				fmt.Printf("  %s %s: edits saved; suggestion sent to %s/%s\n",
-					green("✓"), p.name, p.source.Owner, p.source.Slug)
-			} else {
-				fmt.Printf("  %s %s: edits saved; no suggestion sent\n",
-					green("✓"), p.name)
+// createOrAdoptSuggestion creates a suggestion for (suggester fork →
+// upstream). When another device already holds the pending suggestion for
+// this pair, the pending-only unique index rejects a second — adopt the
+// existing one instead of failing, because suggestion ids live in the
+// marker and don't travel between machines.
+func createOrAdoptSuggestion(client *apiClient, suggesterSkillID, upstreamID, baseHash string) (string, error) {
+	suggestion, err := client.createSuggestion(suggesterSkillID, upstreamID, baseHash, "")
+	if err == nil {
+		return suggestion.Id.String(), nil
+	}
+	if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "idx_suggestions_pending_pair") {
+		if list, lerr := client.listSuggestions("suggester", "pending", upstreamID); lerr == nil {
+			for _, existing := range list {
+				if existing.SuggesterSkillId.String() == suggesterSkillID {
+					return existing.Id.String(), nil
+				}
 			}
 		}
 	}
+	return "", err
+}
+
+// findCallerBackupRow locates the caller's existing hidden backup fork of
+// the given upstream (created by another device) so a slug collision at
+// create time adopts it instead of failing. Ownership query on purpose:
+// backup rows are the caller's own personal skills (shadowed out of the
+// effective listing by the same-slug org skill they back up).
+func findCallerBackupRow(client *apiClient, upstreamID string) *apiSkill {
+	owned, err := client.listSkills("personal")
+	if err != nil {
+		return nil
+	}
+	for i := range owned {
+		s := owned[i]
+		if isBackupRow(&s) && s.ForkedFrom.String() == upstreamID {
+			return &owned[i]
+		}
+	}
+	return nil
+}
+
+// promoteEditsToPersonalSkill is the push-side arm of the upstream-lost
+// transition: the upstream can't anchor a backup fork, so the user's edits
+// become a first-class personal skill the marker flips to track. Source is
+// kept for lineage; the output explains what happened. (The pull-side arm,
+// promoteBackupToVisible, flips an EXISTING backup fork the same way —
+// both paths converge on the same marker shape so they can't race to
+// different outcomes.)
+func promoteEditsToPersonalSkill(
+	client *apiClient,
+	syncState *SyncState,
+	entry *SyncEntry,
+	p *pendingBackup,
+	callerUsername string,
+	warnings *[]string,
+) error {
+	skill, err := client.createSkill(p.source.Slug, "", []string{"claude-code"}, "", "")
+	if err != nil {
+		return err
+	}
+	if _, _, aerr := client.putArchive(skill.Id.String(), p.archive, "", p.contentHash); aerr != nil {
+		*warnings = append(*warnings, fmt.Sprintf(
+			"%s: your edits are saved but the upload failed: %v. Re-run push to retry the upload.", p.name, aerr))
+	}
+	entry.Source = p.source // kept for lineage
+	entry.Version = skill.Version
+	flipMarkerToPersonal(entry, p.name, skill.Id.String(), p.contentHash, callerUsername)
+	syncState.Skills[p.name] = entry
+	*warnings = append(*warnings, fmt.Sprintf(
+		"%s: upstream %s/%s is gone or not accessible — your edits are now a personal skill in your account; no suggestion was sent.",
+		p.name, p.source.Owner, p.source.Slug))
+	return nil
 }
 
 func propagatePartialRenames(localSkills map[string]string, syncState *SyncState) {

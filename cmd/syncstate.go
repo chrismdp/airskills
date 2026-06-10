@@ -18,6 +18,17 @@ type CopyState struct {
 	SyncedAt time.Time `json:"synced_at,omitempty"`
 }
 
+// backupRef points at the hidden server-side backup fork that holds the
+// user's local edits to a non-owned skill (the overlay model — see
+// platform/doc/changes/cli-one-skill-overlay-and-lineage-split.md). The
+// marker's SkillID stays on the UPSTREAM skill; this ref is the only place
+// the backup row's id appears. Present iff the user has divergence they
+// can't write upstream.
+type backupRef struct {
+	SkillID     string `json:"skill_id"`
+	ContentHash string `json:"content_hash,omitempty"`
+}
+
 // SyncEntry tracks the sync state of a single skill.
 //
 // OwnerKind / OwnerSlug record the skill's CURRENT namespace as last seen on
@@ -47,6 +58,12 @@ type SyncEntry struct {
 	// namespacing lives in the marker, not on disk."
 	LocalAlias string       `json:"local_alias,omitempty"`
 	Source     *skillSource `json:"source,omitempty"`
+	// Backup references the hidden backup fork holding this skill's local
+	// edits when the caller can't write the upstream. Only meaningful on
+	// overlay markers (SkillID == the upstream's id). Cleared when the
+	// edits land upstream (admin fold-in / accepted suggestion) or the
+	// backup is promoted to a visible personal skill (upstream lost).
+	Backup *backupRef `json:"backup,omitempty"`
 	// ResolvedHash records the upstream content hash the user last
 	// reviewed against via `airskills resolve`. Only meaningful for
 	// sourced skills (Source != nil). Empty for owned skills, and for

@@ -827,6 +827,18 @@ func (e *SkillConflictError) Error() string {
 // typed *SkillConflictError so push can format the user-facing message
 // with the conflicting source named.
 func (c *apiClient) createSkill(name, description string, tools []string, forkedFrom, orgID string) (*apiSkill, error) {
+	return c.createSkillRow(name, description, tools, forkedFrom, orgID, false)
+}
+
+// createBackupFork creates the hidden overlay-backup fork of an upstream
+// skill — backup: true is what lets the row share the upstream's slug
+// (the server's collision guard requires it) and marks it as plumbing for
+// fresh-device reconstruction and the convergence sweep.
+func (c *apiClient) createBackupFork(name, forkedFrom string) (*apiSkill, error) {
+	return c.createSkillRow(name, "", []string{"claude-code"}, forkedFrom, "", true)
+}
+
+func (c *apiClient) createSkillRow(name, description string, tools []string, forkedFrom, orgID string, backup bool) (*apiSkill, error) {
 	payload := map[string]interface{}{
 		"name":         name,
 		"description":  description,
@@ -837,6 +849,9 @@ func (c *apiClient) createSkill(name, description string, tools []string, forked
 	}
 	if orgID != "" {
 		payload["org_id"] = orgID
+	}
+	if backup {
+		payload["backup"] = true
 	}
 	body, err := c.postWithStatus("/api/v1/skills", payload)
 	if err != nil {
@@ -851,6 +866,30 @@ func (c *apiClient) createSkill(name, description string, tools []string, forked
 		return nil, err
 	}
 	return &skill, nil
+}
+
+// withdrawSuggestion retracts the caller's own pending suggestion. Used by
+// the fold-in (admin write supersedes the proposal), the supersede flow
+// (re-edit while pending → withdraw stale, create fresh), and the
+// convergence sweep. Callers tolerate failure — losing the race with an
+// owner accepting is fine.
+func (c *apiClient) withdrawSuggestion(id string) error {
+	_, err := c.updateSuggestion(id, "withdrawn", "")
+	return err
+}
+
+// promoteBackupSkill flips a hidden backup fork to a visible personal skill
+// (backup: false — one direction only). Used when the overlay's upstream is
+// lost and the backup is the user's only copy.
+func (c *apiClient) promoteBackupSkill(id string) error {
+	body, status, err := c.put(fmt.Sprintf("/api/v1/skills/%s", id), map[string]interface{}{"backup": false})
+	if err != nil {
+		return err
+	}
+	if status >= 400 {
+		return fmt.Errorf("API error (%d): %s", status, strings.TrimSpace(string(body)))
+	}
+	return nil
 }
 
 // slugify mirrors the platform's lib/api-utils.ts slugify so the CLI
@@ -1164,8 +1203,13 @@ func (c *apiClient) getSuggestion(id string) (*apitypes.Suggestion, error) {
 // Server RLS enforces that only the owner of the referenced skill can update.
 func (c *apiClient) updateSuggestion(id, status, responseMessage string) (*apitypes.Suggestion, error) {
 	payload := map[string]string{
-		"status":           status,
-		"response_message": responseMessage,
+		"status": status,
+	}
+	// Only owners may write response_message (the server 403s a suggester
+	// who sends the key at all — including the empty string a withdraw
+	// would otherwise carry).
+	if responseMessage != "" {
+		payload["response_message"] = responseMessage
 	}
 	body, statusCode, err := c.put(fmt.Sprintf("/api/v1/suggestions/%s", id), payload)
 	if err != nil {

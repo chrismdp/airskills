@@ -84,6 +84,11 @@ Use --deleted to show soft-deleted skills.`,
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 		fmt.Fprintln(w, "NAME\tDESCRIPTION\tVERSION\tSTATE")
 		for _, s := range skills {
+			// One row per skill: hidden backup forks never render — their
+			// id only ever appears inside the marker's Backup ref.
+			if isBackupRow(&s) {
+				continue
+			}
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", s.Name, truncateDescription(strDeref(s.Description), 60), s.Version, listStateLabel(infoByName[s.Name]))
 		}
 		w.Flush()
@@ -101,6 +106,9 @@ Use --deleted to show soft-deleted skills.`,
 //     (shown whether or not you also have local edits — this is the case the
 //     old 1-D encoding could not name, so `list` used to say "synced" while
 //     `status` said "upstream": spec bug #1)
+//   - "local changes" — an overlay (non-owned skill) with standing local
+//     edits, backed up server-side; "+ suggestion pending" when one is open.
+//     ONE row for one skill — the hidden backup fork never renders.
 //   - "untracked" — presence states with no marker (untracked / adoptable /
 //     conflict), which a user reading `list` just sees as untracked dirs the
 //     next sync resolves
@@ -111,6 +119,11 @@ func listStateLabel(info SkillStateInfo) string {
 		switch {
 		case info.UpstreamMoved:
 			return "modified*"
+		case info.Overlay && info.OverlayDiverged:
+			if info.Marker != nil && info.Marker.SuggestionID != "" {
+				return "local changes (suggestion pending)"
+			}
+			return "local changes"
 		case info.LocalDirty:
 			return "modified"
 		default:

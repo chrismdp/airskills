@@ -86,6 +86,16 @@ type SkillStateInfo struct {
 	LocalDirty    bool // working ≠ base — I have edits not yet pushed
 	RemoteMoved   bool // my_remote_head ≠ base — another of my machines pushed
 	UpstreamMoved bool // forks only: the parent moved past upstream_base
+
+	// Overlay marks the one-skill shape for non-owned skills: the marker
+	// tracks the UPSTREAM id, local edits are an overlay backed up in a
+	// hidden fork (cli-one-skill-overlay-and-lineage-split.md). For overlay
+	// rows the matched remote IS the upstream, so RemoteMoved stays false;
+	// standing divergence from the upstream is OverlayDiverged ("local
+	// changes"), and UpstreamMoved means the upstream moved past the
+	// baseline the user last incorporated.
+	Overlay         bool
+	OverlayDiverged bool // local ≠ upstream head — the user's standing edits
 }
 
 // markerUpstreamBase returns the parent version the consumer last
@@ -166,6 +176,15 @@ func classifySkills(
 
 	for i := range remote {
 		r := remote[i]
+
+		// Hidden overlay-backup forks are plumbing, never a row: the skill
+		// they back up renders once (as the upstream), with the divergence
+		// carried by the marker's Backup ref. Rendering these used to
+		// produce the two-rows-for-one-skill shape and a phantom untracked
+		// conflict (cli-one-skill-overlay-and-lineage-split.md).
+		if isBackupRow(&r) {
+			continue
+		}
 
 		// Tracked match by skill_id wins. Falls back to dir-name match for
 		// legacy markers that might not have a skill_id (defensive).
@@ -284,6 +303,24 @@ func deriveDivergence(info *SkillStateInfo) {
 	if info.Remote != nil {
 		remoteHead = strDeref(info.Remote.ContentHash)
 	}
+
+	// Overlay rows: the matched remote IS the upstream, so "remote head ≠
+	// my base" is not another-of-my-machines-pushed — it's the overlay's
+	// standing divergence (OverlayDiverged, rendered as "local changes"),
+	// and a genuine upstream move is measured against the BASELINE the
+	// user last incorporated.
+	if isOverlayMarker(info.Marker) {
+		info.Overlay = true
+		if remoteHead != "" && info.LocalHash != "" && info.LocalHash != remoteHead {
+			info.OverlayDiverged = true
+		}
+		baseline := markerUpstreamBase(info.Marker)
+		if remoteHead != "" && baseline != "" && remoteHead != baseline {
+			info.UpstreamMoved = true
+		}
+		return
+	}
+
 	if base != "" && remoteHead != "" && remoteHead != base {
 		info.RemoteMoved = true
 	}

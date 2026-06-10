@@ -163,14 +163,19 @@ func TestPushSelfHealsForbiddenOrgSkillIntoForkSuggest(t *testing.T) {
 	if entry == nil {
 		t.Fatal("marker missing after push")
 	}
-	if entry.SkillID != forkID {
-		t.Errorf("marker SkillID = %q, want fork %q", entry.SkillID, forkID)
+	// ONE skill: the marker keeps tracking the upstream; the backup fork
+	// only ever appears inside Backup.
+	if entry.SkillID != upstreamID {
+		t.Errorf("marker SkillID = %q, want upstream %q", entry.SkillID, upstreamID)
+	}
+	if entry.Backup == nil || entry.Backup.SkillID != forkID {
+		t.Errorf("marker Backup should reference the hidden fork %q, got %+v", forkID, entry.Backup)
 	}
 	if entry.Source == nil || entry.Source.ID != upstreamID {
 		t.Errorf("marker Source must point at upstream, got %+v", entry.Source)
 	}
-	if entry.OwnerKind != "user" || entry.OwnerSlug != "callerslug" {
-		t.Errorf("marker owner = %q/%q, want user/callerslug", entry.OwnerKind, entry.OwnerSlug)
+	if entry.OwnerKind != "org" || entry.OwnerSlug != "upstream-org" {
+		t.Errorf("marker owner = %q/%q, want org/upstream-org (the upstream's namespace — identity stays on the upstream)", entry.OwnerKind, entry.OwnerSlug)
 	}
 }
 
@@ -261,8 +266,11 @@ func TestPushTransparentBackupDeclineStillBacksUp(t *testing.T) {
 	if entry == nil {
 		t.Fatal("marker missing after push")
 	}
-	if entry.SkillID != forkID {
-		t.Errorf("marker must track the backup fork %q, got %q", forkID, entry.SkillID)
+	if entry.SkillID != upstreamID {
+		t.Errorf("marker must keep tracking the upstream %q, got %q", upstreamID, entry.SkillID)
+	}
+	if entry.Backup == nil || entry.Backup.SkillID != forkID {
+		t.Errorf("marker Backup must reference the hidden fork %q, got %+v", forkID, entry.Backup)
 	}
 	if entry.SuggestionID != "" {
 		t.Errorf("no suggestion was sent; SuggestionID should be empty, got %q", entry.SuggestionID)
@@ -355,8 +363,11 @@ func TestPushDeclinedShadowMarkerStillBacksUpNewEdits(t *testing.T) {
 		t.Errorf("headless re-push of new edits should suggest again, got %d suggestions", suggestionCalls)
 	}
 	entry := loadSyncState().Skills["shared-skill"]
-	if entry == nil || entry.SkillID != forkID {
-		t.Fatalf("marker should track the fork after backup, got %+v", entry)
+	if entry == nil || entry.SkillID != upstreamID {
+		t.Fatalf("marker should keep tracking the upstream after backup, got %+v", entry)
+	}
+	if entry.Backup == nil || entry.Backup.SkillID != forkID {
+		t.Fatalf("marker Backup should reference the hidden fork, got %+v", entry.Backup)
 	}
 }
 

@@ -358,15 +358,19 @@ local copy is backed up to ~/.airskills/undo/<timestamp>/ first.`,
 			entry.LocalAlias = addAsAlias
 		}
 
-		// If logged in, register the skill on the server now
+		// One skill, not two: `add` tracks the UPSTREAM id directly (the
+		// overlay model). No eager fork — a hidden backup fork appears only
+		// when push first finds divergence the caller can't write upstream.
+		// The only eager-fork path left is the explicit `airskills fork`.
 		if token != nil && time.Now().Unix() < token.ExpiresAt {
+			entry.SkillID = result.ID
+			entry.ContentHash = upstreamHash
+			// Adding your own skill back is plain owned tracking, not a
+			// sourced overlay.
 			client := newAPIClient(cfg, token)
-			skill, createErr := client.createSkill(result.Slug, "", []string{"claude-code"}, result.ID, "")
-			if createErr == nil {
-				entry.SkillID = skill.Id.String()
-				entry.ContentHash = strDeref(skill.ContentHash)
+			if profile, perr := client.getMe(); perr == nil && profile != nil && profile.Username == username {
+				entry.Source = nil
 			}
-			// If creation fails (e.g. network), fall through — sync will handle it
 		}
 
 		seedCopyLedgerFromDisk(entry, dirName)

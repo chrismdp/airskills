@@ -201,6 +201,51 @@ func runPull(cmd *cobra.Command, args []string) error {
 	}
 	rememberSkillsetAfterSuccess(cfg, resolvedSlug)
 
+	owners := newOwnerResolver(client)
+
+	// Overlay upstreams that never appear in the caller's effective listing
+	// — user-owned skills installed via `add` track the OTHER user's skill
+	// id directly under the overlay model. Fetch them individually so the
+	// normal pull rules (fast-forward when clean, incoming when diverged)
+	// still apply. Cost: one GET per such skill, in line with the per-pull
+	// resolve the moved-source notices already pay.
+	listedIDs := make(map[string]bool, len(remoteSkills))
+	for i := range remoteSkills {
+		listedIDs[remoteSkills[i].Id.String()] = true
+	}
+	for _, entry := range syncState.Skills {
+		if entry == nil || entry.SkillID == "" || !isOverlayMarker(entry) || listedIDs[entry.SkillID] {
+			continue
+		}
+		if up, gerr := client.getSkill(entry.SkillID); gerr == nil && up != nil {
+			remoteSkills = append(remoteSkills, *up)
+			listedIDs[entry.SkillID] = true
+		}
+	}
+
+	// Overlay lifecycle (cli-one-skill-overlay-and-lineage-split.md): heal
+	// legacy markers onto the overlay shape, rebuild overlays on a fresh
+	// device, retire/promote backups — and partition the hidden backup rows
+	// out of the install surface, because they must never render as rows,
+	// install as second skills, or trip the shadow warning.
+	remoteByIDAll := make(map[string]*apiSkill, len(remoteSkills))
+	for i := range remoteSkills {
+		remoteByIDAll[remoteSkills[i].Id.String()] = &remoteSkills[i]
+	}
+	healOverlayMarkers(syncState, remoteByIDAll, owners)
+	var backupRows []apiSkill
+	visibleRemote := make([]apiSkill, 0, len(remoteSkills))
+	for i := range remoteSkills {
+		if isBackupRow(&remoteSkills[i]) {
+			backupRows = append(backupRows, remoteSkills[i])
+		} else {
+			visibleRemote = append(visibleRemote, remoteSkills[i])
+		}
+	}
+	remoteSkills = visibleRemote
+	reconstructOverlayMarkers(client, syncState, backupRows, remoteByIDAll, localSkills, owners)
+	sweepOverlayBackups(client, syncState, remoteByIDAll, owners)
+
 	// Migration 047: filter shadowed skills out of the pull set and
 	// emit a warning naming the winning org. Fires on every pull until
 	// the user resolves with `airskills mv`.
@@ -227,8 +272,6 @@ func runPull(cmd *cobra.Command, args []string) error {
 
 	movedSourceNotices := collectMovedSourceNotices(client, syncState, remoteSkills)
 
-	owners := newOwnerResolver(client)
-
 	toPull, missingWarnings, divergedSlugs := decidePullActions(remoteSkills, localSkills, syncState, mirrorConflictSet)
 
 	// Register pull-detected divergences in the shared sync conflict
@@ -243,6 +286,15 @@ func runPull(cmd *cobra.Command, args []string) error {
 	}
 
 	if len(toPull) == 0 && len(missingWarnings) == 0 {
+		// Nothing to install, but this run may still have work to land:
+		// suggestion accept/decline notifications, and any marker changes
+		// the overlay passes above made (healing, reconstruction, sweep).
+		if len(movedSourceNotices) > 0 {
+			fmt.Println("\n--- Transferred upstreams ---")
+			printMovedSourceNotices(movedSourceNotices)
+		}
+		notifyResolvedSuggestions(client, syncState)
+		saveSyncState(syncState)
 		fmt.Printf("  %s all up to date\n", green("✓"))
 		return nil
 	}
@@ -440,6 +492,15 @@ func runPull(cmd *cobra.Command, args []string) error {
 			OwnerKind:   ownerKind,
 			OwnerSlug:   ownerSlug,
 			Source:      owners.sourceFor(&p.skill),
+		}
+		if p.marker != nil {
+			// Carry the overlay/suggestion state across the reinstall —
+			// wiping Backup here would orphan the hidden fork (and the
+			// sweep's redundancy check with it).
+			syncState.Skills[dirName].Backup = p.marker.Backup
+			syncState.Skills[dirName].SuggestionID = p.marker.SuggestionID
+			syncState.Skills[dirName].SuggestDeclined = p.marker.SuggestDeclined
+			syncState.Skills[dirName].LocalAlias = p.marker.LocalAlias
 		}
 		seedCopyLedgerFromDisk(syncState.Skills[dirName], dirName)
 		if p.reason == "upstream-updated" && p.marker != nil && p.marker.Source != nil {
@@ -886,8 +947,27 @@ func decidePullActions(remoteSkills []apiSkill, localSkills map[string]string, s
 			if marker.Source != nil && upstreamAdvanced(marker, remote) {
 				localFiles := readSkillFiles(localDir)
 				localHash := computeMerkleHash(localFiles)
+				// Byte-converged overlay beats "advanced": local already
+				// equals the current upstream (whatever the stale baseline
+				// says), so there is nothing incoming — reconcile silently.
+				if isOverlayMarker(marker) {
+					if rh := strDeref(remote.ContentHash); rh != "" && localHash == rh {
+						actions = append(actions, pullEntry{skill: remote, reason: "auto-resolved", localDir: localDir, marker: marker, reAdopt: reAdopt})
+						continue
+					}
+				}
 				reason := "upstream-advanced"
-				if localHash == marker.ContentHash {
+				// "Clean" means safe to fast-forward. For a fork that's
+				// "no edits since last sync of the fork" (marker hash);
+				// for an overlay it's "no divergence from the upstream
+				// BASELINE" — an overlay's marker hash tracks the user's
+				// edits, so comparing against it would fast-forward the
+				// upstream straight over their divergence.
+				clean := localHash == marker.ContentHash
+				if isOverlayMarker(marker) {
+					clean = localHash == sourceBaselineHash(marker.Source)
+				}
+				if clean {
 					reason = "upstream-updated"
 				}
 				actions = append(actions, pullEntry{skill: remote, reason: reason, localDir: localDir, marker: marker, reAdopt: reAdopt})
@@ -903,6 +983,22 @@ func decidePullActions(remoteSkills []apiSkill, localSkills map[string]string, s
 
 			localFiles := readSkillFiles(localDir)
 			localHash := computeMerkleHash(localFiles)
+
+			// Overlay markers: the remote IS the upstream, and standing
+			// divergence from it is the overlay's normal state ("local
+			// changes" in list/status) — never a conflict to park and
+			// never an update to install over the user's edits. Only a
+			// byte-converged overlay reconciles (auto-resolved; the sweep
+			// then retires a redundant backup).
+			if isOverlayMarker(marker) {
+				if remoteHash != "" && localHash == remoteHash {
+					actions = append(actions, pullEntry{skill: remote, reason: "auto-resolved", localDir: localDir, marker: marker, reAdopt: reAdopt})
+				}
+				// Diverged overlay: push owns the backup; nothing to pull.
+				// (A diverged re-adopt keeps its tombstone until push backs
+				// the edits up, which clears it.)
+				continue
+			}
 
 			switch {
 			case remoteHash != "" && localHash == remoteHash:
@@ -1012,6 +1108,10 @@ func runPullForce(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("fetching skills: %w", err)
 	}
 	rememberSkillsetAfterSuccess(cfg, resolvedSlug)
+	// Hidden backup forks must not masquerade as untracked conflicts here —
+	// a force-pull of one would overwrite local with the BACKUP's bytes and
+	// destroy the overlay shape.
+	remoteSkills = dropBackupRows(remoteSkills)
 
 	toPull, _, _ := decidePullActions(remoteSkills, localSkills, syncState, nil)
 	divergedMap := map[string]pullEntry{}
@@ -1026,6 +1126,12 @@ func runPullForce(cmd *cobra.Command, args []string) error {
 		for _, name := range args {
 			p, ok := divergedMap[name]
 			if !ok {
+				// Overlay divergence is the skill's steady state, not a
+				// conflict — point at the command that actually takes the
+				// upstream's bytes.
+				if entry := syncState.Skills[name]; entry != nil && isOverlayMarker(entry) && entry.Source != nil {
+					return fmt.Errorf("%s: your edits to this non-owned skill are an overlay, not a conflict. To drop them and take the upstream's bytes: airskills add %s/%s --force", name, entry.Source.Owner, entry.Source.Slug)
+				}
 				return fmt.Errorf("%s: not in conflict; nothing to force-pull. Use 'airskills sync' for normal updates.", name)
 			}
 			targets = append(targets, p)

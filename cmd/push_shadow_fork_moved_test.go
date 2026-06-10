@@ -112,8 +112,13 @@ func TestPushShadowForkAdoptsServerResolvedUpstream(t *testing.T) {
 	if entry == nil {
 		t.Fatal("marker missing after push")
 	}
-	if entry.SkillID != forkID {
-		t.Errorf("marker SkillID = %q, want fork %q", entry.SkillID, forkID)
+	// Overlay identity follows the move: the marker tracks the live
+	// successor, with the backup fork referenced only via Backup.
+	if entry.SkillID != movedUpstreamID {
+		t.Errorf("marker SkillID = %q, want the server-resolved successor %q", entry.SkillID, movedUpstreamID)
+	}
+	if entry.Backup == nil || entry.Backup.SkillID != forkID {
+		t.Errorf("marker Backup should reference the hidden fork %q, got %+v", forkID, entry.Backup)
 	}
 	if entry.Source == nil || entry.Source.ID != movedUpstreamID {
 		t.Errorf("marker Source must follow the move to %q, got %+v", movedUpstreamID, entry.Source)

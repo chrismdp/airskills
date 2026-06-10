@@ -1040,6 +1040,7 @@ func TestPushShadowForksOnOrgMemberEdit(t *testing.T) {
 
 	var createSkillCalls, archiveCalls, suggestionCalls int
 	var lastForkedFrom, lastSuggesterID, lastOwnerSkillID, lastBaseHash string
+	var lastBackupFlag bool
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -1050,9 +1051,13 @@ func TestPushShadowForksOnOrgMemberEdit(t *testing.T) {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/me":
 			w.Header().Set("Content-Type", "application/json")
 			fmt.Fprint(w, `{"id":"00000000-0000-0000-0000-000000000099","username":"callerslug"}`)
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/organizations":
+			// Plain member: the role check routes push straight to the
+			// backup path with no doomed upload at the upstream.
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `{"organizations":[{"id":"00000000-0000-0000-0000-000000000001","slug":"upstream-org","name":"Upstream","role":"member","member_count":2}]}`)
 		case r.Method == http.MethodPut && r.URL.Path == "/api/v1/skills/"+upstreamID+"/archive":
-			// Member: the direct-write attempt is rejected; push falls back
-			// to the transparent-backup + suggest path.
+			t.Error("member push must not attempt the doomed upload at the upstream")
 			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/skills":
 			createSkillCalls++
@@ -1060,6 +1065,9 @@ func TestPushShadowForksOnOrgMemberEdit(t *testing.T) {
 			_ = json.NewDecoder(r.Body).Decode(&body)
 			if ff, ok := body["forked_from"].(string); ok {
 				lastForkedFrom = ff
+			}
+			if b, ok := body["backup"].(bool); ok {
+				lastBackupFlag = b
 			}
 			w.Header().Set("Content-Type", "application/json")
 			fmt.Fprintf(w, `{"id":%q,"name":"shared-skill","slug":"shared-skill","version":"1.0.1","content_hash":""}`, forkID)
@@ -1104,6 +1112,9 @@ func TestPushShadowForksOnOrgMemberEdit(t *testing.T) {
 	if lastForkedFrom != upstreamID {
 		t.Errorf("createSkill forked_from = %q, want %q", lastForkedFrom, upstreamID)
 	}
+	if !lastBackupFlag {
+		t.Error("the backup fork must declare backup: true (the collision-guard exception requires it)")
+	}
 	if archiveCalls != 1 {
 		t.Errorf("putArchive called %d times against fork, want 1", archiveCalls)
 	}
@@ -1125,14 +1136,22 @@ func TestPushShadowForksOnOrgMemberEdit(t *testing.T) {
 	if entry == nil {
 		t.Fatal("marker missing after push")
 	}
-	if entry.SkillID != forkID {
-		t.Errorf("marker SkillID = %q, want fork %q", entry.SkillID, forkID)
+	// ONE skill: the marker keeps tracking the upstream; the backup fork is
+	// invisible plumbing referenced only via Backup.
+	if entry.SkillID != upstreamID {
+		t.Errorf("marker SkillID = %q, want upstream %q", entry.SkillID, upstreamID)
 	}
-	if entry.OwnerSlug != "callerslug" {
-		t.Errorf("marker OwnerSlug = %q, want callerslug", entry.OwnerSlug)
+	if entry.OwnerSlug != "upstream-org" {
+		t.Errorf("marker OwnerSlug = %q, want upstream-org", entry.OwnerSlug)
 	}
-	if entry.OwnerKind != "user" {
-		t.Errorf("marker OwnerKind = %q, want user", entry.OwnerKind)
+	if entry.OwnerKind != "org" {
+		t.Errorf("marker OwnerKind = %q, want org", entry.OwnerKind)
+	}
+	if entry.Backup == nil || entry.Backup.SkillID != forkID {
+		t.Errorf("marker Backup should reference the hidden fork %q, got %+v", forkID, entry.Backup)
+	}
+	if entry.Backup != nil && entry.Backup.ContentHash != "new-fork-hash" {
+		t.Errorf("marker Backup hash = %q, want new-fork-hash", entry.Backup.ContentHash)
 	}
 	if entry.SuggestionID != suggestionID {
 		t.Errorf("marker SuggestionID = %q, want %q", entry.SuggestionID, suggestionID)

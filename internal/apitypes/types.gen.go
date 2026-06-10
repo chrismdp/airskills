@@ -47,9 +47,10 @@ func (e DeleteSkillResponseStatus) Valid() bool {
 
 // Defines values for EnrichedSuggestionStatus.
 const (
-	EnrichedSuggestionStatusAccepted EnrichedSuggestionStatus = "accepted"
-	EnrichedSuggestionStatusDeclined EnrichedSuggestionStatus = "declined"
-	EnrichedSuggestionStatusPending  EnrichedSuggestionStatus = "pending"
+	EnrichedSuggestionStatusAccepted  EnrichedSuggestionStatus = "accepted"
+	EnrichedSuggestionStatusDeclined  EnrichedSuggestionStatus = "declined"
+	EnrichedSuggestionStatusPending   EnrichedSuggestionStatus = "pending"
+	EnrichedSuggestionStatusWithdrawn EnrichedSuggestionStatus = "withdrawn"
 )
 
 // Valid indicates whether the value is a known member of the EnrichedSuggestionStatus enum.
@@ -60,6 +61,8 @@ func (e EnrichedSuggestionStatus) Valid() bool {
 	case EnrichedSuggestionStatusDeclined:
 		return true
 	case EnrichedSuggestionStatusPending:
+		return true
+	case EnrichedSuggestionStatusWithdrawn:
 		return true
 	default:
 		return false
@@ -467,9 +470,10 @@ func (e SkillDetailVisibility) Valid() bool {
 
 // Defines values for SuggestionStatus.
 const (
-	SuggestionStatusAccepted SuggestionStatus = "accepted"
-	SuggestionStatusDeclined SuggestionStatus = "declined"
-	SuggestionStatusPending  SuggestionStatus = "pending"
+	SuggestionStatusAccepted  SuggestionStatus = "accepted"
+	SuggestionStatusDeclined  SuggestionStatus = "declined"
+	SuggestionStatusPending   SuggestionStatus = "pending"
+	SuggestionStatusWithdrawn SuggestionStatus = "withdrawn"
 )
 
 // Valid indicates whether the value is a known member of the SuggestionStatus enum.
@@ -480,6 +484,8 @@ func (e SuggestionStatus) Valid() bool {
 	case SuggestionStatusDeclined:
 		return true
 	case SuggestionStatusPending:
+		return true
+	case SuggestionStatusWithdrawn:
 		return true
 	default:
 		return false
@@ -584,16 +590,16 @@ func (e GetApiV1SkillsParamsScope) Valid() bool {
 
 // Defines values for GetApiV1SkillsParamsDeleted.
 const (
-	False GetApiV1SkillsParamsDeleted = "false"
-	True  GetApiV1SkillsParamsDeleted = "true"
+	GetApiV1SkillsParamsDeletedFalse GetApiV1SkillsParamsDeleted = "false"
+	GetApiV1SkillsParamsDeletedTrue  GetApiV1SkillsParamsDeleted = "true"
 )
 
 // Valid indicates whether the value is a known member of the GetApiV1SkillsParamsDeleted enum.
 func (e GetApiV1SkillsParamsDeleted) Valid() bool {
 	switch e {
-	case False:
+	case GetApiV1SkillsParamsDeletedFalse:
 		return true
-	case True:
+	case GetApiV1SkillsParamsDeletedTrue:
 		return true
 	default:
 		return false
@@ -612,6 +618,21 @@ func (e PostApiV1SkillsJSONBodyVisibility) Valid() bool {
 	case PostApiV1SkillsJSONBodyVisibilityPrivate:
 		return true
 	case PostApiV1SkillsJSONBodyVisibilityPublic:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PutApiV1SkillsIdJSONBodyBackup.
+const (
+	PutApiV1SkillsIdJSONBodyBackupFalse PutApiV1SkillsIdJSONBodyBackup = false
+)
+
+// Valid indicates whether the value is a known member of the PutApiV1SkillsIdJSONBodyBackup enum.
+func (e PutApiV1SkillsIdJSONBodyBackup) Valid() bool {
+	switch e {
+	case PutApiV1SkillsIdJSONBodyBackupFalse:
 		return true
 	default:
 		return false
@@ -698,9 +719,10 @@ func (e GetApiV1SuggestionsParamsRole) Valid() bool {
 
 // Defines values for GetApiV1SuggestionsParamsStatus.
 const (
-	GetApiV1SuggestionsParamsStatusAccepted GetApiV1SuggestionsParamsStatus = "accepted"
-	GetApiV1SuggestionsParamsStatusDeclined GetApiV1SuggestionsParamsStatus = "declined"
-	GetApiV1SuggestionsParamsStatusPending  GetApiV1SuggestionsParamsStatus = "pending"
+	GetApiV1SuggestionsParamsStatusAccepted  GetApiV1SuggestionsParamsStatus = "accepted"
+	GetApiV1SuggestionsParamsStatusDeclined  GetApiV1SuggestionsParamsStatus = "declined"
+	GetApiV1SuggestionsParamsStatusPending   GetApiV1SuggestionsParamsStatus = "pending"
+	GetApiV1SuggestionsParamsStatusWithdrawn GetApiV1SuggestionsParamsStatus = "withdrawn"
 )
 
 // Valid indicates whether the value is a known member of the GetApiV1SuggestionsParamsStatus enum.
@@ -711,6 +733,8 @@ func (e GetApiV1SuggestionsParamsStatus) Valid() bool {
 	case GetApiV1SuggestionsParamsStatusDeclined:
 		return true
 	case GetApiV1SuggestionsParamsStatusPending:
+		return true
+	case GetApiV1SuggestionsParamsStatusWithdrawn:
 		return true
 	default:
 		return false
@@ -752,9 +776,10 @@ func (e GetApiV1SuggestionsCountParamsRole) Valid() bool {
 
 // Defines values for GetApiV1SuggestionsCountParamsStatus.
 const (
-	GetApiV1SuggestionsCountParamsStatusAccepted GetApiV1SuggestionsCountParamsStatus = "accepted"
-	GetApiV1SuggestionsCountParamsStatusDeclined GetApiV1SuggestionsCountParamsStatus = "declined"
-	GetApiV1SuggestionsCountParamsStatusPending  GetApiV1SuggestionsCountParamsStatus = "pending"
+	GetApiV1SuggestionsCountParamsStatusAccepted  GetApiV1SuggestionsCountParamsStatus = "accepted"
+	GetApiV1SuggestionsCountParamsStatusDeclined  GetApiV1SuggestionsCountParamsStatus = "declined"
+	GetApiV1SuggestionsCountParamsStatusPending   GetApiV1SuggestionsCountParamsStatus = "pending"
+	GetApiV1SuggestionsCountParamsStatusWithdrawn GetApiV1SuggestionsCountParamsStatus = "withdrawn"
 )
 
 // Valid indicates whether the value is a known member of the GetApiV1SuggestionsCountParamsStatus enum.
@@ -766,6 +791,8 @@ func (e GetApiV1SuggestionsCountParamsStatus) Valid() bool {
 		return true
 	case GetApiV1SuggestionsCountParamsStatusPending:
 		return true
+	case GetApiV1SuggestionsCountParamsStatusWithdrawn:
+		return true
 	default:
 		return false
 	}
@@ -773,8 +800,9 @@ func (e GetApiV1SuggestionsCountParamsStatus) Valid() bool {
 
 // Defines values for PutApiV1SuggestionsIdJSONBodyStatus.
 const (
-	Accepted PutApiV1SuggestionsIdJSONBodyStatus = "accepted"
-	Declined PutApiV1SuggestionsIdJSONBodyStatus = "declined"
+	Accepted  PutApiV1SuggestionsIdJSONBodyStatus = "accepted"
+	Declined  PutApiV1SuggestionsIdJSONBodyStatus = "declined"
+	Withdrawn PutApiV1SuggestionsIdJSONBodyStatus = "withdrawn"
 )
 
 // Valid indicates whether the value is a known member of the PutApiV1SuggestionsIdJSONBodyStatus enum.
@@ -783,6 +811,8 @@ func (e PutApiV1SuggestionsIdJSONBodyStatus) Valid() bool {
 	case Accepted:
 		return true
 	case Declined:
+		return true
+	case Withdrawn:
 		return true
 	default:
 		return false
@@ -1119,6 +1149,9 @@ type ResolvedBundleResponseVisibility string
 type ResolvedSkillResponse struct {
 	ArchiveSize *int `json:"archive_size"`
 
+	// Backup True on hidden overlay-backup forks (the CLI's transparent copy of a member's edits to a non-owned skill — plumbing, never rendered as a row). False on deliberate forks and everything else.
+	Backup bool `json:"backup"`
+
 	// ContentHash Merkle hash of the skill's file set. null until first push.
 	ContentHash *string   `json:"content_hash"`
 	CreatedAt   time.Time `json:"created_at"`
@@ -1133,13 +1166,18 @@ type ResolvedSkillResponse struct {
 	DeletionReason *string `json:"deletion_reason"`
 
 	// DependencyCount Number of resolved dependency rows.
-	DependencyCount int                 `json:"dependency_count"`
-	Description     *string             `json:"description"`
-	ForkedFrom      *openapi_types.UUID `json:"forked_from"`
-	HeadCommitId    *openapi_types.UUID `json:"head_commit_id"`
-	Id              openapi_types.UUID  `json:"id"`
-	Name            string              `json:"name"`
-	OrgId           *openapi_types.UUID `json:"org_id"`
+	DependencyCount int     `json:"dependency_count"`
+	Description     *string `json:"description"`
+
+	// ForkedFrom Parent skill of a genuine fork. Always references a live skill — transfer relocation is moved_to, not lineage.
+	ForkedFrom   *openapi_types.UUID `json:"forked_from"`
+	HeadCommitId *openapi_types.UUID `json:"head_commit_id"`
+	Id           openapi_types.UUID  `json:"id"`
+
+	// MovedTo Forward pointer from a transferred tombstone to its successor row. null on live skills.
+	MovedTo *openapi_types.UUID `json:"moved_to"`
+	Name    string              `json:"name"`
+	OrgId   *openapi_types.UUID `json:"org_id"`
 
 	// OwnerId null on org-owned skills (XOR with org_id).
 	OwnerId           *openapi_types.UUID `json:"owner_id"`
@@ -1186,6 +1224,9 @@ type ShareRevokedResponseStatus string
 type Skill struct {
 	ArchiveSize *int `json:"archive_size"`
 
+	// Backup True on hidden overlay-backup forks (the CLI's transparent copy of a member's edits to a non-owned skill — plumbing, never rendered as a row). False on deliberate forks and everything else.
+	Backup bool `json:"backup"`
+
 	// ContentHash Merkle hash of the skill's file set. null until first push.
 	ContentHash *string   `json:"content_hash"`
 	CreatedAt   time.Time `json:"created_at"`
@@ -1197,13 +1238,18 @@ type Skill struct {
 	DeletionReason *string `json:"deletion_reason"`
 
 	// DependencyCount Number of resolved dependency rows.
-	DependencyCount int                 `json:"dependency_count"`
-	Description     *string             `json:"description"`
-	ForkedFrom      *openapi_types.UUID `json:"forked_from"`
-	HeadCommitId    *openapi_types.UUID `json:"head_commit_id"`
-	Id              openapi_types.UUID  `json:"id"`
-	Name            string              `json:"name"`
-	OrgId           *openapi_types.UUID `json:"org_id"`
+	DependencyCount int     `json:"dependency_count"`
+	Description     *string `json:"description"`
+
+	// ForkedFrom Parent skill of a genuine fork. Always references a live skill — transfer relocation is moved_to, not lineage.
+	ForkedFrom   *openapi_types.UUID `json:"forked_from"`
+	HeadCommitId *openapi_types.UUID `json:"head_commit_id"`
+	Id           openapi_types.UUID  `json:"id"`
+
+	// MovedTo Forward pointer from a transferred tombstone to its successor row. null on live skills.
+	MovedTo *openapi_types.UUID `json:"moved_to"`
+	Name    string              `json:"name"`
+	OrgId   *openapi_types.UUID `json:"org_id"`
 
 	// OwnerId null on org-owned skills (XOR with org_id).
 	OwnerId           *openapi_types.UUID `json:"owner_id"`
@@ -1273,6 +1319,9 @@ type SkillDependencyEdgeVisibility string
 type SkillDetail struct {
 	ArchiveSize *int `json:"archive_size"`
 
+	// Backup True on hidden overlay-backup forks (the CLI's transparent copy of a member's edits to a non-owned skill — plumbing, never rendered as a row). False on deliberate forks and everything else.
+	Backup bool `json:"backup"`
+
 	// ContentHash Merkle hash of the skill's file set. null until first push.
 	ContentHash *string   `json:"content_hash"`
 	CreatedAt   time.Time `json:"created_at"`
@@ -1285,13 +1334,18 @@ type SkillDetail struct {
 	Dependencies   []SkillDependencyEdge `json:"dependencies"`
 
 	// DependencyCount Number of resolved dependency rows.
-	DependencyCount int                 `json:"dependency_count"`
-	Description     *string             `json:"description"`
-	Files           []SkillFile         `json:"files"`
-	ForkedFrom      *openapi_types.UUID `json:"forked_from"`
-	HeadCommitId    *openapi_types.UUID `json:"head_commit_id"`
-	Id              openapi_types.UUID  `json:"id"`
-	Name            string              `json:"name"`
+	DependencyCount int         `json:"dependency_count"`
+	Description     *string     `json:"description"`
+	Files           []SkillFile `json:"files"`
+
+	// ForkedFrom Parent skill of a genuine fork. Always references a live skill — transfer relocation is moved_to, not lineage.
+	ForkedFrom   *openapi_types.UUID `json:"forked_from"`
+	HeadCommitId *openapi_types.UUID `json:"head_commit_id"`
+	Id           openapi_types.UUID  `json:"id"`
+
+	// MovedTo Forward pointer from a transferred tombstone to its successor row. null on live skills.
+	MovedTo *openapi_types.UUID `json:"moved_to"`
+	Name    string              `json:"name"`
 
 	// Org Joined from orgs. null on personally-owned skills.
 	Org *struct {
@@ -1495,6 +1549,9 @@ type TokenPair struct {
 type UpdateSkillResponse struct {
 	ArchiveSize *int `json:"archive_size"`
 
+	// Backup True on hidden overlay-backup forks (the CLI's transparent copy of a member's edits to a non-owned skill — plumbing, never rendered as a row). False on deliberate forks and everything else.
+	Backup bool `json:"backup"`
+
 	// ContentHash Merkle hash of the skill's file set. null until first push.
 	ContentHash *string   `json:"content_hash"`
 	CreatedAt   time.Time `json:"created_at"`
@@ -1506,13 +1563,18 @@ type UpdateSkillResponse struct {
 	DeletionReason *string `json:"deletion_reason"`
 
 	// DependencyCount Number of resolved dependency rows.
-	DependencyCount int                 `json:"dependency_count"`
-	Description     *string             `json:"description"`
-	ForkedFrom      *openapi_types.UUID `json:"forked_from"`
-	HeadCommitId    *openapi_types.UUID `json:"head_commit_id"`
-	Id              openapi_types.UUID  `json:"id"`
-	Name            string              `json:"name"`
-	OrgId           *openapi_types.UUID `json:"org_id"`
+	DependencyCount int     `json:"dependency_count"`
+	Description     *string `json:"description"`
+
+	// ForkedFrom Parent skill of a genuine fork. Always references a live skill — transfer relocation is moved_to, not lineage.
+	ForkedFrom   *openapi_types.UUID `json:"forked_from"`
+	HeadCommitId *openapi_types.UUID `json:"head_commit_id"`
+	Id           openapi_types.UUID  `json:"id"`
+
+	// MovedTo Forward pointer from a transferred tombstone to its successor row. null on live skills.
+	MovedTo *openapi_types.UUID `json:"moved_to"`
+	Name    string              `json:"name"`
+	OrgId   *openapi_types.UUID `json:"org_id"`
 
 	// OwnerId null on org-owned skills (XOR with org_id).
 	OwnerId           *openapi_types.UUID `json:"owner_id"`
@@ -1648,6 +1710,8 @@ type GetApiV1SkillsParamsDeleted string
 
 // PostApiV1SkillsJSONBody defines parameters for PostApiV1Skills.
 type PostApiV1SkillsJSONBody struct {
+	// Backup Marks a hidden overlay-backup fork (the CLI's transparent copy of a member's local edits to a non-owned skill). Requires forked_from. Deliberate forks (airskills fork) omit it.
+	Backup      *bool                              `json:"backup,omitempty"`
 	Content     *string                            `json:"content,omitempty"`
 	Description *string                            `json:"description,omitempty"`
 	ForkedFrom  *openapi_types.UUID                `json:"forked_from,omitempty"`
@@ -1665,6 +1729,9 @@ type PostApiV1SkillsJSONBodyVisibility string
 
 // PutApiV1SkillsIdJSONBody defines parameters for PutApiV1SkillsId.
 type PutApiV1SkillsIdJSONBody struct {
+	// Backup Promote a hidden overlay-backup fork to a visible skill (backup: false). One direction only — a visible skill can never be flipped to backup.
+	Backup *PutApiV1SkillsIdJSONBodyBackup `json:"backup,omitempty"`
+
 	// ConfirmPublic Required when changing visibility to 'public'. The server returns 400 without it.
 	ConfirmPublic *bool   `json:"confirm_public,omitempty"`
 	Description   *string `json:"description,omitempty"`
@@ -1677,6 +1744,9 @@ type PutApiV1SkillsIdJSONBody struct {
 	PullUpstream *bool                               `json:"pull_upstream,omitempty"`
 	Visibility   *PutApiV1SkillsIdJSONBodyVisibility `json:"visibility,omitempty"`
 }
+
+// PutApiV1SkillsIdJSONBodyBackup defines parameters for PutApiV1SkillsId.
+type PutApiV1SkillsIdJSONBodyBackup bool
 
 // PutApiV1SkillsIdJSONBodyVisibility defines parameters for PutApiV1SkillsId.
 type PutApiV1SkillsIdJSONBodyVisibility string

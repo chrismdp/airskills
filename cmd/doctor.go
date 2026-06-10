@@ -50,6 +50,7 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 	if states, err := gatherSyncState(); err == nil {
 		renderSyncStateReport(os.Stdout, states)
 		renderPendingConflictReport(os.Stdout, pendingConflictNames())
+		renderOverlayInvariantReport(os.Stdout, loadSyncState())
 		fmt.Println()
 	}
 
@@ -62,6 +63,55 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 		os.Exit(1)
 	}
 	return nil
+}
+
+// renderOverlayInvariantReport validates the overlay-model invariants on
+// the local markers and the caller's server-side rows:
+//   - a Backup ref implies a Source (the overlay has an upstream)
+//   - the Backup ref points at a row the caller still owns (flagged
+//     backup=true server-side)
+//   - every server-side backup row is referenced by some marker (an
+//     orphaned one means a device deleted its marker without retiring
+//     the fork — sync rebuilds it, so just surface it)
+//
+// Best-effort: skipped silently when not logged in.
+func renderOverlayInvariantReport(w io.Writer, syncState *SyncState) {
+	client, err := newAPIClientAuto()
+	if err != nil {
+		return
+	}
+	// Ownership query: backup rows are the caller's own personal skills,
+	// shadowed out of the effective listing by the org skill they back up.
+	owned, err := client.listSkills("personal")
+	if err != nil {
+		return
+	}
+	ownedBackupByID := map[string]bool{}
+	for i := range owned {
+		if isBackupRow(&owned[i]) {
+			ownedBackupByID[owned[i].Id.String()] = false // false = unreferenced so far
+		}
+	}
+
+	bang := red("!")
+	for name, entry := range syncState.Skills {
+		if entry == nil || entry.Backup == nil {
+			continue
+		}
+		if entry.Source == nil {
+			fmt.Fprintf(w, "  %s %s — marker has a backup ref but no upstream Source; run 'airskills sync' to heal it.\n", bang, name)
+		}
+		if _, ok := ownedBackupByID[entry.Backup.SkillID]; !ok {
+			fmt.Fprintf(w, "  %s %s — marker's backup ref points at a row you no longer own; the next push will recreate the backup.\n", bang, name)
+		} else {
+			ownedBackupByID[entry.Backup.SkillID] = true
+		}
+	}
+	for id, referenced := range ownedBackupByID {
+		if !referenced {
+			fmt.Fprintf(w, "  %s server-side backup copy %s is not referenced by any marker here — 'airskills sync' reconnects it (it may belong to another device).\n", bang, id)
+		}
+	}
 }
 
 func renderPendingConflictReport(w io.Writer, names []string) {
@@ -156,8 +206,25 @@ func renderSyncStateReport(w io.Writer, states []SkillStateInfo) {
 					toVer = s.Remote.Version
 				}
 				versionTransition := versionMoved(fromVer, toVer)
-				fmt.Fprintf(w, "  %s %s — customised copy of %s/%s. Original%s since you resolved. Review and 'airskills resolve %s', or 'pull --force' to drop your customised copy.\n",
-					bang, s.Name, source.Owner, source.Slug, versionTransition, s.Name)
+				dropCmd := "'pull --force'"
+				if s.Overlay {
+					// Overlays aren't pull conflicts; taking the upstream's
+					// bytes goes through add --force.
+					dropCmd = fmt.Sprintf("'airskills add %s/%s --force'", source.Owner, source.Slug)
+				}
+				fmt.Fprintf(w, "  %s %s — customised copy of %s/%s. Original%s since you resolved. Review and 'airskills resolve %s', or %s to drop your customised copy.\n",
+					bang, s.Name, source.Owner, source.Slug, versionTransition, s.Name, dropCmd)
+			case s.Overlay && s.OverlayDiverged && !s.LocalDirty:
+				// Overlay steady state: standing edits to a non-owned skill,
+				// already backed up server-side. Informational, not work.
+				suffix := ""
+				if s.Marker.SuggestionID != "" {
+					suffix = "; suggestion pending"
+				} else if s.Marker.SuggestDeclined {
+					suffix = "; suggestion declined"
+				}
+				fmt.Fprintf(w, "  %s %s — your edited copy of %s/%s (edits backed up%s).\n",
+					bang, s.Name, s.Marker.Source.Owner, s.Marker.Source.Slug, suffix)
 			case s.LocalDirty && s.Sourced:
 				// Sourced + locally modified — unpublished customisations to a
 				// sourced skill.

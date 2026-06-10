@@ -16,11 +16,13 @@ import (
 // a partial marker (no owner_kind/owner_slug) is no worse than the
 // pre-fix state.
 type ownerResolver struct {
-	c        *apiClient
-	initOnce sync.Once
-	userID   string
-	username string
-	orgsByID map[string]string // org_id → org slug
+	c            *apiClient
+	initOnce     sync.Once
+	userID       string
+	username     string
+	orgsByID     map[string]string // org_id → org slug
+	orgRolesByID map[string]string // org_id → caller's role ("owner"/"admin"/"member")
+	orgsOK       bool              // the /organizations fetch succeeded — roles are trustworthy
 }
 
 func newOwnerResolver(c *apiClient) *ownerResolver {
@@ -38,11 +40,33 @@ func (r *ownerResolver) init() {
 	}
 	orgs, err := listCallerOrgs(r.c)
 	if err == nil {
+		r.orgsOK = true
 		r.orgsByID = make(map[string]string, len(orgs))
+		r.orgRolesByID = make(map[string]string, len(orgs))
 		for _, o := range orgs {
 			r.orgsByID[o.ID] = o.Slug
+			r.orgRolesByID[o.ID] = o.Role
 		}
 	}
+}
+
+// callerUsername returns the caller's username, or "" when /me failed.
+func (r *ownerResolver) callerUsername() string {
+	r.initOnce.Do(r.init)
+	return r.username
+}
+
+// orgRole returns the caller's role in the given org and whether the role
+// data is trustworthy (the /organizations fetch succeeded). Push routes
+// org-skill writes by this — owner/admin write in place, everyone else
+// goes via the backup+suggest path. When ok is false, callers must fall
+// back to the server's verdict rather than assume either way.
+func (r *ownerResolver) orgRole(orgID string) (role string, ok bool) {
+	r.initOnce.Do(r.init)
+	if !r.orgsOK {
+		return "", false
+	}
+	return r.orgRolesByID[orgID], true
 }
 
 // resolve returns the (kind, slug) for a skill. Empty strings mean
@@ -101,6 +125,22 @@ func (r *ownerResolver) sourceFor(skill *apiSkill) *skillSource {
 		return nil
 	}
 	r.initOnce.Do(r.init)
+	// Org-owned skills take the org branch unconditionally: post lineage
+	// split, forked_from on a listed skill always means a genuine fork
+	// (transfer successors carry no lineage), so the org skill itself IS
+	// the upstream the marker should point at.
+	if skill.OrgId != nil {
+		owner := r.orgsByID[skill.OrgId.String()]
+		return &skillSource{
+			Owner:               owner,
+			Slug:                skill.Slug,
+			ID:                  skill.Id.String(),
+			ContentHash:         strDeref(skill.ContentHash),
+			UpstreamSkillID:     skill.Id.String(),
+			UpstreamContentHash: strDeref(skill.ContentHash),
+			UpstreamVersion:     skill.Version,
+		}
+	}
 	if skill.OwnerId != nil && r.userID != "" && skill.OwnerId.String() == r.userID && skill.ForkedFrom == nil {
 		return nil // caller owns the skill — no Source
 	}
@@ -115,12 +155,7 @@ func (r *ownerResolver) sourceFor(skill *apiSkill) *skillSource {
 			UpstreamVersion:     skill.Version,
 		}
 	}
-	var owner string
-	if skill.OrgId != nil {
-		owner = r.orgsByID[skill.OrgId.String()]
-	}
 	return &skillSource{
-		Owner:               owner,
 		Slug:                skill.Slug,
 		ID:                  skill.Id.String(),
 		ContentHash:         strDeref(skill.ContentHash),

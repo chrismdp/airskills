@@ -16,6 +16,11 @@ func TestPersonalScopeCallersAreOwnershipQueries(t *testing.T) {
 		// server-side but not in the active skillset (the "in other
 		// skillset" warning). That's a legitimate ownership query.
 		"status.go": true,
+		// push.go uses listSkills("personal") to adopt the caller's own
+		// hidden backup fork on a slug collision (another device created
+		// it). Backup rows are shadowed out of the effective listing, so
+		// the ownership query is the only way to find them.
+		"push.go": true,
 	}
 	callRe := regexp.MustCompile(`listSkills\("personal"\)`)
 	defaultRe := regexp.MustCompile(`scope\s*=\s*"personal"`)

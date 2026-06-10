@@ -133,6 +133,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	buckets := projectStatusBuckets(rows, ownedElsewhereByName)
 	toPush, toPull, toUpdate, upstream, untracked, inOtherSkillset := buckets.toPush, buckets.toPull, buckets.toUpdate, buckets.upstream, buckets.untracked, buckets.inOtherSkillset
 	tombstoned := buckets.tombstoned
+	localEdits := buckets.localEdits
 
 	// A forked skill classifies as dirty/untracked from its first-found copy,
 	// but no push, pull, or update can act on it until the copies agree —
@@ -156,6 +157,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	needPendingConflicts := len(pendingConflicts)
 	needTombstoned := len(tombstoned)
 	needForks := len(localForks)
+	needLocalEdits := len(localEdits)
 
 	// Skip capture on the shell-prompt hot path (quiet mode is used by
 	// `eval "$(airskills status)"` in shell init). Capturing there would
@@ -172,6 +174,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 			"pending_conflicts":   needPendingConflicts,
 			"tombstoned":          needTombstoned,
 			"local_forks":         needForks,
+			"local_edits":         needLocalEdits,
 		})
 	}
 
@@ -179,7 +182,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	// auto-update, so isNewer above falsely flags an upgrade.
 	showLatestCLI := hr.latestCLI != "" && !autoUpdateDidFire.Load()
 
-	if needPush == 0 && needPull == 0 && needUpdate == 0 && needUntracked == 0 && upstreamUpdates == 0 && pendingSuggestions == 0 && needInOther == 0 && needPendingConflicts == 0 && needTombstoned == 0 && needForks == 0 && !showLatestCLI {
+	if needPush == 0 && needPull == 0 && needUpdate == 0 && needUntracked == 0 && upstreamUpdates == 0 && pendingSuggestions == 0 && needInOther == 0 && needPendingConflicts == 0 && needTombstoned == 0 && needForks == 0 && needLocalEdits == 0 && !showLatestCLI {
 		if !quiet {
 			fmt.Fprintf(os.Stderr, "[airskills] %s\n", green("✓ in sync"))
 			printAgentNextSteps(os.Stderr, []agentNextStep{
@@ -221,6 +224,9 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	if needForks > 0 {
 		parts = append(parts, yellow(fmt.Sprintf("⚠ %d local fork", needForks)))
 	}
+	if needLocalEdits > 0 {
+		parts = append(parts, cyan(fmt.Sprintf("✎ %d with local edits", needLocalEdits)))
+	}
 
 	// Pick the headline command for the work that actually dominates.
 	// `sync` is correct ONLY when there's push/pull/update/untracked/upstream
@@ -244,11 +250,18 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		// hand (or an agent). Point at the detail block, not at sync,
 		// which would refuse and loop the user back here.
 		hint = ""
+	case needLocalEdits > 0:
+		// Standing overlay divergence is a steady state, not pending work
+		// — the edits are backed up; nothing for sync to clear.
+		hint = ""
 	}
-	if hint != "" {
+	switch {
+	case hint != "":
 		fmt.Fprintf(os.Stderr, "[airskills] %s — run '%s'\n", strings.Join(parts, ", "), hint)
-	} else {
+	case needForks > 0:
 		fmt.Fprintf(os.Stderr, "[airskills] %s — reconcile the copies below\n", strings.Join(parts, ", "))
+	default:
+		fmt.Fprintf(os.Stderr, "[airskills] %s\n", strings.Join(parts, ", "))
 	}
 
 	// Detail groups — show the actual skill names under each action so the
@@ -261,6 +274,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		printStatusGroup("on server", toUpdate, yellow)
 		printStatusGroup("upstream", upstream, cyan)
 		printStatusGroup("untracked", untracked, yellow)
+		printStatusGroup("local edits", localEdits, cyan)
 		printLocalForkStatusGroup(os.Stderr, localForks)
 		printPendingConflictStatusGroup(os.Stderr, pendingConflicts)
 		if needTombstoned > 0 {
@@ -313,6 +327,9 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		}
 		if needForks > 0 {
 			steps = append(steps, agentNextStep{Cmd: "airskills sync", Why: "after diffing and merging each local fork's copies to match — sync/push refuse forks until the copies agree"})
+		}
+		if needLocalEdits > 0 {
+			steps = append(steps, agentNextStep{Cmd: "airskills diff <name>", Why: "review your standing edits to a non-owned skill (they are backed up; the suggestion state is shown above)"})
 		}
 		printAgentNextSteps(os.Stderr, steps)
 	}
@@ -433,6 +450,11 @@ func buildOwnedElsewhereByName(inSkillset []apiSkill, ownedAll []apiSkill, state
 // sync would surface a conflict (silent in this command before).
 type statusBuckets struct {
 	toPush, toPull, toUpdate, upstream, untracked, inOtherSkillset []string
+	// localEdits: overlay skills (non-owned, tracked at the upstream) with
+	// standing local divergence — ONE row per skill, suggestion state in
+	// the detail label. This replaces the phantom "untracked collision"
+	// the old two-row shape produced (cli-one-skill-overlay-and-lineage-split.md).
+	localEdits []string
 	// tombstoned: local dir present but its marker is a transfer tombstone
 	// (Deleted/MovedTo). Previously skipped silently, which let a wrongly
 	// tombstoned skill hide its local edits from status/push/list while diff
@@ -473,6 +495,22 @@ func projectStatusBuckets(rows []SkillStateInfo, ownedElsewhereByName map[string
 				b.toPull = append(b.toPull, r.Name)
 			}
 		case StateTracked:
+			if r.Overlay {
+				// Overlay: divergence from the upstream is the skill's
+				// steady state, not work for sync to clear. Fresh unpushed
+				// edits still want a push (which backs them up); an
+				// upstream move still surfaces on the upstream axis.
+				if r.OverlayDiverged {
+					b.localEdits = append(b.localEdits, overlayEditDetail(r))
+				}
+				if r.LocalDirty {
+					b.toPush = append(b.toPush, r.Name)
+				}
+				if r.UpstreamMoved {
+					b.upstream = append(b.upstream, r.Name)
+				}
+				continue
+			}
 			if r.LocalDirty {
 				b.toPush = append(b.toPush, r.Name)
 			}
@@ -489,7 +527,13 @@ func projectStatusBuckets(rows []SkillStateInfo, ownedElsewhereByName map[string
 		case StateOrphaned:
 			// Marker but no remote: a never-pushed new skill, or one the
 			// server dropped. Unless the caller owns it in another skillset
-			// (then it's not really gone — it's just out of the active set).
+			// (then it's not really gone — it's just out of the active set),
+			// or it's an overlay tracking a user-owned upstream — those are
+			// never in the effective listing; pull probes them directly and
+			// the sweep handles genuine loss, so status stays quiet.
+			if isOverlayMarker(r.Marker) {
+				continue
+			}
 			if ownedElsewhereByName[r.Name] {
 				b.inOtherSkillset = append(b.inOtherSkillset, r.Name)
 			} else {
@@ -507,7 +551,24 @@ func projectStatusBuckets(rows []SkillStateInfo, ownedElsewhereByName map[string
 	sort.Strings(b.untracked)
 	sort.Strings(b.inOtherSkillset)
 	sort.Strings(b.tombstoned)
+	sort.Strings(b.localEdits)
 	return b
+}
+
+// overlayEditDetail labels one overlay row for the local-edits detail
+// block, carrying the suggestion state alongside the name.
+func overlayEditDetail(r SkillStateInfo) string {
+	if r.Marker != nil {
+		switch {
+		case r.Marker.SuggestionID != "":
+			return r.Name + " (suggestion pending)"
+		case r.Marker.SuggestDeclined:
+			return r.Name + " (suggestion declined)"
+		case r.Marker.Backup != nil:
+			return r.Name + " (backed up)"
+		}
+	}
+	return r.Name
 }
 
 // printStatusGroup prints a detail block for one action category, e.g.
