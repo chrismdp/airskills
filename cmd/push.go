@@ -989,7 +989,7 @@ config).`,
 		// step (prompt, three API calls per skill) is serial — and racing
 		// stdin across goroutines is not acceptable.
 		if len(pendingShadowForks) > 0 {
-			drainShadowForks(client, pendingShadowForks, syncState, &mu, &created, &createdNames, &warnings)
+			drainShadowForks(client, pendingShadowForks, syncState, &mu, &created, &failed, &createdNames, &warnings)
 		}
 
 		// Drain sequentially so goroutines don't race on stdin. In a headless
@@ -1393,6 +1393,7 @@ func drainShadowForks(
 	syncState *SyncState,
 	mu *sync.Mutex,
 	created *int64,
+	failed *int64,
 	createdNames *[]string,
 	warnings *[]string,
 ) {
@@ -1415,21 +1416,41 @@ func drainShadowForks(
 		// empty: the fork is brand-new and has no prior hash to conflict
 		// on.
 		fork, err := client.createSkill(p.source.Slug, "", []string{"claude-code"}, p.source.ID, "")
+		lineageDropped := false
+		if err != nil && strings.Contains(err.Error(), "forked_from skill") {
+			// The server can't resolve the upstream as a fork parent —
+			// deleted, or moved somewhere the caller can't read. The backup
+			// matters more than the lineage: retry as a plain personal copy.
+			// No reachable upstream also means no suggestion to send.
+			fork, err = client.createSkill(p.source.Slug, "", []string{"claude-code"}, "", "")
+			lineageDropped = true
+		}
 		if err != nil {
 			mu.Lock()
 			*warnings = append(*warnings, fmt.Sprintf(
 				"%s: could not save your edits to your account: %v. Local edit kept; nothing pushed upstream.",
 				p.name, err))
 			mu.Unlock()
+			atomic.AddInt64(failed, 1)
 			continue
 		}
+
+		// The server may resolve a stale fork parent to its current row
+		// (transfer = soft-delete + create, so a marker can lag a move).
+		// The returned lineage is canonical: suggest against it and follow
+		// the move on the marker's Source so future syncs track the live
+		// upstream.
+		if fork.ForkedFrom != nil && fork.ForkedFrom.String() != p.source.ID {
+			p.source.ID = fork.ForkedFrom.String()
+		}
+
 		updated, _, archiveErr := client.putArchive(fork.Id.String(), p.archive, "", p.contentHash)
 
 		// 3. The only real decision: suggest the edit to the upstream
 		// owner? Headless runs answer yes (matches the pre-existing
 		// non-interactive behaviour); interactive runs get the question.
-		suggest := true
-		if isTTY {
+		suggest := !lineageDropped
+		if suggest && isTTY {
 			fmt.Printf("\n  %s — suggest your edits to %s/%s? [Y/n] ", p.name, p.source.Owner, p.source.Slug)
 			answer, _ := reader.ReadString('\n')
 			answer = strings.TrimSpace(strings.ToLower(answer))
@@ -1477,12 +1498,19 @@ func drainShadowForks(
 		if suggestionID != "" {
 			entry.SuggestionID = suggestionID
 		}
-		entry.SuggestDeclined = !suggest
+		// A suggestion skipped because the upstream is unreachable is not
+		// a user decline — don't record one.
+		entry.SuggestDeclined = !suggest && !lineageDropped
 		entry.Deleted = false
 		entry.MovedTo = ""
 		seedCopyLedgerFromDisk(entry, p.name)
 		syncState.Skills[p.name] = entry
 
+		if lineageDropped {
+			*warnings = append(*warnings, fmt.Sprintf(
+				"%s: upstream %s/%s is gone or not accessible — your edits are saved as a personal copy, but no suggestion was sent.",
+				p.name, p.source.Owner, p.source.Slug))
+		}
 		if archiveErr != nil {
 			*warnings = append(*warnings, fmt.Sprintf(
 				"%s: your edits are saved but the upload failed: %v. Re-run push to retry the upload.",
