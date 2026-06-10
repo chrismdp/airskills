@@ -21,6 +21,9 @@ func TestPersonalScopeCallersAreOwnershipQueries(t *testing.T) {
 		// it). Backup rows are shadowed out of the effective listing, so
 		// the ownership query is the only way to find them.
 		"push.go": true,
+		// doctor.go validates the overlay invariants against the caller's
+		// own backup rows — same shadowed-rows rationale as push.go.
+		"doctor.go": true,
 	}
 	callRe := regexp.MustCompile(`listSkills\("personal"\)`)
 	defaultRe := regexp.MustCompile(`scope\s*=\s*"personal"`)

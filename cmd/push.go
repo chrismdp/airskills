@@ -1780,10 +1780,10 @@ func createOrAdoptSuggestion(client *apiClient, suggesterSkillID, upstreamID, ba
 
 // findCallerBackupRow locates the caller's existing hidden backup fork of
 // the given upstream (created by another device) so a slug collision at
-// create time adopts it instead of failing. Ownership query on purpose:
-// backup rows are the caller's own personal skills (shadowed out of the
-// effective listing by the same-slug org skill they back up).
+// create time adopts it instead of failing.
 func findCallerBackupRow(client *apiClient, upstreamID string) *apiSkill {
+	// Ownership query: backup rows are the caller's own personal skills,
+	// shadowed out of the effective listing by the org skill they back up.
 	owned, err := client.listSkills("personal")
 	if err != nil {
 		return nil
