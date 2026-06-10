@@ -1,6 +1,10 @@
 package cmd
 
-import "time"
+import (
+	"os"
+	"path/filepath"
+	"time"
+)
 
 // classifyCopyDivergence decides which content is authoritative across the
 // on-disk copies of a skill, using ONLY the per-copy baseline ledger — never
@@ -81,6 +85,39 @@ func ledgerBaseline(marker *SyncEntry, dir string) (hash string, known bool) {
 		return "", false
 	}
 	return cs.Hash, true
+}
+
+// seedCopyLedgerFromDisk stamps an EMPTY per-copy ledger with each on-disk
+// copy's current hash. Marker-creation sites (new-skill push, pull/add
+// install, fork drain, keep-local, force-pull) run AFTER this invocation's
+// mirror pass — which only stamps already-tracked markers — so a
+// freshly-created marker would otherwise carry no ledger until the next
+// run. An edit made before that next run would then be misclassified as a
+// divergence-without-history fork ("edited differently in two agent
+// copies") and never pushed. Seeding at creation records each copy's
+// current bytes as that copy's own baseline. No-op when a ledger already
+// exists (the mirror owns it from then on) or the marker is nil.
+func seedCopyLedgerFromDisk(marker *SyncEntry, dirName string) {
+	if marker == nil || len(marker.Copies) > 0 || dirName == "" {
+		return
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+	now := time.Now()
+	copies := map[string]CopyState{}
+	for _, a := range agents {
+		dir := filepath.Join(resolveGlobalDir(home, a.GlobalDir), dirName)
+		files := readSkillFiles(dir)
+		if len(files) == 0 {
+			continue
+		}
+		copies[dir] = CopyState{Hash: computeMerkleHash(files), SyncedAt: now}
+	}
+	if len(copies) > 0 {
+		marker.Copies = copies
+	}
 }
 
 // recordCopyBaselines rewrites the marker's per-copy ledger so every dir that

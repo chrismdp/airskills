@@ -335,6 +335,7 @@ func runPull(cmd *cobra.Command, args []string) error {
 				OwnerSlug:   ownerSlug,
 				Source:      owners.sourceFor(&p.skill),
 			}
+			seedCopyLedgerFromDisk(syncState.Skills[dirName], dirName)
 			autoResolved++
 			fmt.Printf("  %s %s %s\n", green("·"), p.skill.Name, dim("linked (bytes match server, no download)"))
 			lines[i].status = "linked"
@@ -454,6 +455,7 @@ func runPull(cmd *cobra.Command, args []string) error {
 			OwnerSlug:   ownerSlug,
 			Source:      owners.sourceFor(&p.skill),
 		}
+		seedCopyLedgerFromDisk(syncState.Skills[dirName], dirName)
 		if p.reason == "upstream-updated" && p.marker != nil && p.marker.Source != nil {
 			syncState.Skills[dirName].Source = p.marker.Source
 			markSourceUpstreamIncorporated(syncState.Skills[dirName], p.skill)
@@ -962,6 +964,7 @@ func applyForcePullMarker(syncState *SyncState, skillName string, skill apiSkill
 	if marker.Source == nil {
 		marker.Source = owners.sourceFor(&skill)
 	}
+	seedCopyLedgerFromDisk(marker, skillName)
 	syncState.Skills[skillName] = marker
 	return marker
 }

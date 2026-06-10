@@ -862,6 +862,7 @@ config).`,
 							if remote, gerr := client.getSkill(s.marker.SkillID); gerr == nil {
 								s.marker.Version = remote.Version
 							}
+							seedCopyLedgerFromDisk(s.marker, s.name)
 							mu.Lock()
 							syncState.Skills[s.name] = s.marker
 							mu.Unlock()
@@ -963,6 +964,12 @@ config).`,
 					warnings = append(warnings, sizeWarning)
 					mu.Unlock()
 				}
+				// Seed the per-copy ledger for markers that don't have one
+				// yet (new skill created this run, or a legacy marker) —
+				// the mirror pass ran before this marker existed, and an
+				// edit made before the next run would otherwise be
+				// misreported as a two-copy fork.
+				seedCopyLedgerFromDisk(s.marker, s.name)
 				mu.Lock()
 				syncState.Skills[s.name] = s.marker
 				mu.Unlock()
@@ -1473,6 +1480,7 @@ func drainShadowForks(
 		entry.SuggestDeclined = !suggest
 		entry.Deleted = false
 		entry.MovedTo = ""
+		seedCopyLedgerFromDisk(entry, p.name)
 		syncState.Skills[p.name] = entry
 
 		if archiveErr != nil {

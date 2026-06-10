@@ -227,6 +227,7 @@ local copy is backed up to ~/.airskills/undo/<timestamp>/ first.`,
 				if entry.SkillID == "" {
 					entry.SkillID = result.ID
 				}
+				seedCopyLedgerFromDisk(entry, dirName)
 				syncState.Skills[dirName] = entry
 				saveSyncState(syncState)
 
@@ -278,6 +279,7 @@ local copy is backed up to ~/.airskills/undo/<timestamp>/ first.`,
 						UpstreamVersion:     result.Version,
 					},
 				}
+				seedCopyLedgerFromDisk(syncState.Skills[dirName], dirName)
 				saveSyncState(syncState)
 				fmt.Printf("\n  %s %s/%s %s\n", green("·"), ownerSlug, result.Slug, dim("linked (bytes match server, no download needed)"))
 				telemetry.Capture("cli_add", map[string]interface{}{
@@ -367,6 +369,7 @@ local copy is backed up to ~/.airskills/undo/<timestamp>/ first.`,
 			// If creation fails (e.g. network), fall through — sync will handle it
 		}
 
+		seedCopyLedgerFromDisk(entry, dirName)
 		syncState.Skills[dirName] = entry
 		saveSyncState(syncState)
 

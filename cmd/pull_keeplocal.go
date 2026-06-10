@@ -123,6 +123,7 @@ func runPullKeepLocal(cmd *cobra.Command, args []string) error {
 			entry.SuggestionID = prev.SuggestionID
 			entry.SuggestDeclined = prev.SuggestDeclined
 		}
+		seedCopyLedgerFromDisk(entry, dirName)
 		syncState.Skills[dirName] = entry
 		// Drop the parked review copy — it's been resolved.
 		_, _ = removePendingConflictDirs(name)

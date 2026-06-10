@@ -30,10 +30,11 @@ type SyncEntry struct {
 	ContentHash string `json:"content_hash,omitempty"`
 	Tool        string `json:"tool"`
 	// Copies is the per-copy reconciliation ledger, keyed by absolute
-	// skill-dir path. Maintained by exactly one writer — the mirror
-	// (mirrorLocalSkills) — and used to tell which agent copy of a skill
-	// diverged. Empty for legacy markers and untracked skills, in which
-	// case the mirror falls back to the marker baseline (never mtime). See
+	// skill-dir path. Seeded at marker creation (seedCopyLedgerFromDisk)
+	// and maintained by the mirror (mirrorLocalSkills); used to tell which
+	// agent copy of a skill diverged. Empty only for legacy markers, in
+	// which case a divergence is surfaced for reconciliation rather than
+	// guessed (never mtime, never the marker-wide hash). See
 	// cli-per-copy-skill-divergence.md.
 	Copies    map[string]CopyState `json:"copies,omitempty"`
 	OwnerKind string               `json:"owner_kind,omitempty"` // "user" or "org"
