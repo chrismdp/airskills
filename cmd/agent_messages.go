@@ -56,9 +56,10 @@ type conflictEntry struct {
 	// bytes; the "diverged on both sides" framing doesn't apply.
 	kind string
 	// orgSlug is set when the conflicting server skill belongs to an org.
-	// Drives a warning that --keep-local FORKS the org skill into your
-	// personal namespace rather than updating it — wrong if you administer
-	// the org. Empty for personal skills.
+	// Drives a warning that after --keep-local, push proposes edits as a
+	// suggestion rather than updating the org skill in place — admins
+	// accept their own suggestion via review (no role in the API yet, so
+	// the warning fires for any org skill). Empty for personal skills.
 	orgSlug string
 }
 
@@ -79,9 +80,10 @@ func conflictResolutionMessage(entries []conflictEntry, isAgent bool) string {
 				fmt.Fprintf(&b, "\nAsk your agent to read both directories, decide with you, then run one of:\n")
 			}
 			if e.orgSlug != "" {
-				fmt.Fprintf(&b, "\n  ⚠ %q is an org skill (%s/%s). 'pull --keep-local' FORKS your copy into your\n", e.name, e.orgSlug, e.name)
-				b.WriteString("    personal namespace — it does NOT update the org skill. If you administer this org\n")
-				fmt.Fprintf(&b, "    skill, take the org copy instead (airskills pull --force %s), edit it, and push it back.\n", e.name)
+				fmt.Fprintf(&b, "\n  ⚠ %q is an org skill (%s/%s). After 'pull --keep-local', pushing your edits backs\n", e.name, e.orgSlug, e.name)
+				b.WriteString("    them up to your own account and proposes them to the org as a suggestion — it does\n")
+				b.WriteString("    not update the org skill directly. If you administer this org skill, accept your\n")
+				b.WriteString("    own suggestion with 'airskills review'.\n")
 			}
 			b.WriteString("\n  Keep your local copy, track it against the server version (stops this warning):\n")
 			fmt.Fprintf(&b, "      airskills pull --keep-local %s\n", e.name)

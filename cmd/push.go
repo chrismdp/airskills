@@ -412,6 +412,10 @@ config).`,
 		var warnings []string
 		var pendingPrompts []pendingSuggestionPrompt
 		var pendingShadowForks []pendingShadowFork
+		// Lazy owner lookup for the 403 self-heal below. Safe to share
+		// across goroutines: init is sync.Once-guarded and the maps are
+		// read-only afterwards.
+		owners := newOwnerResolver(client)
 		sem := make(chan struct{}, 5) // max 5 concurrent uploads
 
 		// Free tier limits (checked client-side as guidance, server enforces)
@@ -606,17 +610,9 @@ config).`,
 						renderProgress(lines)
 						return
 					}
-					if s.marker.SuggestDeclined {
-						mu.Lock()
-						warnings = append(warnings, fmt.Sprintf(
-							"%s: a previous suggestion was declined — local edits kept locally, not re-suggested. Use `airskills push --force` to overwrite (not yet supported for non-owned skills).",
-							s.name))
-						mu.Unlock()
-						lines[i].status = "declined"
-						lines[i].pct = 1
-						renderProgress(lines)
-						return
-					}
+					// A past SuggestDeclined doesn't block this path: the
+					// decline applied to those bytes. New edits are backed
+					// up again and the suggest question is asked afresh.
 					// Collect for sequential prompt + fork + upload + suggest
 					// after wg.Wait so we don't race goroutines on stdin or
 					// the (sequential) caller-side rename + suggestion APIs.
@@ -788,6 +784,36 @@ config).`,
 					s.marker.SkillID, archive, expectedHash, contentHash,
 				)
 				if err != nil {
+					// 403 on a skill that's still alive in the caller's
+					// effective set isn't a transfer — the caller just can't
+					// write it (org member, or a marker that lost its Source
+					// pointer, e.g. one written by an older `pull --force`).
+					// Backfill the upstream pointer and take the same
+					// fork+suggest path as any other non-owned edit instead
+					// of dead-ending on a "moved" warning whose suggested
+					// fix (`add --force`) would discard the user's edits.
+					if statusCode == 403 {
+						if remote, ok := remoteByID[s.marker.SkillID]; ok {
+							if src := owners.sourceForNonOwned(remote); src != nil {
+								mu.Lock()
+								pendingShadowForks = append(pendingShadowForks, pendingShadowFork{
+									name:        s.name,
+									dir:         s.dir,
+									archive:     archive,
+									contentHash: contentHash,
+									archiveSize: archiveSize,
+									source:      src,
+									prevMarker:  s.marker,
+									progressIdx: i,
+								})
+								mu.Unlock()
+								lines[i].status = "fork-suggest"
+								lines[i].pct = 0.5
+								renderProgress(lines)
+								return
+							}
+						}
+					}
 					// 403/404: most likely server-side transfer or deletion.
 					// GET the skill to confirm and produce a clear message.
 					if statusCode == 403 || statusCode == 404 {
@@ -904,7 +930,11 @@ config).`,
 					mu.Unlock()
 				}
 
-				if s.marker.Source != nil && s.marker.SuggestionID == "" && !s.marker.SuggestDeclined {
+				// SuggestDeclined deliberately not consulted: a decline
+				// applies to the bytes it was asked about. This branch only
+				// runs after uploading CHANGED content, so new edits always
+				// re-offer the question.
+				if s.marker.Source != nil && s.marker.SuggestionID == "" {
 					mu.Lock()
 					pendingPrompts = append(pendingPrompts, pendingSuggestionPrompt{
 						name:             s.name,
@@ -977,8 +1007,7 @@ config).`,
 		if len(pendingPrompts) > 0 && isTTY {
 			reader := bufio.NewReader(os.Stdin)
 			for _, p := range pendingPrompts {
-				fmt.Printf("\n  %s was originally from %s/%s\n", p.name, p.source.Owner, p.source.Slug)
-				fmt.Print("  Create a suggestion for the owner, or just keep your version? [s/K] ")
+				fmt.Printf("\n  %s — suggest your edits to %s/%s? [y/N] ", p.name, p.source.Owner, p.source.Slug)
 				answer, _ := reader.ReadString('\n')
 				answer = strings.TrimSpace(strings.ToLower(answer))
 
@@ -1385,46 +1414,48 @@ func drainShadowForks(
 	reader := bufio.NewReader(os.Stdin)
 
 	for _, p := range queue {
-		fmt.Printf("\n  %s — local edit on a skill from %s/%s\n", p.name, p.source.Owner, p.source.Slug)
-		fmt.Printf("    Forking your version to %s/%s and submitting a suggestion to %s/%s.\n",
-			fallback(callerUsername, "your namespace"), p.source.Slug, p.source.Owner, p.source.Slug)
-
-		if isTTY {
-			fmt.Print("    Continue? [Y/n] ")
-			answer, _ := reader.ReadString('\n')
-			answer = strings.TrimSpace(strings.ToLower(answer))
-			if answer == "n" || answer == "no" {
-				mu.Lock()
-				if entry, ok := syncState.Skills[p.name]; ok {
-					entry.SuggestDeclined = true
-				}
-				*warnings = append(*warnings, fmt.Sprintf(
-					"%s: fork+suggest skipped (user declined). Local edit kept; re-run push to retry.",
-					p.name))
-				mu.Unlock()
-				continue
-			}
-		}
-
-		// 1. Create the fork in the caller's namespace.
+		// 1+2. Back up the edit unconditionally: create the fork in the
+		// caller's namespace and upload the local content to it. The fork
+		// is plumbing, not a user decision — nothing the user typed (or
+		// declined) should ever lose their edited copy. expectedHash is
+		// empty: the fork is brand-new and has no prior hash to conflict
+		// on.
 		fork, err := client.createSkill(p.source.Slug, "", []string{"claude-code"}, p.source.ID, "")
 		if err != nil {
 			mu.Lock()
 			*warnings = append(*warnings, fmt.Sprintf(
-				"%s: could not fork into your namespace: %v. Local edit kept; nothing pushed upstream.",
+				"%s: could not save your edits to your account: %v. Local edit kept; nothing pushed upstream.",
 				p.name, err))
 			mu.Unlock()
 			continue
 		}
-
-		// 2. Upload local content to the fork. expectedHash is empty —
-		// the fork is brand-new and has no prior hash to conflict on.
 		updated, _, archiveErr := client.putArchive(fork.Id.String(), p.archive, "", p.contentHash)
 
-		// 3. Submit the suggestion. base_content_hash is the upstream
-		// baseline we last sync'd (stored on the marker's Source).
-		suggestion, suggestErr := client.createSuggestion(
-			fork.Id.String(), p.source.ID, p.source.ContentHash, "")
+		// 3. The only real decision: suggest the edit to the upstream
+		// owner? Headless runs answer yes (matches the pre-existing
+		// non-interactive behaviour); interactive runs get the question.
+		suggest := true
+		if isTTY {
+			fmt.Printf("\n  %s — suggest your edits to %s/%s? [Y/n] ", p.name, p.source.Owner, p.source.Slug)
+			answer, _ := reader.ReadString('\n')
+			answer = strings.TrimSpace(strings.ToLower(answer))
+			if answer == "n" || answer == "no" {
+				suggest = false
+			}
+		}
+
+		// base_content_hash is the upstream baseline we last sync'd
+		// (stored on the marker's Source).
+		var suggestErr error
+		suggestionID := ""
+		if suggest {
+			suggestion, serr := client.createSuggestion(
+				fork.Id.String(), p.source.ID, p.source.ContentHash, "")
+			suggestErr = serr
+			if suggestion != nil {
+				suggestionID = suggestion.Id.String()
+			}
+		}
 
 		// 4. Rewrite the marker even on partial failure — the fork now
 		// exists server-side and must be tracked, otherwise the next
@@ -1449,22 +1480,22 @@ func drainShadowForks(
 		} else {
 			entry.Version = fork.Version
 		}
-		if suggestion != nil {
-			entry.SuggestionID = suggestion.Id.String()
+		if suggestionID != "" {
+			entry.SuggestionID = suggestionID
 		}
-		entry.SuggestDeclined = false
+		entry.SuggestDeclined = !suggest
 		entry.Deleted = false
 		entry.MovedTo = ""
 		syncState.Skills[p.name] = entry
 
 		if archiveErr != nil {
 			*warnings = append(*warnings, fmt.Sprintf(
-				"%s: fork created but upload failed: %v. Re-run push to retry the upload.",
+				"%s: your edits are saved but the upload failed: %v. Re-run push to retry the upload.",
 				p.name, archiveErr))
 		}
 		if suggestErr != nil {
 			*warnings = append(*warnings, fmt.Sprintf(
-				"%s: fork uploaded but suggestion failed: %v. The fork is tracked; retry later.",
+				"%s: your edits are saved but the suggestion failed: %v. Re-run push to retry.",
 				p.name, suggestErr))
 		}
 
@@ -1473,22 +1504,15 @@ func drainShadowForks(
 		mu.Unlock()
 
 		if archiveErr == nil && suggestErr == nil {
-			fmt.Printf("  %s %s forked to %s/%s + suggested to %s/%s\n",
-				green("✓"), p.name,
-				fallback(callerUsername, "your namespace"), p.source.Slug,
-				p.source.Owner, p.source.Slug)
+			if suggest {
+				fmt.Printf("  %s %s: edits saved; suggestion sent to %s/%s\n",
+					green("✓"), p.name, p.source.Owner, p.source.Slug)
+			} else {
+				fmt.Printf("  %s %s: edits saved; no suggestion sent\n",
+					green("✓"), p.name)
+			}
 		}
 	}
-}
-
-// fallback returns first if non-empty, otherwise second. Used for human
-// summary lines where the caller's username might be unknown (the
-// /api/v1/me lookup failed) and we still want a readable sentence.
-func fallback(first, second string) string {
-	if first != "" {
-		return first
-	}
-	return second
 }
 
 func propagatePartialRenames(localSkills map[string]string, syncState *SyncState) {

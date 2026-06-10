@@ -100,17 +100,19 @@ func runPullKeepLocal(cmd *cobra.Command, args []string) error {
 		ownerKind, ownerSlug := owners.resolve(&p.skill)
 		src := owners.sourceFor(&p.skill)
 		// Org-skill caveat: keep-local marks this as sourced, so the next
-		// push FORKS it into your personal namespace rather than updating
-		// the org skill. That's correct for a member, wrong for an admin
-		// who owns the org skill. We can't yet tell admins apart (no role
+		// push backs the local copy up to the caller's account and
+		// proposes a suggestion rather than updating the org skill in
+		// place. Right for a member; an admin accepts their own
+		// suggestion via review. We can't yet tell admins apart (no role
 		// in the API), so warn whenever it's an org skill.
 		if ownerKind == "org" {
 			org := ownerSlug
 			if org == "" {
 				org = "the org"
 			}
-			fmt.Printf("  %s %q is an org skill (%s). Your next push will FORK it into your personal\n", yellow("⚠"), name, org)
-			fmt.Printf("    namespace, not update the org skill. If you administer it, run 'airskills pull --force %s' instead.\n", name)
+			fmt.Printf("  %s %q is an org skill (%s). Your next push will back your version up to your\n", yellow("⚠"), name, org)
+			fmt.Printf("    account and propose it as a suggestion — it won't update the org skill directly.\n")
+			fmt.Printf("    If you administer it, accept your own suggestion with 'airskills review'.\n")
 		}
 		entry := buildKeepLocalEntry(p.skill, ownerKind, ownerSlug, src)
 		// Preserve identity/suggestion fields when the skill was already

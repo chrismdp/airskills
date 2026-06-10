@@ -77,6 +77,25 @@ func (r *ownerResolver) resolve(skill *apiSkill) (kind, slug string) {
 //   - caller-owned skills (no Source needed)
 //   - skills whose owner we cannot identify and there's no useful slug
 //     to record — leave Source nil rather than write a half-record.
+// sourceForNonOwned returns sourceFor(skill) only when the skill is
+// provably not the caller's: org-owned, or personal-owned by a different
+// user. Returns nil when ownership can't be established (e.g. the /me
+// lookup failed) — callers use this where guessing wrong would fork the
+// caller's own skill.
+func (r *ownerResolver) sourceForNonOwned(skill *apiSkill) *skillSource {
+	if skill == nil {
+		return nil
+	}
+	r.initOnce.Do(r.init)
+	if skill.OrgId != nil {
+		return r.sourceFor(skill)
+	}
+	if skill.OwnerId != nil && r.userID != "" && skill.OwnerId.String() != r.userID {
+		return r.sourceFor(skill)
+	}
+	return nil
+}
+
 func (r *ownerResolver) sourceFor(skill *apiSkill) *skillSource {
 	if skill == nil {
 		return nil

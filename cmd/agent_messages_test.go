@@ -171,14 +171,15 @@ func TestConflictResolutionMessageUntrackedOffersKeepLocalForceAndRename(t *test
 }
 
 // When the conflicting skill is an org skill, the message must warn that
-// keep-local FORKS it (wrong for an admin who owns the org skill) — we
-// can't detect admin role yet, so the warning fires for any org skill.
-// Personal skills get no such warning.
+// after keep-local, push proposes edits as a suggestion rather than
+// updating the org skill in place (admins accept their own suggestion via
+// review) — we can't detect admin role yet, so the warning fires for any
+// org skill. Personal skills get no such warning.
 func TestConflictResolutionMessageUntrackedWarnsForOrgSkill(t *testing.T) {
 	org := conflictResolutionMessage([]conflictEntry{
 		{name: "home", localDir: "/l/home", remoteDir: "/t/home", kind: "untracked", orgSlug: "cherrypick"},
 	}, true)
-	for _, want := range []string{"org skill", "FORK", "cherrypick/home", "administer"} {
+	for _, want := range []string{"org skill", "suggestion", "cherrypick/home", "administer", "airskills review"} {
 		if !strings.Contains(org, want) {
 			t.Errorf("org-skill conflict message missing %q in:\n%s", want, org)
 		}
@@ -187,8 +188,8 @@ func TestConflictResolutionMessageUntrackedWarnsForOrgSkill(t *testing.T) {
 	personal := conflictResolutionMessage([]conflictEntry{
 		{name: "home", localDir: "/l/home", remoteDir: "/t/home", kind: "untracked"},
 	}, true)
-	if strings.Contains(personal, "FORK") {
-		t.Errorf("personal-skill conflict must not get the org fork warning:\n%s", personal)
+	if strings.Contains(personal, "administer") {
+		t.Errorf("personal-skill conflict must not get the org suggestion warning:\n%s", personal)
 	}
 }
 

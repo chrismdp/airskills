@@ -938,6 +938,34 @@ func decidePullActions(remoteSkills []apiSkill, localSkills map[string]string, s
 	return actions, warnings, divergedSlugs
 }
 
+// applyForcePullMarker updates (or creates) the marker for a force-pulled
+// skill. Force-pull adopts the server copy wholesale, so the marker must
+// carry the same ownership fields a normal pull install writes — above all
+// Source for non-owned skills, which is what routes the next push into
+// fork-then-suggest instead of a direct write the caller may not be allowed
+// to make. A force-pull that drops Source leaves the marker pointing at a
+// skill the caller can read but not write, and push dead-ends on 403 with a
+// misleading "moved" warning. Existing identity fields (Source, LocalAlias,
+// SuggestionID) are preserved; only the snapshot fields are refreshed.
+func applyForcePullMarker(syncState *SyncState, skillName string, skill apiSkill, owners *ownerResolver) *SyncEntry {
+	marker := syncState.Skills[skillName]
+	if marker == nil {
+		marker = &SyncEntry{Tool: "claude-code"}
+	}
+	marker.SkillID = skill.Id.String()
+	marker.ContentHash = strDeref(skill.ContentHash)
+	marker.Version = skill.Version
+	if kind, slug := owners.resolve(&skill); kind != "" {
+		marker.OwnerKind = kind
+		marker.OwnerSlug = slug
+	}
+	if marker.Source == nil {
+		marker.Source = owners.sourceFor(&skill)
+	}
+	syncState.Skills[skillName] = marker
+	return marker
+}
+
 // runPullForce implements `airskills pull --force [skill...]`.
 // Downloads the remote version of diverged skills and overwrites local,
 // backing up current local files to ~/.airskills/undo/<ts>/<skill>/<agent>/ first.
@@ -1027,6 +1055,7 @@ func runPullForce(cmd *cobra.Command, args []string) error {
 
 	ts := time.Now().UTC().Format("20060102T150405Z")
 	var forcePulled int
+	owners := newOwnerResolver(client)
 
 	for _, p := range targets {
 		skillName := p.skill.Name
@@ -1052,15 +1081,10 @@ func runPullForce(cmd *cobra.Command, args []string) error {
 			continue
 		}
 
-		// Update marker, preserving other fields (Source, etc.)
-		marker := syncState.Skills[skillName]
-		if marker == nil {
-			marker = &SyncEntry{Tool: "claude-code"}
-		}
-		marker.SkillID = p.skill.Id.String()
-		marker.ContentHash = strDeref(p.skill.ContentHash)
-		marker.Version = p.skill.Version
-		syncState.Skills[skillName] = marker
+		applyForcePullMarker(syncState, skillName, p.skill, owners)
+		// The conflict is resolved — sweep the parked review copy like
+		// keep-local does, so sync stops warning about it.
+		_, _ = removePendingConflictDirs(p.skill.Name)
 		forcePulled++
 		fmt.Printf("  %s %s\n", cyan("↓"), skillName)
 	}
