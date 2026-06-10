@@ -93,6 +93,16 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	syncState := loadSyncState()
 	pendingConflicts := pendingConflictNames()
 
+	// Local forks (agent copies edited differently) — sync/push will refuse
+	// these until reconciled, so they get their own bucket below instead of
+	// being counted as "to push" (which implies a sync would clear them).
+	// Read-only detection: status must never mirror/write.
+	localForks := detectLocalForks(syncState)
+	forkNames := map[string]bool{}
+	for _, c := range localForks {
+		forkNames[c.slug] = true
+	}
+
 	sr := <-skillsCh
 	if sr.err != nil {
 		// Still drain the other channels so their goroutines don't leak
@@ -120,6 +130,13 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	toPush, toPull, toUpdate, upstream, untracked, inOtherSkillset := buckets.toPush, buckets.toPull, buckets.toUpdate, buckets.upstream, buckets.untracked, buckets.inOtherSkillset
 	tombstoned := buckets.tombstoned
 
+	// A forked skill classifies as dirty/untracked from its first-found copy,
+	// but no push, pull, or update can act on it until the copies agree —
+	// report it only in the local-fork bucket.
+	toPush = dropNames(toPush, forkNames)
+	toUpdate = dropNames(toUpdate, forkNames)
+	untracked = dropNames(untracked, forkNames)
+
 	// A pull conflict now parks its remote copy to the stable conflict path
 	// AND surfaces live in the "untracked" bucket (or "on server"/toUpdate
 	// for a tracked divergence). Don't double-report: drop pending-conflict
@@ -134,6 +151,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	needInOther := len(inOtherSkillset)
 	needPendingConflicts := len(pendingConflicts)
 	needTombstoned := len(tombstoned)
+	needForks := len(localForks)
 
 	// Skip capture on the shell-prompt hot path (quiet mode is used by
 	// `eval "$(airskills status)"` in shell init). Capturing there would
@@ -149,6 +167,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 			"pending_suggestions": pendingSuggestions,
 			"pending_conflicts":   needPendingConflicts,
 			"tombstoned":          needTombstoned,
+			"local_forks":         needForks,
 		})
 	}
 
@@ -156,7 +175,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	// auto-update, so isNewer above falsely flags an upgrade.
 	showLatestCLI := hr.latestCLI != "" && !autoUpdateDidFire.Load()
 
-	if needPush == 0 && needPull == 0 && needUpdate == 0 && needUntracked == 0 && upstreamUpdates == 0 && pendingSuggestions == 0 && needInOther == 0 && needPendingConflicts == 0 && needTombstoned == 0 && !showLatestCLI {
+	if needPush == 0 && needPull == 0 && needUpdate == 0 && needUntracked == 0 && upstreamUpdates == 0 && pendingSuggestions == 0 && needInOther == 0 && needPendingConflicts == 0 && needTombstoned == 0 && needForks == 0 && !showLatestCLI {
 		if !quiet {
 			fmt.Fprintf(os.Stderr, "[airskills] %s\n", green("✓ in sync"))
 			printAgentNextSteps(os.Stderr, []agentNextStep{
@@ -195,6 +214,9 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	if needTombstoned > 0 {
 		parts = append(parts, yellow(fmt.Sprintf("⚠ %d marked transferred", needTombstoned)))
 	}
+	if needForks > 0 {
+		parts = append(parts, yellow(fmt.Sprintf("⚠ %d local fork", needForks)))
+	}
 
 	// Pick the headline command for the work that actually dominates.
 	// `sync` is correct ONLY when there's push/pull/update/untracked/upstream
@@ -213,8 +235,17 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		hint = "airskills review"
 	case needPendingConflicts > 0:
 		hint = "airskills rm <name> --pending"
+	case needForks > 0:
+		// No command resolves a fork — the copies must be reconciled by
+		// hand (or an agent). Point at the detail block, not at sync,
+		// which would refuse and loop the user back here.
+		hint = ""
 	}
-	fmt.Fprintf(os.Stderr, "[airskills] %s — run '%s'\n", strings.Join(parts, ", "), hint)
+	if hint != "" {
+		fmt.Fprintf(os.Stderr, "[airskills] %s — run '%s'\n", strings.Join(parts, ", "), hint)
+	} else {
+		fmt.Fprintf(os.Stderr, "[airskills] %s — reconcile the copies below\n", strings.Join(parts, ", "))
+	}
 
 	// Detail groups — show the actual skill names under each action so the
 	// user (and any agent driving the CLI) can see exactly what's about to
@@ -226,6 +257,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		printStatusGroup("on server", toUpdate, yellow)
 		printStatusGroup("upstream", upstream, cyan)
 		printStatusGroup("untracked", untracked, yellow)
+		printLocalForkStatusGroup(os.Stderr, localForks)
 		printPendingConflictStatusGroup(os.Stderr, pendingConflicts)
 		if needTombstoned > 0 {
 			fmt.Fprintf(os.Stderr, "  %s (%d): present locally but marked transferred away. If it's back in your skillset, 'airskills sync' re-adopts it (divergence handled normally); otherwise 'airskills rm <name>' discards the local copy:\n",
@@ -275,10 +307,44 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		if needTombstoned > 0 {
 			steps = append(steps, agentNextStep{Cmd: "airskills sync", Why: "re-adopt a skill marked transferred but back in your skillset (divergence handled normally)"})
 		}
+		if needForks > 0 {
+			steps = append(steps, agentNextStep{Cmd: "airskills sync", Why: "after diffing and merging each local fork's copies to match — sync/push refuse forks until the copies agree"})
+		}
 		printAgentNextSteps(os.Stderr, steps)
 	}
 
 	return nil
+}
+
+// dropNames filters out of names every entry present in the exclude set.
+func dropNames(names []string, exclude map[string]bool) []string {
+	if len(exclude) == 0 {
+		return names
+	}
+	out := names[:0]
+	for _, n := range names {
+		if !exclude[n] {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// printLocalForkStatusGroup details each forked skill with the same diagnosis
+// and guidance push/sync give (printMirrorConflicts), so status stops
+// implying a plain sync will clear it.
+func printLocalForkStatusGroup(w io.Writer, forks []mirrorConflict) {
+	if len(forks) == 0 {
+		return
+	}
+	fmt.Fprintf(w, "  %s (%d): edited differently in two agent copies — sync and push leave these untouched until the copies match:\n", yellow("local forks"), len(forks))
+	for _, c := range forks {
+		fmt.Fprintf(w, "    %s\n", c.slug)
+		for _, p := range c.paths {
+			fmt.Fprintf(w, "      %s\n", p)
+		}
+	}
+	fmt.Fprintf(w, "  Reconcile the copies — edit them to match (the version you want wins), then re-run 'airskills sync'.\n")
 }
 
 // dropPendingConflictDuplicates removes from pending any name that already

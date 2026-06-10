@@ -329,6 +329,48 @@ func TestRunStatusHeadlineStillSyncWhenSyncWorkPresent(t *testing.T) {
 	}
 }
 
+// TestRunStatusSurfacesLocalFork — a skill whose agent copies diverged (a
+// local fork) must be reported as its own bucket with reconcile guidance,
+// not counted in "to push": sync/push will refuse it until the copies are
+// reconciled, so "↑ 1 to push" sends the user into a sync that can't act.
+// From the 2026-06-10 feedback — see
+// platform/doc/changes/cli-sync-misreports-local-fork-as-missing.md.
+func TestRunStatusSurfacesLocalFork(t *testing.T) {
+	out := runStatusCapture(t, statusFixture{
+		runningVersion: "0.6.1",
+		forkedSkills:   []string{"telegram"},
+	})
+	if strings.Contains(out, "in sync") {
+		t.Fatalf("status must not say in sync with a local fork; got:\n%s", out)
+	}
+	if !strings.Contains(out, "local fork") || !strings.Contains(out, "telegram") {
+		t.Fatalf("expected local-fork detail naming the skill, got:\n%s", out)
+	}
+	if !strings.Contains(out, "Reconcile") {
+		t.Fatalf("expected reconcile guidance, got:\n%s", out)
+	}
+	if strings.Contains(out, "to push") {
+		t.Fatalf("forked skill must not be counted as 'to push'; got:\n%s", out)
+	}
+}
+
+// A fork must not hide other work: a forked skill plus an ordinary local-only
+// skill should report both the fork bucket and "↑ 1 to push" (the unforked
+// one only).
+func TestRunStatusLocalForkDoesNotHideOtherWork(t *testing.T) {
+	out := runStatusCapture(t, statusFixture{
+		runningVersion: "0.6.1",
+		localSkills:    []string{"plain-skill"},
+		forkedSkills:   []string{"telegram"},
+	})
+	if !strings.Contains(out, "1 to push") {
+		t.Fatalf("expected '↑ 1 to push' for the unforked skill, got:\n%s", out)
+	}
+	if !strings.Contains(out, "local fork") {
+		t.Fatalf("expected local-fork bucket alongside push work, got:\n%s", out)
+	}
+}
+
 // Direct unit test for the post-performUpdate gate: the flag must only
 // flip when an actual swap happened. ("", nil) is the rare-but-real
 // case where update_state.json said newer-available but the GitHub
@@ -368,6 +410,7 @@ type statusFixture struct {
 	latestCLI             string
 	autoUpdated           bool
 	localSkills           []string
+	forkedSkills          []string // installed in two agent dirs with diverging content
 	pendingConflictSkills []string
 	quiet                 bool
 	rememberedSlug        string    // cfg.Skillset on disk before runStatus
@@ -406,6 +449,22 @@ func runStatusCapture(t *testing.T, f statusFixture) string {
 		body := "---\nname: " + name + "\ndescription: test\n---\n# " + name + "\n"
 		if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(body), 0600); err != nil {
 			t.Fatalf("write SKILL.md: %v", err)
+		}
+	}
+
+	// A forked skill lives in two agent dirs with diverging content and no
+	// per-copy ledger — exactly the divergence-without-history state
+	// classifyCopyDivergence refuses to flatten.
+	for _, name := range f.forkedSkills {
+		for i, agentDir := range []string{".claude/skills", ".codex/skills"} {
+			dir := filepath.Join(home, filepath.FromSlash(agentDir), name)
+			if err := os.MkdirAll(dir, 0700); err != nil {
+				t.Fatalf("MkdirAll forked skill: %v", err)
+			}
+			body := fmt.Sprintf("---\nname: %s\ndescription: test\n---\n# %s — edit %d\n", name, name, i)
+			if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(body), 0600); err != nil {
+				t.Fatalf("write forked SKILL.md: %v", err)
+			}
 		}
 	}
 

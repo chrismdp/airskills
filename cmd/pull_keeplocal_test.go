@@ -36,7 +36,7 @@ func TestKeepLocalEntryQuietsUntrackedConflict(t *testing.T) {
 
 	// Baseline: an untracked local dir + same-named server skill with
 	// different bytes is an untracked-conflict (the recurring warning).
-	actions, _, _ := decidePullActions(remote, local, state)
+	actions, _, _ := decidePullActions(remote, local, state, nil)
 	if len(actions) != 1 || actions[0].reason != "untracked-conflict" {
 		t.Fatalf("expected untracked-conflict baseline, got %+v", actions)
 	}
@@ -45,7 +45,7 @@ func TestKeepLocalEntryQuietsUntrackedConflict(t *testing.T) {
 	state.Skills["home"] = buildKeepLocalEntry(remote[0], "user", "chris", nil)
 
 	// Now quiet: the skill no longer queues a diverged/untracked-conflict action.
-	actions2, _, _ := decidePullActions(remote, local, state)
+	actions2, _, _ := decidePullActions(remote, local, state, nil)
 	for _, a := range actions2 {
 		if a.reason == "untracked-conflict" || a.reason == "diverged" {
 			t.Fatalf("keep-local should silence the conflict; still got %q", a.reason)
@@ -175,7 +175,7 @@ func TestRunPullKeepLocalResolvesConflict(t *testing.T) {
 		{Id: testUUID("skill-home"), Name: "home", Version: "1.0.0", ContentHash: strPtr("serverhash")},
 	}
 	localMap := map[string]string{"home": skillDir}
-	actions, _, _ := decidePullActions(remoteSkills, localMap, loadSyncState())
+	actions, _, _ := decidePullActions(remoteSkills, localMap, loadSyncState(), nil)
 	for _, a := range actions {
 		if a.reason == "untracked-conflict" || a.reason == "diverged" {
 			t.Fatalf("after keep-local, a re-sync must be quiet; still classified %q", a.reason)

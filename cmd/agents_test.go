@@ -850,7 +850,7 @@ func TestDecidePullActionsReturnsDivergedSlugs(t *testing.T) {
 	}
 	_ = untrackedID
 
-	_, _, divergedSlugs := decidePullActions(remote, local, state)
+	_, _, divergedSlugs := decidePullActions(remote, local, state, nil)
 	wantSet := map[string]bool{"diverged-skill": true, "untracked-skill": true}
 	gotSet := map[string]bool{}
 	for _, s := range divergedSlugs {

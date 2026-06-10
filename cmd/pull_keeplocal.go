@@ -79,7 +79,7 @@ func runPullKeepLocal(cmd *cobra.Command, args []string) error {
 	}
 	rememberSkillsetAfterSuccess(cfg, resolvedSlug)
 
-	toPull, _, _ := decidePullActions(remoteSkills, localSkills, syncState)
+	toPull, _, _ := decidePullActions(remoteSkills, localSkills, syncState, nil)
 	conflicts := map[string]pullEntry{}
 	for _, p := range toPull {
 		if p.reason == "diverged" || p.reason == "untracked-conflict" {

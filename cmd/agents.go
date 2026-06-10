@@ -361,6 +361,44 @@ func printMirrorConflicts(conflicts []mirrorConflict) {
 	}
 }
 
+// detectLocalForks reports slugs whose agent copies have diverged in a way
+// mirror cannot safely reconcile — the read-only counterpart of
+// mirrorLocalSkills for commands that must not write (status). Same
+// classification (classifyCopyDivergence), no mirroring, no ledger stamping.
+func detectLocalForks(syncState *SyncState) []mirrorConflict {
+	slugToPaths, detectedDirs, err := scanSkillsAllPaths()
+	if err != nil || len(detectedDirs) == 0 {
+		return nil
+	}
+
+	var conflicts []mirrorConflict
+	for slug, paths := range slugToPaths {
+		hashByPath := make(map[string]string, len(paths))
+		hashGroups := map[string][]string{}
+		for _, p := range paths {
+			h := computeMerkleHash(readSkillFiles(p))
+			hashByPath[p] = h
+			hashGroups[h] = append(hashGroups[h], p)
+		}
+
+		var marker *SyncEntry
+		if syncState != nil {
+			if e, ok := syncState.Skills[slug]; ok && e != nil {
+				marker = e
+			}
+		}
+
+		authorHash, forkPaths := classifyCopyDivergence(marker, paths, hashByPath, hashGroups)
+		if authorHash == "" {
+			if len(forkPaths) == 0 {
+				forkPaths = paths
+			}
+			conflicts = append(conflicts, mirrorConflict{slug: slug, paths: forkPaths})
+		}
+	}
+	return conflicts
+}
+
 // mirrorLocalSkills normalises local skill copies across every detected agent
 // directory so that an edit in any folder is propagated to all the others.
 //

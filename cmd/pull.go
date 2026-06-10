@@ -229,7 +229,7 @@ func runPull(cmd *cobra.Command, args []string) error {
 
 	owners := newOwnerResolver(client)
 
-	toPull, missingWarnings, divergedSlugs := decidePullActions(remoteSkills, localSkills, syncState)
+	toPull, missingWarnings, divergedSlugs := decidePullActions(remoteSkills, localSkills, syncState, mirrorConflictSet)
 
 	// Register pull-detected divergences in the shared sync conflict
 	// set BEFORE the action loop. A download failure mid-loop must
@@ -240,20 +240,6 @@ func runPull(cmd *cobra.Command, args []string) error {
 		for _, slug := range divergedSlugs {
 			syncActiveConflicts[slug] = true
 		}
-	}
-
-	// Drop any actions for slugs that have unresolved local divergence —
-	// we already warned the user above, and we must not clobber their
-	// in-progress copies with a remote install.
-	if len(mirrorConflictSet) > 0 {
-		filtered := toPull[:0]
-		for _, p := range toPull {
-			if mirrorConflictSet[p.skill.Name] {
-				continue
-			}
-			filtered = append(filtered, p)
-		}
-		toPull = filtered
 	}
 
 	if len(toPull) == 0 && len(missingWarnings) == 0 {
@@ -797,6 +783,13 @@ func markSourceUpstreamIncorporated(marker *SyncEntry, remote apiSkill) {
 //   - tracked + local missing: warn and skip (treat as intentional removal —
 //     user should run 'airskills rm <name>' to delete server-side, or
 //     'airskills pull <name>' to restore); re-adopted tombstone reinstalls "new"
+//   - slug in localForks (agent copies diverged — a local fork): skip silently.
+//     The caller has already surfaced the fork via printMirrorConflicts and
+//     removed the slug from localSkills; it must NOT fall into the
+//     "tracked + local missing" branch above — the copies all exist on disk,
+//     and the rm/pull hints there would delete the skill server-side or
+//     clobber the in-progress local edits. See
+//     platform/doc/changes/cli-sync-misreports-local-fork-as-missing.md.
 //   - untracked + local with same name + bytes match: "linked" (silent claim)
 //   - untracked + local with same name + bytes differ: "untracked-conflict"
 //   - untracked + no local: "new"
@@ -805,7 +798,7 @@ func markSourceUpstreamIncorporated(marker *SyncEntry, remote apiSkill) {
 // `untracked-conflict`. Callers in a `sync` run register these in
 // syncActiveConflicts BEFORE the action loop so a download failure later
 // does not leave the slug eligible for push to upload over.
-func decidePullActions(remoteSkills []apiSkill, localSkills map[string]string, syncState *SyncState) ([]pullEntry, []string, []string) {
+func decidePullActions(remoteSkills []apiSkill, localSkills map[string]string, syncState *SyncState, localForks map[string]bool) ([]pullEntry, []string, []string) {
 	var divergedSlugs []string
 	skillIdToName := map[string]string{}
 	// Upstream skill IDs that are already represented by a local fork.
@@ -837,6 +830,18 @@ func decidePullActions(remoteSkills []apiSkill, localSkills map[string]string, s
 			trackedName = name
 		}
 		if forkedUpstreamIDs[remote.Id.String()] && trackedName == "" {
+			continue
+		}
+
+		// Local fork (divergent agent copies): leave it entirely alone — no
+		// action, no "missing" warning. The fork keys by local dir name, which
+		// is trackedName when tracked (a server-side rename may make
+		// remote.Name differ) and remote.Name otherwise.
+		forkName := remote.Name
+		if trackedName != "" {
+			forkName = trackedName
+		}
+		if localForks[forkName] {
 			continue
 		}
 
@@ -1008,7 +1013,7 @@ func runPullForce(cmd *cobra.Command, args []string) error {
 	}
 	rememberSkillsetAfterSuccess(cfg, resolvedSlug)
 
-	toPull, _, _ := decidePullActions(remoteSkills, localSkills, syncState)
+	toPull, _, _ := decidePullActions(remoteSkills, localSkills, syncState, nil)
 	divergedMap := map[string]pullEntry{}
 	for _, p := range toPull {
 		if p.reason == "diverged" || p.reason == "untracked-conflict" {
