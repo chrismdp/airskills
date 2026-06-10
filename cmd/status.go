@@ -27,9 +27,12 @@ var statusCmd = &cobra.Command{
 func runStatus(cmd *cobra.Command, args []string) error {
 	quiet, _ := cmd.Flags().GetBool("quiet")
 
+	// Surface auth/config failures — a silent nil here made a logged-out
+	// machine indistinguishable from a healthy idle one.
 	client, err := newAPIClientAuto()
 	if err != nil {
-		return nil
+		cmd.SilenceUsage = true
+		return err
 	}
 
 	type skillsResult struct {
@@ -109,7 +112,8 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		<-healthCh
 		<-suggCh
 		<-ownedCh
-		return nil
+		cmd.SilenceUsage = true
+		return fmt.Errorf("could not fetch your skills from the server: %w", sr.err)
 	}
 	hr := <-healthCh
 	pendingSuggestions := <-suggCh
