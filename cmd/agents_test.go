@@ -72,11 +72,11 @@ func TestInstallSkillPreservesExecutableBitOnShebangFiles(t *testing.T) {
 	os.MkdirAll(filepath.Join(tmpHome, ".claude", "skills"), 0755)
 
 	files := map[string][]byte{
-		"SKILL.md":   []byte("# Test\nHello"),
-		"run.sh":     []byte("#!/bin/bash\necho hi"),
-		"helper.py":  []byte("#!/usr/bin/env python3\nprint('hi')"),
-		"data.txt":   []byte("plain data"),
-		"README.md":  []byte("# Plain markdown, no shebang"),
+		"SKILL.md":  []byte("# Test\nHello"),
+		"run.sh":    []byte("#!/bin/bash\necho hi"),
+		"helper.py": []byte("#!/usr/bin/env python3\nprint('hi')"),
+		"data.txt":  []byte("plain data"),
+		"README.md": []byte("# Plain markdown, no shebang"),
 	}
 
 	if _, err := installSkillToAgents("test-exec", files); err != nil {
@@ -263,12 +263,10 @@ func TestMirrorPropagatesEditFromProjectAgentsDir(t *testing.T) {
 	writeSkillFile(t, claudePath, "# old")
 	writeSkillFile(t, projectPath, "# edited in project")
 
-	markerHash := computeMerkleHash(map[string][]byte{"SKILL.md": []byte("# old")})
+	// Ledger baseline "# old" for both copies; the project copy has moved.
 	state := &SyncState{
 		Version: 1,
-		Skills: map[string]*SyncEntry{
-			"foo": {SkillID: testUUID("skill-1").String(), Version: "1.0.0", ContentHash: markerHash, Tool: "claude-code"},
-		},
+		Skills:  map[string]*SyncEntry{"foo": ledgerEntry(hash1("# old"), filepath.Dir(claudePath), filepath.Dir(projectPath))},
 	}
 
 	_, conflicts, _ := mirrorLocalSkills(state)
@@ -355,17 +353,14 @@ func TestMirrorPropagatesEditFromNonFirstDir(t *testing.T) {
 	claudePath := filepath.Join(tmpHome, ".claude", "skills", "foo", "SKILL.md")
 	cursorPath := filepath.Join(tmpHome, ".cursor", "skills", "foo", "SKILL.md")
 
-	// Old (marker-matching) version lives in the first-found dir (.claude).
+	// Baseline "# old" in the first-found dir (.claude); the edit lives in a
+	// later dir. The ledger knows both copies at the baseline.
 	writeSkillFile(t, claudePath, "# old")
-	// Edited version lives in a later dir.
 	writeSkillFile(t, cursorPath, "# edited")
 
-	markerHash := computeMerkleHash(map[string][]byte{"SKILL.md": []byte("# old")})
 	state := &SyncState{
 		Version: 1,
-		Skills: map[string]*SyncEntry{
-			"foo": {SkillID: testUUID("skill-1").String(), Version: "1.0.0", ContentHash: markerHash, Tool: "claude-code"},
-		},
+		Skills:  map[string]*SyncEntry{"foo": perCopyMarker(tmpHome, "foo", hash1("# old"), ".claude", ".cursor")},
 	}
 
 	_, conflicts, _ := mirrorLocalSkills(state)
@@ -415,12 +410,11 @@ func TestMirrorCreatesInMissingDetectedDir(t *testing.T) {
 	}
 }
 
-// TestMirrorStaleSecondaryCopyLosesToFreshPrimaryEdit covers the case that
-// broke the platform e2e: a previous mirror fanned content out to a
-// secondary agent dir, and the user has since edited the original in place.
-// The marker is stale (pre-edit), neither copy matches it, and naively
-// this looks like a conflict. Mirror must fall back to newest mtime so the
-// fresh edit wins and overwrites the stale secondary.
+// TestMirrorStaleSecondaryCopyLosesToFreshPrimaryEdit: a previous mirror
+// converged both copies and recorded that baseline; the user has since edited
+// one copy in place. The per-copy ledger shows exactly one copy moved, so the
+// fresh edit wins and the stale secondary is brought forward — deterministically,
+// with no reliance on file mtime.
 func TestMirrorStaleSecondaryCopyLosesToFreshPrimaryEdit(t *testing.T) {
 	tmpHome := t.TempDir()
 	setTestHome(t, tmpHome)
@@ -428,22 +422,13 @@ func TestMirrorStaleSecondaryCopyLosesToFreshPrimaryEdit(t *testing.T) {
 	claudePath := filepath.Join(tmpHome, ".claude", "skills", "foo", "SKILL.md")
 	cursorPath := filepath.Join(tmpHome, ".cursor", "skills", "foo", "SKILL.md")
 
-	// The stale secondary copy is written first, then backdated so its
-	// mtime is clearly older than the user's edit.
+	// Both copies were last reconciled to this content (ledger baseline).
 	writeSkillFile(t, cursorPath, "# stale mirror from last run")
-	staleTime := time.Now().Add(-1 * time.Hour)
-	if err := os.Chtimes(cursorPath, staleTime, staleTime); err != nil {
-		t.Fatalf("chtimes: %v", err)
-	}
-	writeSkillFile(t, claudePath, "# fresh user edit")
+	writeSkillFile(t, claudePath, "# fresh user edit") // claude edited since
 
-	// Marker references a third, older content that doesn't match either copy.
-	markerHash := computeMerkleHash(map[string][]byte{"SKILL.md": []byte("# original")})
 	state := &SyncState{
 		Version: 1,
-		Skills: map[string]*SyncEntry{
-			"foo": {SkillID: testUUID("skill-1").String(), Version: "1.0.0", ContentHash: markerHash, Tool: "claude-code"},
-		},
+		Skills:  map[string]*SyncEntry{"foo": perCopyMarker(tmpHome, "foo", hash1("# stale mirror from last run"), ".claude", ".cursor")},
 	}
 
 	_, conflicts, _ := mirrorLocalSkills(state)
@@ -462,17 +447,11 @@ func TestMirrorStaleSecondaryCopyLosesToFreshPrimaryEdit(t *testing.T) {
 	}
 }
 
-// TestMirrorDoesNotRevertEditAfterPushAdvancedMarker reproduces the bug in
-// cli-mirror-overwrites-edit-after-push: after push uploads the user's edit
-// and optimistically advances the marker to the new hash, pull's mirror step
-// runs against (claude=H_new edit, cursor=H_old stale, marker=H_new). The
-// 2-group + marker heuristic in pickAuthoritativeHash returns the non-marker
-// hash, which is now the stale group — and mirror silently overwrites the
-// user's edit with the stale content.
-//
-// Correct behaviour: the edit must survive. Either H_new wins (preferred —
-// mirror H_new into the stale dirs) or the case is reported as a conflict.
-// What must NOT happen is silently flattening claude back to H_old.
+// TestMirrorDoesNotRevertEditAfterPushAdvancedMarker guards the bug in
+// cli-mirror-overwrites-edit-after-push: an edit in one copy must never be
+// reverted by a stale sibling. The per-copy ledger records the pre-edit
+// baseline for both copies; claude has moved off it, cursor has not, so the
+// edit is authoritative and propagates — no mtime, no revert.
 func TestMirrorDoesNotRevertEditAfterPushAdvancedMarker(t *testing.T) {
 	tmpHome := t.TempDir()
 	setTestHome(t, tmpHome)
@@ -480,27 +459,13 @@ func TestMirrorDoesNotRevertEditAfterPushAdvancedMarker(t *testing.T) {
 	claudePath := filepath.Join(tmpHome, ".claude", "skills", "foo", "SKILL.md")
 	cursorPath := filepath.Join(tmpHome, ".cursor", "skills", "foo", "SKILL.md")
 
-	// cursor stays at the old (stale) content; backdate its mtime so the
-	// fresh edit in claude is unambiguously newer regardless of filesystem
-	// mtime resolution.
-	writeSkillFile(t, cursorPath, "# old")
-	staleTime := time.Now().Add(-1 * time.Hour)
-	if err := os.Chtimes(cursorPath, staleTime, staleTime); err != nil {
-		t.Fatalf("chtimes: %v", err)
-	}
-	// claude holds the fresh edit. Push has just uploaded this hash and
-	// optimistically advanced the marker to it.
-	writeSkillFile(t, claudePath, "# edited")
+	// Both copies were last reconciled at "# old" (ledger baseline).
+	writeSkillFile(t, cursorPath, "# old")    // stale sibling, unchanged
+	writeSkillFile(t, claudePath, "# edited") // the user's edit
 
-	// Marker reflects the post-push state — it's been advanced to H_new
-	// (the edit's hash), because push uploaded claude's contents and
-	// optimistically updated the marker.
-	editedHash := computeMerkleHash(map[string][]byte{"SKILL.md": []byte("# edited")})
 	state := &SyncState{
 		Version: 1,
-		Skills: map[string]*SyncEntry{
-			"foo": {SkillID: testUUID("skill-1").String(), Version: "1.0.0", ContentHash: editedHash, Tool: "claude-code"},
-		},
+		Skills:  map[string]*SyncEntry{"foo": perCopyMarker(tmpHome, "foo", hash1("# old"), ".claude", ".cursor")},
 	}
 
 	_, conflicts, _ := mirrorLocalSkills(state)
@@ -545,18 +510,11 @@ func TestMirrorAllCopiesIdenticalNoOp(t *testing.T) {
 	}
 }
 
-// TestMirrorPreservesEditToNonSkillMdFile reproduces a real production bug:
-// pickAuthoritativeHash was using SKILL.md mtime as a proxy for "newest
-// edit", but real edits often touch other files (scripts, references) and
-// leave SKILL.md untouched. With one agent dir holding the edit (newer
-// non-SKILL.md mtime, but older SKILL.md mtime than a sibling whose
-// SKILL.md was last touched by a previous mirror pass), mirror picked the
-// sibling and silently overwrote the edit.
-//
-// Concrete: agent edits project/scripts/foo.py. SKILL.md hasn't been
-// touched since the last sync. Another agent dir's SKILL.md was rewritten
-// by a recent mirror run so its mtime is newer. Under the old rule that
-// agent dir "wins" → edit lost.
+// TestMirrorPreservesEditToNonSkillMdFile guards a real production bug class:
+// an edit that touches only a non-SKILL.md file (a script, a reference) must
+// still win and propagate. The per-copy ledger compares whole-skill content,
+// not SKILL.md timestamps, so the copy whose content moved off its baseline is
+// authoritative regardless of which file changed.
 func TestMirrorPreservesEditToNonSkillMdFile(t *testing.T) {
 	tmpHome := t.TempDir()
 	setTestHome(t, tmpHome)
@@ -564,43 +522,24 @@ func TestMirrorPreservesEditToNonSkillMdFile(t *testing.T) {
 	claudeDir := filepath.Join(tmpHome, ".claude", "skills", "foo")
 	cursorDir := filepath.Join(tmpHome, ".cursor", "skills", "foo")
 
-	// Pin every file's mtime explicitly so the test doesn't rely on
-	// filesystem resolution — macOS truncates to seconds.
-	stale := time.Now().Add(-2 * time.Hour)
-	cursorTouch := time.Now().Add(-1 * time.Hour)
-	freshEdit := time.Now()
+	// Both copies were last reconciled with the "echo old" script (the ledger
+	// baseline). The edit lives in a non-SKILL.md file in claude, leaving
+	// SKILL.md byte-identical across copies — the case the pre-fix mtime code
+	// got wrong by only looking at SKILL.md timestamps.
+	baseFiles := map[string][]byte{
+		"SKILL.md":      []byte("# foo\n"),
+		"scripts/do.sh": []byte("#!/bin/sh\necho old\n"),
+	}
+	baseHash := computeMerkleHash(baseFiles)
 
-	// claude carries the edit. SKILL.md is the *original* content and is
-	// stale; the script file is the fresh edit.
 	writeSkillFile(t, filepath.Join(claudeDir, "SKILL.md"), "# foo\n")
-	writeSkillFile(t, filepath.Join(claudeDir, "scripts", "do.sh"), "#!/bin/sh\necho edited\n")
-	if err := os.Chtimes(filepath.Join(claudeDir, "SKILL.md"), stale, stale); err != nil {
-		t.Fatalf("chtimes claude SKILL.md: %v", err)
-	}
-	if err := os.Chtimes(filepath.Join(claudeDir, "scripts", "do.sh"), freshEdit, freshEdit); err != nil {
-		t.Fatalf("chtimes claude script: %v", err)
-	}
-
-	// cursor has the same SKILL.md (so the SKILL.md bytes match) but an
-	// old script. cursor's SKILL.md was just touched (newer than claude's
-	// SKILL.md, older than claude's script edit) — this is the trap the
-	// pre-fix code fell into.
+	writeSkillFile(t, filepath.Join(claudeDir, "scripts", "do.sh"), "#!/bin/sh\necho edited\n") // edit
 	writeSkillFile(t, filepath.Join(cursorDir, "SKILL.md"), "# foo\n")
-	writeSkillFile(t, filepath.Join(cursorDir, "scripts", "do.sh"), "#!/bin/sh\necho old\n")
-	if err := os.Chtimes(filepath.Join(cursorDir, "SKILL.md"), cursorTouch, cursorTouch); err != nil {
-		t.Fatalf("chtimes cursor SKILL.md: %v", err)
-	}
-	if err := os.Chtimes(filepath.Join(cursorDir, "scripts", "do.sh"), stale, stale); err != nil {
-		t.Fatalf("chtimes cursor script: %v", err)
-	}
+	writeSkillFile(t, filepath.Join(cursorDir, "scripts", "do.sh"), "#!/bin/sh\necho old\n") // baseline
 
-	// Marker matches neither set — forces the "fall through to newest
-	// mtime" branch in pickAuthoritativeHash.
 	state := &SyncState{
 		Version: 1,
-		Skills: map[string]*SyncEntry{
-			"foo": {SkillID: testUUID("skill-1").String(), Version: "1.0.0", ContentHash: "stale-marker-hash", Tool: "claude-code"},
-		},
+		Skills:  map[string]*SyncEntry{"foo": perCopyMarker(tmpHome, "foo", baseHash, ".claude", ".cursor")},
 	}
 
 	_, conflicts, _ := mirrorLocalSkills(state)
@@ -611,7 +550,7 @@ func TestMirrorPreservesEditToNonSkillMdFile(t *testing.T) {
 	// The edit must survive in both dirs.
 	got, _ := os.ReadFile(filepath.Join(claudeDir, "scripts", "do.sh"))
 	if string(got) != "#!/bin/sh\necho edited\n" {
-		t.Errorf("claude script reverted to %q — mirror used SKILL.md mtime and overwrote the edit", string(got))
+		t.Errorf("claude script reverted to %q — mirror overwrote the edit", string(got))
 	}
 	cursorScript, _ := os.ReadFile(filepath.Join(cursorDir, "scripts", "do.sh"))
 	if string(cursorScript) != "#!/bin/sh\necho edited\n" {
@@ -629,30 +568,19 @@ func TestMirrorRemovesStaleFilesInTarget(t *testing.T) {
 	claudeDir := filepath.Join(tmpHome, ".claude", "skills", "foo")
 	cursorDir := filepath.Join(tmpHome, ".cursor", "skills", "foo")
 
-	// Target (cursor) holds the stale marker-matching version. Backdate
-	// it so the edit in claude is unambiguously newer regardless of how
-	// quickly the filesystem applies mtimes — mirror's 2-group + marker
-	// branch now uses newest mtime to disambiguate.
+	// cursor holds the baseline version (SKILL.md + helper.sh); claude has the
+	// fresh edit that drops helper.sh. Ledger baseline = the two-file version.
 	writeSkillFile(t, filepath.Join(cursorDir, "SKILL.md"), "# old")
 	writeSkillFile(t, filepath.Join(cursorDir, "helper.sh"), "#!/bin/sh\n")
-	staleTime := time.Now().Add(-1 * time.Hour)
-	for _, f := range []string{"SKILL.md", "helper.sh"} {
-		if err := os.Chtimes(filepath.Join(cursorDir, f), staleTime, staleTime); err != nil {
-			t.Fatalf("chtimes: %v", err)
-		}
-	}
-	// Source (claude) has only SKILL.md — the fresh edit.
 	writeSkillFile(t, filepath.Join(claudeDir, "SKILL.md"), "# new")
 
-	markerHash := computeMerkleHash(map[string][]byte{
+	baseHash := computeMerkleHash(map[string][]byte{
 		"SKILL.md":  []byte("# old"),
 		"helper.sh": []byte("#!/bin/sh\n"),
 	})
 	state := &SyncState{
 		Version: 1,
-		Skills: map[string]*SyncEntry{
-			"foo": {SkillID: testUUID("skill-1").String(), Version: "1.0.0", ContentHash: markerHash, Tool: "claude-code"},
-		},
+		Skills:  map[string]*SyncEntry{"foo": ledgerEntry(baseHash, claudeDir, cursorDir)},
 	}
 
 	_, conflicts, _ := mirrorLocalSkills(state)
@@ -731,28 +659,26 @@ func TestMirrorEditFanOutEmitsNoHint(t *testing.T) {
 
 	claudePath := filepath.Join(tmpHome, ".claude", "skills", "foo", "SKILL.md")
 	cursorPath := filepath.Join(tmpHome, ".cursor", "skills", "foo", "SKILL.md")
-	writeSkillFile(t, cursorPath, "# stale")
-	staleTime := time.Now().Add(-1 * time.Hour)
-	_ = os.Chtimes(cursorPath, staleTime, staleTime)
+	writeSkillFile(t, cursorPath, "# stale") // ledger baseline
 	writeSkillFile(t, claudePath, "# fresh edit")
 
-	markerHash := computeMerkleHash(map[string][]byte{"SKILL.md": []byte("# stale")})
 	state := &SyncState{
 		Version: 1,
-		Skills: map[string]*SyncEntry{
-			"foo": {SkillID: testUUID("skill-1").String(), Version: "1.0.0", ContentHash: markerHash, Tool: "claude-code"},
-		},
+		Skills:  map[string]*SyncEntry{"foo": perCopyMarker(tmpHome, "foo", hash1("# stale"), ".claude", ".cursor")},
 	}
 
-	_, _, hints := mirrorLocalSkills(state)
+	_, conflicts, hints := mirrorLocalSkills(state)
+	if len(conflicts) != 0 {
+		t.Fatalf("unexpected conflicts: %+v", conflicts)
+	}
 	if len(hints) != 0 {
 		t.Errorf("expected no hints when fanning edit over stale content, got %+v", hints)
 	}
 }
 
 // TestMirrorComboHandRmAndEditOnSiblingQueuesHint: hand-rm one dir AND
-// edit a sibling at the same time. The fresh edit wins by mtime and
-// fans into the deleted dir's empty slot — hint should fire.
+// edit a sibling at the same time. The fresh edit is the only remaining copy,
+// so it fans into the deleted dir's empty slot — hint should fire.
 func TestMirrorComboHandRmAndEditOnSiblingQueuesHint(t *testing.T) {
 	resetMirrorHintMemo()
 	tmpHome := t.TempDir()
@@ -934,5 +860,318 @@ func TestDecidePullActionsReturnsDivergedSlugs(t *testing.T) {
 		if !gotSet[k] {
 			t.Errorf("divergedSlugs missing %q (got %v)", k, divergedSlugs)
 		}
+	}
+}
+
+// --- Per-copy baseline divergence (cli-per-copy-skill-divergence.md) ---
+
+// hash1 is the Merkle hash of a single-SKILL.md skill with the given body.
+func hash1(body string) string {
+	return computeMerkleHash(map[string][]byte{"SKILL.md": []byte(body)})
+}
+
+// perCopyMarker builds a tracked marker whose per-copy ledger records the
+// given baseline hash for each skill-dir under tmpHome.
+func perCopyMarker(tmpHome, slug, baseHash string, agentSubdirs ...string) *SyncEntry {
+	dirs := make([]string, len(agentSubdirs))
+	for i, sub := range agentSubdirs {
+		dirs[i] = filepath.Join(tmpHome, sub, "skills", slug)
+	}
+	return ledgerEntry(baseHash, dirs...)
+}
+
+// ledgerEntry builds a tracked marker whose per-copy ledger records baseHash
+// for each given absolute skill directory. Use when the copies don't all sit
+// under the standard ~/<agent>/skills/<slug> layout (e.g. a project dir).
+func ledgerEntry(baseHash string, skillDirs ...string) *SyncEntry {
+	copies := map[string]CopyState{}
+	for _, d := range skillDirs {
+		copies[d] = CopyState{Hash: baseHash}
+	}
+	return &SyncEntry{
+		SkillID:     testUUID("skill-1").String(),
+		Version:     "1.0.0",
+		ContentHash: baseHash,
+		Tool:        "claude-code",
+		Copies:      copies,
+	}
+}
+
+// TestMirrorPerCopyBaselineSingleEditWinsOverNewerSibling is the reported bug:
+// one copy is edited, the other still matches its baseline, and the UNEDITED
+// sibling has the newer file mtime. The legacy mtime heuristic would pick the
+// marker-matching (unedited) copy and silently revert the edit — which is what
+// made `push` report "all unchanged" after the mirror clobbered the change.
+// With per-copy baselines the edit is unambiguous and must win.
+func TestMirrorPerCopyBaselineSingleEditWinsOverNewerSibling(t *testing.T) {
+	tmpHome := t.TempDir()
+	setTestHome(t, tmpHome)
+
+	claudePath := filepath.Join(tmpHome, ".claude", "skills", "foo", "SKILL.md")
+	cursorPath := filepath.Join(tmpHome, ".cursor", "skills", "foo", "SKILL.md")
+
+	// claude holds the user's edit; cursor still holds the baseline but has a
+	// NEWER mtime (e.g. it was touched by a prior mirror/pull).
+	writeSkillFile(t, claudePath, "# edited")
+	editTime := time.Now().Add(-1 * time.Hour)
+	if err := os.Chtimes(claudePath, editTime, editTime); err != nil {
+		t.Fatalf("chtimes: %v", err)
+	}
+	writeSkillFile(t, cursorPath, "# base")
+
+	state := &SyncState{
+		Version: 1,
+		Skills:  map[string]*SyncEntry{"foo": perCopyMarker(tmpHome, "foo", hash1("# base"), ".claude", ".cursor")},
+	}
+
+	_, conflicts, _ := mirrorLocalSkills(state)
+	if len(conflicts) != 0 {
+		t.Fatalf("unexpected conflicts: %+v", conflicts)
+	}
+
+	claude, _ := os.ReadFile(claudePath)
+	if string(claude) != "# edited" {
+		t.Errorf("claude copy = %q, want '# edited' (mtime clobbered the edit)", string(claude))
+	}
+	cursor, _ := os.ReadFile(cursorPath)
+	if string(cursor) != "# edited" {
+		t.Errorf("cursor copy = %q, want '# edited' (edit not fanned out)", string(cursor))
+	}
+}
+
+// TestMirrorPerCopyBaselineDualEditDifferentIsConflict: both copies edited to
+// DIFFERENT content from their shared baseline. That is a genuine local fork —
+// the mirror must report it and leave both copies untouched, never flatten one.
+func TestMirrorPerCopyBaselineDualEditDifferentIsConflict(t *testing.T) {
+	tmpHome := t.TempDir()
+	setTestHome(t, tmpHome)
+
+	claudePath := filepath.Join(tmpHome, ".claude", "skills", "foo", "SKILL.md")
+	cursorPath := filepath.Join(tmpHome, ".cursor", "skills", "foo", "SKILL.md")
+	writeSkillFile(t, claudePath, "# edited in claude")
+	writeSkillFile(t, cursorPath, "# edited in cursor")
+
+	state := &SyncState{
+		Version: 1,
+		Skills:  map[string]*SyncEntry{"foo": perCopyMarker(tmpHome, "foo", hash1("# base"), ".claude", ".cursor")},
+	}
+
+	_, conflicts, _ := mirrorLocalSkills(state)
+	if len(conflicts) != 1 || conflicts[0].slug != "foo" {
+		t.Fatalf("want a single conflict for foo, got %+v", conflicts)
+	}
+
+	// Neither copy may be overwritten by the other.
+	claude, _ := os.ReadFile(claudePath)
+	if string(claude) != "# edited in claude" {
+		t.Errorf("claude copy = %q, want untouched", string(claude))
+	}
+	cursor, _ := os.ReadFile(cursorPath)
+	if string(cursor) != "# edited in cursor" {
+		t.Errorf("cursor copy = %q, want untouched", string(cursor))
+	}
+}
+
+// TestMirrorPerCopyBaselineDualEditSameConverges: both copies edited to the
+// SAME new content. Not a fork — they already agree, so converge and push.
+func TestMirrorPerCopyBaselineDualEditSameConverges(t *testing.T) {
+	tmpHome := t.TempDir()
+	setTestHome(t, tmpHome)
+
+	claudePath := filepath.Join(tmpHome, ".claude", "skills", "foo", "SKILL.md")
+	cursorPath := filepath.Join(tmpHome, ".cursor", "skills", "foo", "SKILL.md")
+	writeSkillFile(t, claudePath, "# both edited the same")
+	writeSkillFile(t, cursorPath, "# both edited the same")
+
+	state := &SyncState{
+		Version: 1,
+		Skills:  map[string]*SyncEntry{"foo": perCopyMarker(tmpHome, "foo", hash1("# base"), ".claude", ".cursor")},
+	}
+
+	_, conflicts, _ := mirrorLocalSkills(state)
+	if len(conflicts) != 0 {
+		t.Fatalf("unexpected conflicts: %+v", conflicts)
+	}
+	claude, _ := os.ReadFile(claudePath)
+	if string(claude) != "# both edited the same" {
+		t.Errorf("claude copy = %q", string(claude))
+	}
+}
+
+// TestMirrorRecordsPerCopyBaselines: after a clean (non-conflict) pass the
+// ledger is stamped with the authoritative hash for every present copy, so the
+// next run can tell which copy moved.
+func TestMirrorRecordsPerCopyBaselines(t *testing.T) {
+	tmpHome := t.TempDir()
+	setTestHome(t, tmpHome)
+
+	claudePath := filepath.Join(tmpHome, ".claude", "skills", "foo", "SKILL.md")
+	cursorPath := filepath.Join(tmpHome, ".cursor", "skills", "foo", "SKILL.md")
+	writeSkillFile(t, claudePath, "# v1")
+	writeSkillFile(t, cursorPath, "# v1")
+
+	entry := &SyncEntry{SkillID: testUUID("skill-1").String(), Version: "1.0.0", ContentHash: hash1("# v1"), Tool: "claude-code"}
+	state := &SyncState{Version: 1, Skills: map[string]*SyncEntry{"foo": entry}}
+
+	if _, conflicts, _ := mirrorLocalSkills(state); len(conflicts) != 0 {
+		t.Fatalf("unexpected conflicts: %+v", conflicts)
+	}
+
+	want := hash1("# v1")
+	for _, sub := range []string{".claude", ".cursor"} {
+		key := filepath.Join(tmpHome, sub, "skills", "foo")
+		cs, ok := entry.Copies[key]
+		if !ok {
+			t.Errorf("ledger missing baseline for %s", key)
+			continue
+		}
+		if cs.Hash != want {
+			t.Errorf("baseline[%s].Hash = %q, want %q", key, cs.Hash, want)
+		}
+	}
+}
+
+// TestMirrorExistingMirrorsSeedLedgerThenResolve answers the migration
+// question: a user who ALREADY has a skill mirrored across two agent dirs
+// upgrades to per-copy baselines. Their marker has a ContentHash but no
+// `copies` ledger. First run must not disrupt them — identical copies seed the
+// ledger with zero conflicts and zero file changes — and a subsequent edit then
+// resolves deterministically off that freshly-seeded ledger.
+func TestMirrorExistingMirrorsSeedLedgerThenResolve(t *testing.T) {
+	tmpHome := t.TempDir()
+	setTestHome(t, tmpHome)
+
+	claudePath := filepath.Join(tmpHome, ".claude", "skills", "foo", "SKILL.md")
+	cursorPath := filepath.Join(tmpHome, ".cursor", "skills", "foo", "SKILL.md")
+	writeSkillFile(t, claudePath, "# v0")
+	writeSkillFile(t, cursorPath, "# v0")
+
+	// Legacy marker: ContentHash set, NO Copies ledger (pre-upgrade state).
+	entry := &SyncEntry{SkillID: testUUID("skill-1").String(), Version: "1.0.0", ContentHash: hash1("# v0"), Tool: "claude-code"}
+	state := &SyncState{Version: 1, Skills: map[string]*SyncEntry{"foo": entry}}
+
+	// First run: no conflict, no rewrites, ledger seeded for both copies.
+	changes, conflicts, _ := mirrorLocalSkills(state)
+	if len(conflicts) != 0 {
+		t.Fatalf("first run should not conflict for already-synced mirrors: %+v", conflicts)
+	}
+	for _, c := range changes {
+		if len(c.written) != 0 {
+			t.Errorf("first run rewrote files for identical copies: %+v", c.written)
+		}
+	}
+	if len(entry.Copies) != 2 {
+		t.Fatalf("ledger not seeded: %+v", entry.Copies)
+	}
+
+	// Now the user edits one copy. The seeded ledger makes the edit
+	// unambiguous — it wins and fans out, no mtime involved.
+	writeSkillFile(t, claudePath, "# v1")
+	if _, conflicts, _ := mirrorLocalSkills(state); len(conflicts) != 0 {
+		t.Fatalf("edit after seeding should resolve, not conflict: %+v", conflicts)
+	}
+	cursor, _ := os.ReadFile(cursorPath)
+	if string(cursor) != "# v1" {
+		t.Errorf("cursor = %q, want '# v1' (edit not propagated post-seed)", string(cursor))
+	}
+}
+
+// TestMirrorColdStartAdvancedMarkerDoesNotClobber locks the data-loss bug a
+// code review caught: on the FIRST run after upgrade (no ledger yet) where the
+// marker's ContentHash was optimistically advanced to the EDIT (so it matches
+// the edited copy, not the pre-edit baseline), the old cold-start logic would
+// have treated the stale sibling as "the edit" and reverted the real edit.
+// With ledger-only resolution this is surfaced as a conflict and NOTHING is
+// overwritten.
+func TestMirrorColdStartAdvancedMarkerDoesNotClobber(t *testing.T) {
+	tmpHome := t.TempDir()
+	setTestHome(t, tmpHome)
+
+	claudePath := filepath.Join(tmpHome, ".claude", "skills", "foo", "SKILL.md")
+	cursorPath := filepath.Join(tmpHome, ".cursor", "skills", "foo", "SKILL.md")
+	writeSkillFile(t, claudePath, "# edited") // the real edit
+	writeSkillFile(t, cursorPath, "# old")    // stale sibling
+
+	// Marker advanced to the edit hash; NO per-copy ledger (legacy state).
+	state := &SyncState{
+		Version: 1,
+		Skills: map[string]*SyncEntry{
+			"foo": {SkillID: testUUID("skill-1").String(), Version: "1.0.0", ContentHash: hash1("# edited"), Tool: "claude-code"},
+		},
+	}
+
+	_, conflicts, _ := mirrorLocalSkills(state)
+	if len(conflicts) != 1 {
+		t.Fatalf("want a conflict (no trustworthy history), got %+v", conflicts)
+	}
+	// Crucially, the edit must be untouched — never reverted to the stale copy.
+	claude, _ := os.ReadFile(claudePath)
+	if string(claude) != "# edited" {
+		t.Errorf("claude = %q, want '# edited' — the edit was clobbered", string(claude))
+	}
+	cursor, _ := os.ReadFile(cursorPath)
+	if string(cursor) != "# old" {
+		t.Errorf("cursor = %q, want '# old' untouched", string(cursor))
+	}
+}
+
+// TestMirrorPartialLedgerNewAgentDirConflicts locks the partial-ledger finding:
+// a freshly-installed agent dir holding DIFFERENT content for a skill that is
+// otherwise in sync must not let an incomplete ledger silently flatten things.
+// The two synced copies are left intact and the rogue copy is surfaced, not
+// propagated over them.
+func TestMirrorPartialLedgerNewAgentDirConflicts(t *testing.T) {
+	tmpHome := t.TempDir()
+	setTestHome(t, tmpHome)
+
+	claudePath := filepath.Join(tmpHome, ".claude", "skills", "foo", "SKILL.md")
+	cursorPath := filepath.Join(tmpHome, ".cursor", "skills", "foo", "SKILL.md")
+	windsurfPath := filepath.Join(tmpHome, ".codeium", "windsurf", "skills", "foo", "SKILL.md")
+	writeSkillFile(t, claudePath, "# synced")
+	writeSkillFile(t, cursorPath, "# synced")
+	writeSkillFile(t, windsurfPath, "# rogue new-agent content")
+
+	// Ledger knows only the two long-standing copies, not the new windsurf dir.
+	state := &SyncState{
+		Version: 1,
+		Skills:  map[string]*SyncEntry{"foo": perCopyMarker(tmpHome, "foo", hash1("# synced"), ".claude", ".cursor")},
+	}
+
+	_, conflicts, _ := mirrorLocalSkills(state)
+	if len(conflicts) != 1 {
+		t.Fatalf("want a conflict for the incomplete ledger, got %+v", conflicts)
+	}
+	// Nothing overwritten in either direction.
+	for path, want := range map[string]string{claudePath: "# synced", cursorPath: "# synced", windsurfPath: "# rogue new-agent content"} {
+		got, _ := os.ReadFile(path)
+		if string(got) != want {
+			t.Errorf("%s = %q, want %q (no copy should be flattened)", path, string(got), want)
+		}
+	}
+}
+
+// TestMirrorUntrackedDivergentCopiesConflict: a never-synced skill (no marker)
+// present with different content in two dirs has no baseline at all, so the
+// mirror cannot know which is the edit. It surfaces a conflict rather than
+// guess by mtime.
+func TestMirrorUntrackedDivergentCopiesConflict(t *testing.T) {
+	tmpHome := t.TempDir()
+	setTestHome(t, tmpHome)
+
+	claudePath := filepath.Join(tmpHome, ".claude", "skills", "foo", "SKILL.md")
+	cursorPath := filepath.Join(tmpHome, ".cursor", "skills", "foo", "SKILL.md")
+	writeSkillFile(t, claudePath, "# version a")
+	writeSkillFile(t, cursorPath, "# version b")
+
+	state := &SyncState{Version: 1, Skills: map[string]*SyncEntry{}} // untracked
+
+	_, conflicts, _ := mirrorLocalSkills(state)
+	if len(conflicts) != 1 {
+		t.Fatalf("want a conflict for untracked divergent copies, got %+v", conflicts)
+	}
+	claude, _ := os.ReadFile(claudePath)
+	cursor, _ := os.ReadFile(cursorPath)
+	if string(claude) != "# version a" || string(cursor) != "# version b" {
+		t.Errorf("copies must be untouched: claude=%q cursor=%q", string(claude), string(cursor))
 	}
 }

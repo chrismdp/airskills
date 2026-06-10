@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"time"
 )
 
 type agentDef struct {
@@ -299,9 +298,9 @@ type mirrorConflict struct {
 // run `airskills rm` instead. See
 // platform/doc/changes/cli-mirror-cannot-distinguish-delete-from-never-installed.md.
 type mirrorRestoreHint struct {
-	slug       string
-	target     string // the dir mirror restored content into
-	isNonFork  bool   // sourced skill the user does not own → use --keep-remote
+	slug      string
+	target    string // the dir mirror restored content into
+	isNonFork bool   // sourced skill the user does not own → use --keep-remote
 }
 
 // mirrorWarnedSlugs tracks which conflict slugs have already been reported to
@@ -349,28 +348,38 @@ func printMirrorConflicts(conflicts []mirrorConflict) {
 		return
 	}
 	for _, c := range fresh {
-		fmt.Fprintf(os.Stderr, "  %s %s has divergent local copies — skipping\n", yellow("!"), c.slug)
+		fmt.Fprintf(os.Stderr, "  %s %s was edited differently in two agent copies — a local fork, leaving it untouched (not pushed):\n", yellow("!"), c.slug)
 		for _, p := range c.paths {
 			fmt.Fprintf(os.Stderr, "      %s\n", p)
 		}
 	}
+	fmt.Fprintf(os.Stderr, "  Reconcile the copies — edit them to match (the version you want wins), then re-run.\n")
 	if isTTY {
-		fmt.Fprintf(os.Stderr, "  Re-run airskills inside an agent (e.g. Claude Code) to fix.\n")
+		fmt.Fprintf(os.Stderr, "  Easiest from inside an agent (e.g. Claude Code), which can diff and merge them for you.\n")
 	} else {
-		fmt.Fprintf(os.Stderr, "  If you are an agent, fix this in collaboration with the user.\n")
+		fmt.Fprintf(os.Stderr, "  If you are an agent, diff the copies and merge them with the user before re-running.\n")
 	}
 }
 
 // mirrorLocalSkills normalises local skill copies across every detected agent
 // directory so that an edit in any folder is propagated to all the others.
 //
-// For each slug:
+// For each slug it classifies the copies against their per-copy baselines
+// (classifyCopyDivergence), then:
 //   - one distinct version across all copies → mirror to every detected dir
 //     that's missing or out-of-date
-//   - exactly two versions and the sync-state marker matches one of them →
-//     the other is treated as the edit and mirrored
-//   - anything else (two versions, neither matches the marker; three or more
-//     versions) → reported as a conflict and left untouched
+//   - exactly one copy moved vs its baseline → that edit is authoritative and
+//     is mirrored to the rest
+//   - two or more copies moved to different content → a local fork: reported
+//     as a conflict and left untouched (never flattened)
+//   - no complete per-copy ledger yet (first run / untracked / a freshly-added
+//     agent dir) → reported as a conflict rather than guessed. No file mtime,
+//     and never the marker's single hash, is consulted.
+//
+// After a non-conflict pass it stamps each present copy's baseline to the
+// authoritative hash (recordCopyBaselines); identical copies converge and seed
+// the ledger on their own, so a divergence only ever needs resolving once
+// history exists.
 //
 // When mirror writes content into a previously-empty target dir (the slug
 // was missing from that agent), the slug is also surfaced as a
@@ -406,17 +415,23 @@ func mirrorLocalSkills(syncState *SyncState) ([]mirrorChange, []mirrorConflict, 
 		}
 
 		var marker *SyncEntry
-		var markerHash string
 		if syncState != nil {
 			if e, ok := syncState.Skills[slug]; ok && e != nil {
 				marker = e
-				markerHash = e.ContentHash
 			}
 		}
 
-		authorHash := pickAuthoritativeHash(paths, hashByPath, hashGroups, markerHash)
+		// Decide which copy is authoritative from each copy's own recorded
+		// per-copy baseline. Never file mtime, never the marker's single hash.
+		// Without complete per-copy history, or on independent edits to
+		// different content (a local fork), surface it — never flatten one
+		// silently.
+		authorHash, forkPaths := classifyCopyDivergence(marker, paths, hashByPath, hashGroups)
 		if authorHash == "" {
-			conflicts = append(conflicts, mirrorConflict{slug: slug, paths: paths})
+			if len(forkPaths) == 0 {
+				forkPaths = paths
+			}
+			conflicts = append(conflicts, mirrorConflict{slug: slug, paths: forkPaths})
 			continue
 		}
 
@@ -425,9 +440,13 @@ func mirrorLocalSkills(syncState *SyncState) ([]mirrorChange, []mirrorConflict, 
 
 		change := mirrorChange{slug: slug}
 		var restoredInto string
+		// Dirs that hold the authoritative content after this pass — used to
+		// re-stamp the per-copy ledger so it stays fresh and self-heals.
+		var authoritativeDirs []string
 		for _, dir := range detectedDirs {
 			target := filepath.Join(dir, slug)
 			if existingHash, ok := hashByPath[target]; ok && existingHash == authorHash {
+				authoritativeDirs = append(authoritativeDirs, target)
 				continue
 			}
 			// "Previously empty target" = no SKILL.md was discovered at
@@ -441,12 +460,17 @@ func mirrorLocalSkills(syncState *SyncState) ([]mirrorChange, []mirrorConflict, 
 			}
 			if err := replaceSkillDir(target, authorFiles); err == nil {
 				change.written = append(change.written, target)
+				authoritativeDirs = append(authoritativeDirs, target)
 				if previouslyEmpty && restoredInto == "" {
 					restoredInto = target
 				}
 			}
 		}
 		changes = append(changes, change)
+
+		// Record where the authoritative content now lives so the next run
+		// can tell which copy moved. Only for tracked skills (marker != nil).
+		recordCopyBaselines(marker, authoritativeDirs, authorHash)
 
 		if restoredInto != "" {
 			hints = append(hints, mirrorRestoreHint{
@@ -472,129 +496,6 @@ func markerIsNonFork(m *SyncEntry) bool {
 		return true
 	}
 	return m.SkillID == m.Source.ID || m.SkillID == m.Source.UpstreamSkillID
-}
-
-// pickAuthoritativeHash chooses which version of a slug's content should
-// win when its copies have diverged across agent directories.
-//
-//   - Single distinct hash → that hash wins.
-//   - Marker disambiguates a 2-way split (exactly one group matches the
-//     sync-state marker) → newest-touched group wins. This must work
-//     regardless of whether the marker is the *pre-edit baseline* (the
-//     non-marker group is the user's edit and will have a newer mtime)
-//     or the *post-edit confirmation* (the marker group is what was
-//     just pushed and has a newer mtime than stale siblings that
-//     haven't been mirrored forward yet). The naive "non-marker is the
-//     edit" rule inverts in the post-push case and silently overwrites
-//     the edit with the stale content — see
-//     doc/changes/cli-mirror-overwrites-edit-after-push.md.
-//   - Otherwise → newest SKILL.md mtime across all paths wins. Handles
-//     the stale-mirror-vs-fresh-edit case where the marker matches
-//     neither group.
-//
-// Returns "" only when no paths are stat-able, in which case the caller
-// reports a conflict and skips.
-func pickAuthoritativeHash(
-	paths []string,
-	hashByPath map[string]string,
-	hashGroups map[string][]string,
-	markerHash string,
-) string {
-	if len(hashGroups) == 1 {
-		for h := range hashGroups {
-			return h
-		}
-	}
-	if len(hashGroups) == 2 && markerHash != "" {
-		if markerPaths, ok := hashGroups[markerHash]; ok {
-			var otherHash string
-			for h := range hashGroups {
-				if h != markerHash {
-					otherHash = h
-				}
-			}
-			markerMtime := newestSkillMtime(markerPaths)
-			otherMtime := newestSkillMtime(hashGroups[otherHash])
-			if !markerMtime.IsZero() && !otherMtime.IsZero() {
-				if markerMtime.After(otherMtime) {
-					return markerHash
-				}
-				return otherHash
-			}
-			// Mtimes unavailable for one or both groups — fall back to
-			// the legacy "non-marker is the edit" rule for the
-			// pre-push case. Better than silently dropping the slug.
-			return otherHash
-		}
-	}
-	newestPath := ""
-	var newestTime time.Time
-	for _, p := range paths {
-		t := newestFileMtime(p)
-		if t.IsZero() {
-			continue
-		}
-		if newestPath == "" || t.After(newestTime) {
-			newestPath = p
-			newestTime = t
-		}
-	}
-	if newestPath == "" {
-		return ""
-	}
-	return hashByPath[newestPath]
-}
-
-// newestSkillMtime returns the most recent mtime across the tracked
-// skill files in the given directory paths. "Tracked" means the same
-// set readSkillFiles considers: every file under the dir except the
-// .airskills marker and paths matched by shouldIgnoreFile (__pycache__,
-// .DS_Store, etc.).
-//
-// Looking only at SKILL.md was wrong — many edits touch scripts or
-// references and leave SKILL.md untouched. Mirror then treated those
-// dirs as "older" than siblings whose SKILL.md had been rewritten by a
-// previous mirror pass, and silently overwrote the edits.
-func newestSkillMtime(skillPaths []string) time.Time {
-	var newest time.Time
-	for _, p := range skillPaths {
-		t := newestFileMtime(p)
-		if !t.IsZero() && (newest.IsZero() || t.After(newest)) {
-			newest = t
-		}
-	}
-	return newest
-}
-
-// newestFileMtime walks one skill directory and returns the newest
-// mtime among its tracked files (same filter as readSkillFiles).
-// Zero value if the dir is empty or unreadable.
-func newestFileMtime(dir string) time.Time {
-	var newest time.Time
-	filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return nil
-		}
-		if info.IsDir() {
-			rel, _ := filepath.Rel(dir, path)
-			if rel != "." && shouldIgnoreFile(rel) {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if info.Name() == ".airskills" {
-			return nil
-		}
-		rel, _ := filepath.Rel(dir, path)
-		if shouldIgnoreFile(rel) {
-			return nil
-		}
-		if newest.IsZero() || info.ModTime().After(newest) {
-			newest = info.ModTime()
-		}
-		return nil
-	})
-	return newest
 }
 
 // replaceSkillDir writes files into target, deleting any existing non-marker

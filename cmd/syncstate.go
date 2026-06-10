@@ -4,7 +4,19 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"time"
 )
+
+// CopyState records what one on-disk copy of a skill looked like at the last
+// time the mirror reconciled it. A skill lives in N agent directories, each
+// independently editable; a single ContentHash can't say which copy moved.
+// The per-copy baseline can. SyncedAt is a display hint only — it must never
+// be the thing that decides which edit wins (that path silently discards an
+// edit; see cli-per-copy-skill-divergence.md).
+type CopyState struct {
+	Hash     string    `json:"hash"`
+	SyncedAt time.Time `json:"synced_at,omitempty"`
+}
 
 // SyncEntry tracks the sync state of a single skill.
 //
@@ -13,28 +25,35 @@ import (
 // picked up on the next push without a separate sync step. If they change
 // between pushes, the local dir is renamed to match.
 type SyncEntry struct {
-	SkillID         string       `json:"skill_id"`
-	Version         string       `json:"version"`
-	ContentHash     string       `json:"content_hash,omitempty"`
-	Tool            string       `json:"tool"`
-	OwnerKind       string       `json:"owner_kind,omitempty"` // "user" or "org"
-	OwnerSlug       string       `json:"owner_slug,omitempty"` // e.g. "chrismdp" or "cherrypick"
+	SkillID     string `json:"skill_id"`
+	Version     string `json:"version"`
+	ContentHash string `json:"content_hash,omitempty"`
+	Tool        string `json:"tool"`
+	// Copies is the per-copy reconciliation ledger, keyed by absolute
+	// skill-dir path. Maintained by exactly one writer — the mirror
+	// (mirrorLocalSkills) — and used to tell which agent copy of a skill
+	// diverged. Empty for legacy markers and untracked skills, in which
+	// case the mirror falls back to the marker baseline (never mtime). See
+	// cli-per-copy-skill-divergence.md.
+	Copies    map[string]CopyState `json:"copies,omitempty"`
+	OwnerKind string               `json:"owner_kind,omitempty"` // "user" or "org"
+	OwnerSlug string               `json:"owner_slug,omitempty"` // e.g. "chrismdp" or "cherrypick"
 	// LocalAlias is the on-disk directory name when it differs from
 	// the server slug. Set by `airskills add --as <alias>` and by the
 	// on-disk migration when it has to disambiguate a rename
 	// collision. Empty means "dir name matches server slug." The
 	// marker stays the source of truth — see CLAUDE.md "Org
 	// namespacing lives in the marker, not on disk."
-	LocalAlias      string       `json:"local_alias,omitempty"`
-	Source          *skillSource `json:"source,omitempty"`
+	LocalAlias string       `json:"local_alias,omitempty"`
+	Source     *skillSource `json:"source,omitempty"`
 	// ResolvedHash records the upstream content hash the user last
 	// reviewed against via `airskills resolve`. Only meaningful for
 	// sourced skills (Source != nil). Empty for owned skills, and for
 	// sourced skills the user has never resolved against — in that
 	// case the classifier treats any divergence as modified-pending.
-	ResolvedHash    string       `json:"resolved_hash,omitempty"`
-	SuggestionID    string       `json:"suggestion_id,omitempty"`
-	SuggestDeclined bool         `json:"suggest_declined,omitempty"`
+	ResolvedHash    string `json:"resolved_hash,omitempty"`
+	SuggestionID    string `json:"suggestion_id,omitempty"`
+	SuggestDeclined bool   `json:"suggest_declined,omitempty"`
 	// Deleted is set when the skill was transferred away and local edits
 	// prevent removing the old dir. Pushes are blocked for deleted markers.
 	Deleted bool   `json:"deleted,omitempty"`
