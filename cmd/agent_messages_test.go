@@ -170,16 +170,17 @@ func TestConflictResolutionMessageUntrackedOffersKeepLocalForceAndRename(t *test
 	}
 }
 
-// When the conflicting skill is an org skill, the message must warn that
-// after keep-local, push proposes edits as a suggestion rather than
-// updating the org skill in place (admins accept their own suggestion via
-// review) — we can't detect admin role yet, so the warning fires for any
-// org skill. Personal skills get no such warning.
+// When the conflicting skill is an org skill, the message must explain
+// what push does after keep-local: writable callers (org owner/admin)
+// update the org skill in place; everyone else gets their edits backed up
+// and proposed as a suggestion. The server's write check decides — the
+// CLI can't see roles, so the note fires for any org skill. Personal
+// skills get no such note.
 func TestConflictResolutionMessageUntrackedWarnsForOrgSkill(t *testing.T) {
 	org := conflictResolutionMessage([]conflictEntry{
 		{name: "home", localDir: "/l/home", remoteDir: "/t/home", kind: "untracked", orgSlug: "cherrypick"},
 	}, true)
-	for _, want := range []string{"org skill", "suggestion", "cherrypick/home", "administer", "airskills review"} {
+	for _, want := range []string{"org skill", "suggestion", "cherrypick/home", "owner/admin", "in place"} {
 		if !strings.Contains(org, want) {
 			t.Errorf("org-skill conflict message missing %q in:\n%s", want, org)
 		}
@@ -188,8 +189,8 @@ func TestConflictResolutionMessageUntrackedWarnsForOrgSkill(t *testing.T) {
 	personal := conflictResolutionMessage([]conflictEntry{
 		{name: "home", localDir: "/l/home", remoteDir: "/t/home", kind: "untracked"},
 	}, true)
-	if strings.Contains(personal, "administer") {
-		t.Errorf("personal-skill conflict must not get the org suggestion warning:\n%s", personal)
+	if strings.Contains(personal, "owner/admin") {
+		t.Errorf("personal-skill conflict must not get the org write-access note:\n%s", personal)
 	}
 }
 

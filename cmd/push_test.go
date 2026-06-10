@@ -1050,6 +1050,10 @@ func TestPushShadowForksOnOrgMemberEdit(t *testing.T) {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/me":
 			w.Header().Set("Content-Type", "application/json")
 			fmt.Fprint(w, `{"id":"00000000-0000-0000-0000-000000000099","username":"callerslug"}`)
+		case r.Method == http.MethodPut && r.URL.Path == "/api/v1/skills/"+upstreamID+"/archive":
+			// Member: the direct-write attempt is rejected; push falls back
+			// to the transparent-backup + suggest path.
+			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/skills":
 			createSkillCalls++
 			var body map[string]interface{}

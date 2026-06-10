@@ -26,7 +26,8 @@ import (
 //
 // No server write happens here — keep-local never forks or suggests. If the
 // user wants their version on the server, that's a later, deliberate
-// `airskills push` (which forks-then-suggests for sourced skills).
+// `airskills push` (which updates the upstream when the caller can write
+// it, and otherwise backs the edit up to their account and suggests).
 func buildKeepLocalEntry(skill apiSkill, ownerKind, ownerSlug string, src *skillSource) *SyncEntry {
 	remoteHash := strDeref(skill.ContentHash)
 	e := &SyncEntry{
@@ -99,20 +100,18 @@ func runPullKeepLocal(cmd *cobra.Command, args []string) error {
 		}
 		ownerKind, ownerSlug := owners.resolve(&p.skill)
 		src := owners.sourceFor(&p.skill)
-		// Org-skill caveat: keep-local marks this as sourced, so the next
-		// push backs the local copy up to the caller's account and
-		// proposes a suggestion rather than updating the org skill in
-		// place. Right for a member; an admin accepts their own
-		// suggestion via review. We can't yet tell admins apart (no role
-		// in the API), so warn whenever it's an org skill.
+		// Org-skill caveat: keep-local marks this as sourced. On the next
+		// push the server decides what the caller may do: org owners and
+		// admins update the org skill in place; members get their version
+		// backed up to their own account and offered as a suggestion.
 		if ownerKind == "org" {
 			org := ownerSlug
 			if org == "" {
 				org = "the org"
 			}
-			fmt.Printf("  %s %q is an org skill (%s). Your next push will back your version up to your\n", yellow("⚠"), name, org)
-			fmt.Printf("    account and propose it as a suggestion — it won't update the org skill directly.\n")
-			fmt.Printf("    If you administer it, accept your own suggestion with 'airskills review'.\n")
+			fmt.Printf("  %s %q is an org skill (%s). If you can write it (org owner/admin), your next\n", yellow("⚠"), name, org)
+			fmt.Printf("    push updates it in place. Otherwise push backs your version up to your account\n")
+			fmt.Printf("    and offers it to the org as a suggestion.\n")
 		}
 		entry := buildKeepLocalEntry(p.skill, ownerKind, ownerSlug, src)
 		// Preserve identity/suggestion fields when the skill was already
@@ -138,7 +137,7 @@ func runPullKeepLocal(cmd *cobra.Command, args []string) error {
 	if kept > 0 {
 		fmt.Printf("\n%d kept local — your files are unchanged and the conflict won't recur.\n", kept)
 		printAgentNextSteps(os.Stdout, []agentNextStep{
-			{Cmd: "airskills push", Why: "publish your local version to the server (forks for sourced/org skills)"},
+			{Cmd: "airskills push", Why: "publish your local version (updates the upstream if you can write it; otherwise backs up + suggests)"},
 			{Cmd: "airskills status", Why: "confirm the conflict is cleared"},
 		})
 	}

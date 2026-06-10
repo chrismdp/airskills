@@ -66,9 +66,9 @@ type conflictDetail struct {
 	// Drives the headline wording in conflictResolutionMessage.
 	kind string
 	// orgSlug is set when the conflicting server skill is an org skill.
-	// Drives the keep-local warning: resolving with --keep-local forks the
-	// org skill into your personal namespace rather than updating it, which
-	// is wrong if you administer the org. Empty for personal skills.
+	// Drives the keep-local note: after --keep-local, push updates the org
+	// skill in place when the caller can write it (owner/admin) and
+	// otherwise backs the edit up + suggests. Empty for personal skills.
 	orgSlug string
 }
 

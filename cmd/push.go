@@ -583,53 +583,26 @@ config).`,
 					}
 				}
 
-				// Shadow-fork detection: marker points at the upstream skill
-				// directly (org-member sync, or a non-owned skill whose marker
-				// pre-dates Source population in pull.go). A local edit means
-				// we must fork into the caller's namespace and submit a
-				// suggestion, NOT overwrite the upstream. See
-				// platform/doc/changes/cli-org-member-suggest-via-shadow-fork.md.
-				//
-				// Discriminator: marker.SkillID == marker.Source.ID. A real
-				// fork (created by `airskills add` while logged in, or by a
-				// prior shadow-fork pass) has a distinct SkillID and continues
-				// down the normal upload path with the existing suggest prompt.
+				// Skill tracked at the upstream directly (org-member sync, a
+				// keep-local adoption, or a self-healed marker). The caller
+				// MAY have write access — org owners/admins do — and the CLI
+				// can't see roles, so don't pre-decide: fall through and try
+				// the direct upload. The server's verdict IS the role check:
+				// an accepted write updates the org skill in place; a 403
+				// routes the edit into the transparent-backup + suggest path
+				// in the error handler below. Only edit-while-suggestion-
+				// pending stops here — amending an open suggestion is out of
+				// scope, so leave the upstream alone and say nothing happened.
 				if s.marker != nil && s.marker.Source != nil &&
-					s.marker.SkillID != "" && s.marker.SkillID == s.marker.Source.ID {
-					if s.marker.SuggestionID != "" {
-						// Edit-while-pending: leave the upstream alone. Amending
-						// an existing suggestion is out of scope for this ticket;
-						// surface a warning so the user knows nothing happened.
-						mu.Lock()
-						warnings = append(warnings, fmt.Sprintf(
-							"%s: a suggestion to %s/%s is still pending — local edits NOT pushed. Wait for the owner to accept/decline, then re-edit.",
-							s.name, s.marker.Source.Owner, s.marker.Source.Slug))
-						mu.Unlock()
-						lines[i].status = "pending suggestion"
-						lines[i].pct = 1
-						renderProgress(lines)
-						return
-					}
-					// A past SuggestDeclined doesn't block this path: the
-					// decline applied to those bytes. New edits are backed
-					// up again and the suggest question is asked afresh.
-					// Collect for sequential prompt + fork + upload + suggest
-					// after wg.Wait so we don't race goroutines on stdin or
-					// the (sequential) caller-side rename + suggestion APIs.
+					s.marker.SkillID != "" && s.marker.SkillID == s.marker.Source.ID &&
+					s.marker.SuggestionID != "" {
 					mu.Lock()
-					pendingShadowForks = append(pendingShadowForks, pendingShadowFork{
-						name:        s.name,
-						dir:         s.dir,
-						archive:     archive,
-						contentHash: contentHash,
-						archiveSize: archiveSize,
-						source:      s.marker.Source,
-						prevMarker:  s.marker,
-						progressIdx: i,
-					})
+					warnings = append(warnings, fmt.Sprintf(
+						"%s: a suggestion to %s/%s is still pending — local edits NOT pushed. Wait for the owner to accept/decline, then re-edit.",
+						s.name, s.marker.Source.Owner, s.marker.Source.Slug))
 					mu.Unlock()
-					lines[i].status = "fork-suggest"
-					lines[i].pct = 0.5
+					lines[i].status = "pending suggestion"
+					lines[i].pct = 1
 					renderProgress(lines)
 					return
 				}
@@ -786,32 +759,43 @@ config).`,
 				if err != nil {
 					// 403 on a skill that's still alive in the caller's
 					// effective set isn't a transfer — the caller just can't
-					// write it (org member, or a marker that lost its Source
-					// pointer, e.g. one written by an older `pull --force`).
-					// Backfill the upstream pointer and take the same
-					// fork+suggest path as any other non-owned edit instead
-					// of dead-ending on a "moved" warning whose suggested
-					// fix (`add --force`) would discard the user's edits.
+					// write it (org member; the server's rejection is the
+					// role check the API doesn't expose). Route the edit
+					// into the transparent-backup + suggest path instead of
+					// dead-ending on a "moved" warning whose suggested fix
+					// (`add --force`) would discard the user's edits. A
+					// marker tracking the upstream keeps its Source (the
+					// original suggestion baseline); a marker that lost its
+					// Source (e.g. written by an older `pull --force`) gets
+					// it backfilled — but only when the skill is provably
+					// non-owned, so a quota-style 403 on the caller's own
+					// skill can't fork it.
 					if statusCode == 403 {
-						if remote, ok := remoteByID[s.marker.SkillID]; ok {
-							if src := owners.sourceForNonOwned(remote); src != nil {
-								mu.Lock()
-								pendingShadowForks = append(pendingShadowForks, pendingShadowFork{
-									name:        s.name,
-									dir:         s.dir,
-									archive:     archive,
-									contentHash: contentHash,
-									archiveSize: archiveSize,
-									source:      src,
-									prevMarker:  s.marker,
-									progressIdx: i,
-								})
-								mu.Unlock()
-								lines[i].status = "fork-suggest"
-								lines[i].pct = 0.5
-								renderProgress(lines)
-								return
+						var src *skillSource
+						if s.marker.Source != nil && s.marker.SkillID == s.marker.Source.ID {
+							src = s.marker.Source
+						} else if s.marker.Source == nil {
+							if remote, ok := remoteByID[s.marker.SkillID]; ok {
+								src = owners.sourceForNonOwned(remote)
 							}
+						}
+						if src != nil {
+							mu.Lock()
+							pendingShadowForks = append(pendingShadowForks, pendingShadowFork{
+								name:        s.name,
+								dir:         s.dir,
+								archive:     archive,
+								contentHash: contentHash,
+								archiveSize: archiveSize,
+								source:      src,
+								prevMarker:  s.marker,
+								progressIdx: i,
+							})
+							mu.Unlock()
+							lines[i].status = "fork-suggest"
+							lines[i].pct = 0.5
+							renderProgress(lines)
+							return
 						}
 					}
 					// 403/404: most likely server-side transfer or deletion.
@@ -933,8 +917,11 @@ config).`,
 				// SuggestDeclined deliberately not consulted: a decline
 				// applies to the bytes it was asked about. This branch only
 				// runs after uploading CHANGED content, so new edits always
-				// re-offer the question.
-				if s.marker.Source != nil && s.marker.SuggestionID == "" {
+				// re-offer the question. Real forks only (SkillID differs
+				// from Source.ID) — a successful direct write to the
+				// upstream itself (org owner/admin) has nothing to suggest.
+				if s.marker.Source != nil && s.marker.SuggestionID == "" &&
+					s.marker.SkillID != s.marker.Source.ID {
 					mu.Lock()
 					pendingPrompts = append(pendingPrompts, pendingSuggestionPrompt{
 						name:             s.name,

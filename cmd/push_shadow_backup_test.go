@@ -220,6 +220,8 @@ func TestPushTransparentBackupDeclineStillBacksUp(t *testing.T) {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/me":
 			w.Header().Set("Content-Type", "application/json")
 			fmt.Fprint(w, `{"id":"00000000-0000-0000-0000-000000000099","username":"callerslug"}`)
+		case r.Method == http.MethodPut && r.URL.Path == "/api/v1/skills/"+upstreamID+"/archive":
+			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/skills":
 			createSkillCalls++
 			w.Header().Set("Content-Type", "application/json")
@@ -317,6 +319,8 @@ func TestPushDeclinedShadowMarkerStillBacksUpNewEdits(t *testing.T) {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/me":
 			w.Header().Set("Content-Type", "application/json")
 			fmt.Fprint(w, `{"id":"00000000-0000-0000-0000-000000000099","username":"callerslug"}`)
+		case r.Method == http.MethodPut && r.URL.Path == "/api/v1/skills/"+upstreamID+"/archive":
+			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/skills":
 			createSkillCalls++
 			w.Header().Set("Content-Type", "application/json")
@@ -440,5 +444,101 @@ func TestPushReoffersSuggestionAfterDeclineWhenEdited(t *testing.T) {
 	}
 	if lastSuggesterID != forkID || lastOwnerSkillID != upstreamID {
 		t.Errorf("suggestion = %q→%q, want %q→%q", lastSuggesterID, lastOwnerSkillID, forkID, upstreamID)
+	}
+}
+
+// An org owner/admin editing a synced org skill must update it IN PLACE.
+// The CLI can't see roles, so push tries the direct write first — the
+// server's accept/403 is the role check. No fork, no suggestion, and no
+// suggest prompt afterwards (you don't suggest to a skill you just wrote).
+func TestPushAdminDirectWriteUpdatesOrgSkillInPlace(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	oldIsTTY := isTTY
+	isTTY = true // interactive: a wrongly-fired suggest prompt would read EOF and record a decline
+	t.Cleanup(func() { isTTY = oldIsTTY })
+	feedStdin(t, "")
+
+	upstreamID := "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa01"
+
+	writeEditedSkill(t, home, "shared-skill")
+
+	state := &SyncState{Version: 1, Skills: map[string]*SyncEntry{
+		"shared-skill": {
+			SkillID:     upstreamID,
+			Version:     "1.0.0",
+			ContentHash: "upstream-baseline-hash",
+			Tool:        "claude-code",
+			OwnerKind:   "org",
+			OwnerSlug:   "upstream-org",
+			Source: &skillSource{
+				Owner:       "upstream-org",
+				Slug:        "shared-skill",
+				ID:          upstreamID,
+				ContentHash: "upstream-baseline-hash",
+			},
+		},
+	}}
+	if err := saveSyncState(state); err != nil {
+		t.Fatal(err)
+	}
+
+	var upstreamPutCalls, createSkillCalls, suggestionCalls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/skills":
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{"skills":[{"id":%q,"name":"shared-skill","slug":"shared-skill","version":"1.0.0","content_hash":"upstream-baseline-hash","tool_formats":["claude-code"],"visibility":"private","dependency_count":0,"org_id":"00000000-0000-0000-0000-000000000001"}]}`, upstreamID)
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/me":
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `{"id":"00000000-0000-0000-0000-000000000099","username":"adminslug"}`)
+		case r.Method == http.MethodPut && r.URL.Path == "/api/v1/skills/"+upstreamID+"/archive":
+			// Admin: the server authorizes the direct write.
+			upstreamPutCalls++
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{"id":%q,"version":"1.1.0","content_hash":"new-org-hash"}`, upstreamID)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/skills":
+			createSkillCalls++
+			http.Error(w, "should not fork for an admin", 500)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/suggestions":
+			suggestionCalls++
+			http.Error(w, "should not suggest for an admin", 500)
+		default:
+			t.Logf("unexpected request: %s %s", r.Method, r.URL.String())
+			http.Error(w, "not handled", 404)
+		}
+	}))
+	defer srv.Close()
+
+	writeTestConfigAndToken(t, home, srv.URL)
+
+	cmd := &cobra.Command{Use: "push"}
+	_ = captureStdout(t, func() {
+		if err := pushCmd.RunE(cmd, nil); err != nil {
+			t.Fatalf("push: %v", err)
+		}
+	})
+
+	if upstreamPutCalls != 1 {
+		t.Errorf("admin push must write the org skill in place: upstream PUTs = %d, want 1", upstreamPutCalls)
+	}
+	if createSkillCalls != 0 || suggestionCalls != 0 {
+		t.Errorf("admin push must not fork or suggest: createSkill=%d suggestions=%d", createSkillCalls, suggestionCalls)
+	}
+
+	entry := loadSyncState().Skills["shared-skill"]
+	if entry == nil {
+		t.Fatal("marker missing after push")
+	}
+	if entry.SkillID != upstreamID {
+		t.Errorf("marker must stay on the org skill, got %q", entry.SkillID)
+	}
+	if entry.ContentHash != "new-org-hash" || entry.Version != "1.1.0" {
+		t.Errorf("marker should record the accepted write, got hash=%q version=%q", entry.ContentHash, entry.Version)
+	}
+	if entry.SuggestionID != "" || entry.SuggestDeclined {
+		t.Errorf("no suggest prompt should fire after writing the skill itself: SuggestionID=%q SuggestDeclined=%v",
+			entry.SuggestionID, entry.SuggestDeclined)
 	}
 }
