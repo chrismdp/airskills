@@ -291,10 +291,27 @@ config).`,
 		remoteByID := map[string]*apiSkill{}
 		effectiveSkillIDs := map[string]bool{}
 		for i := range remoteSkills {
-			remoteByName[remoteSkills[i].Name] = &remoteSkills[i]
+			// Hidden backup forks share their name with the upstream —
+			// letting one win the name map could bind a marker-less local
+			// dir to the backup row (the broken identity all over again).
+			if !isBackupRow(&remoteSkills[i]) {
+				remoteByName[remoteSkills[i].Name] = &remoteSkills[i]
+			}
 			remoteByID[remoteSkills[i].Id.String()] = &remoteSkills[i]
 			effectiveSkillIDs[remoteSkills[i].Id.String()] = true
 		}
+
+		// Lazy owner lookup, shared by the heal below and the 403 self-heal
+		// in the upload goroutines (init is sync.Once-guarded; the maps are
+		// read-only afterwards).
+		owners := newOwnerResolver(client)
+
+		// Repair markers that still track their hidden backup fork directly
+		// (the pre-overlay shape) BEFORE any routing reads them — otherwise
+		// the edit takes the explicit-fork path: uploaded to the backup row
+		// as if it were a first-class skill, with a dangling suggestion
+		// prompt. Same heal pull runs, same listing data, already in hand.
+		healOverlayMarkers(syncState, remoteByID, owners)
 
 		// Filter out skills whose sync state SkillID isn't in the caller's
 		// owned set. Two cases:
@@ -448,10 +465,6 @@ config).`,
 		var foldedIn []string
 		var pendingPrompts []pendingSuggestionPrompt
 		var pendingBackups []pendingBackup
-		// Lazy owner lookup for the 403 self-heal below. Safe to share
-		// across goroutines: init is sync.Once-guarded and the maps are
-		// read-only afterwards.
-		owners := newOwnerResolver(client)
 		sem := make(chan struct{}, 5) // max 5 concurrent uploads
 
 		// Free tier limits (checked client-side as guidance, server enforces)
@@ -1170,13 +1183,29 @@ config).`,
 			backedUp = drainBackups(client, pendingBackups, syncState, owners, &failed, &warnings)
 		}
 
-		// Drain sequentially so goroutines don't race on stdin. In a headless
-		// session we can't prompt, so print agent-focused instructions instead
+		// Drain sequentially so goroutines don't race on stdin. With
+		// --force-suggest the decision is already made — submit without
+		// prompting, interactive or not. In a headless session without the
+		// flag we can't prompt, so print agent-focused instructions instead
 		// and leave the entry unmarked — the next interactive push will ask.
-		if len(pendingPrompts) > 0 && !isTTY {
+		if len(pendingPrompts) > 0 && pushForceSuggest {
+			for _, p := range pendingPrompts {
+				suggestion, err := client.createSuggestion(
+					p.suggesterSkillID, p.source.ID, p.source.ContentHash, "")
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "  %s %s: suggestion failed: %v\n", yellow("!"), p.name, err)
+					continue
+				}
+				fmt.Printf("  %s %s: suggestion sent to %s/%s\n", green("✓"), p.name, p.source.Owner, p.source.Slug)
+				if entry, ok := syncState.Skills[p.name]; ok {
+					entry.SuggestionID = suggestion.Id.String()
+					entry.SuggestDeclined = false
+				}
+			}
+		} else if len(pendingPrompts) > 0 && !isTTY {
 			fmt.Fprint(os.Stderr, agentSuggestionInstructions(pendingPrompts))
 		}
-		if len(pendingPrompts) > 0 && isTTY {
+		if len(pendingPrompts) > 0 && !pushForceSuggest && isTTY {
 			reader := bufio.NewReader(os.Stdin)
 			for _, p := range pendingPrompts {
 				fmt.Printf("\n  %s — suggest your edits to %s/%s? [y/N] ", p.name, p.source.Owner, p.source.Slug)
@@ -1406,7 +1435,7 @@ func movedDestinationInEffectiveSet(a skippedAction, remoteSkills []apiSkill, or
 
 func init() {
 	pushCmd.Flags().BoolVar(&pushForce, "force", false, "Skip conflict check (use after resolving conflicts)")
-	pushCmd.Flags().BoolVar(&pushForceSuggest, "force-suggest", false, "Submit a suggestion even when upstream has changed")
+	pushCmd.Flags().BoolVar(&pushForceSuggest, "force-suggest", false, "Submit the suggestion to the upstream owner without prompting (even if upstream has advanced)")
 	pushCmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "Show per-skill progress (and the files excluded by .askignore/.gitignore)")
 	pushCmd.Flags().StringVar(&pushOrg, "org", "", "Create new skills under this org (org admins only)")
 	pushCmd.Flags().BoolVar(&pushNoIgnore, "no-ignore", false, "Bypass .askignore and .gitignore for this push (built-in noise like node_modules is still excluded)")
@@ -1582,6 +1611,7 @@ func drainBackups(
 ) int64 {
 	reader := bufio.NewReader(os.Stdin)
 	var backedUp int64
+	var deferred []pendingBackup
 
 	for _, p := range queue {
 		entry := syncState.Skills[p.name]
@@ -1725,10 +1755,19 @@ func drainBackups(
 		}
 
 		// The only real decision: suggest the edit to the upstream owner?
-		// Headless runs answer yes (matches the pre-existing
-		// non-interactive behaviour); interactive runs get the question.
+		// --force-suggest submits without asking; an interactive run gets
+		// the question; a headless run without the flag DEFERS — an agent
+		// must never auto-fire a suggestion at the upstream owner. The
+		// entry stays undecided (no SuggestDeclined) so the question is
+		// re-offered, and the instructions block after the loop names the
+		// two ways to resolve it.
+		if !pushForceSuggest && !isTTY {
+			deferred = append(deferred, p)
+			fmt.Printf("  %s %s: edits saved; suggestion decision deferred\n", green("✓"), p.name)
+			continue
+		}
 		suggest := true
-		if isTTY {
+		if !pushForceSuggest {
 			fmt.Printf("\n  %s — suggest your edits to %s/%s? [Y/n] ", p.name, p.source.Owner, p.source.Slug)
 			answer, _ := reader.ReadString('\n')
 			answer = strings.TrimSpace(strings.ToLower(answer))
@@ -1752,6 +1791,8 @@ func drainBackups(
 				green("✓"), p.name, p.source.Owner, p.source.Slug)
 		}
 	}
+
+	fmt.Fprint(os.Stderr, overlaySuggestDeferredInstructions(deferred))
 
 	return backedUp
 }

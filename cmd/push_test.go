@@ -1002,8 +1002,13 @@ func TestPushShadowForksOnOrgMemberEdit(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 	oldIsTTY := isTTY
-	isTTY = false // headless — auto-proceed without prompting
-	t.Cleanup(func() { isTTY = oldIsTTY })
+	isTTY = false
+	oldForceSuggest := pushForceSuggest
+	pushForceSuggest = true // suggestion assertions below opt in explicitly
+	t.Cleanup(func() {
+		isTTY = oldIsTTY
+		pushForceSuggest = oldForceSuggest
+	})
 
 	upstreamID := "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa01"
 	forkID := "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa02"

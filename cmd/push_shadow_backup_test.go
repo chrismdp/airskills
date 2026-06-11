@@ -56,7 +56,12 @@ func TestPushSelfHealsForbiddenOrgSkillIntoForkSuggest(t *testing.T) {
 	t.Setenv("USERPROFILE", home)
 	oldIsTTY := isTTY
 	isTTY = false
-	t.Cleanup(func() { isTTY = oldIsTTY })
+	oldForceSuggest := pushForceSuggest
+	pushForceSuggest = true // suggestion assertions below opt in explicitly
+	t.Cleanup(func() {
+		isTTY = oldIsTTY
+		pushForceSuggest = oldForceSuggest
+	})
 
 	upstreamID := "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa01"
 	forkID := "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa02"
@@ -290,7 +295,12 @@ func TestPushDeclinedShadowMarkerStillBacksUpNewEdits(t *testing.T) {
 	t.Setenv("USERPROFILE", home)
 	oldIsTTY := isTTY
 	isTTY = false
-	t.Cleanup(func() { isTTY = oldIsTTY })
+	oldForceSuggest := pushForceSuggest
+	pushForceSuggest = true // suggestion assertions below opt in explicitly
+	t.Cleanup(func() {
+		isTTY = oldIsTTY
+		pushForceSuggest = oldForceSuggest
+	})
 
 	upstreamID := "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa01"
 	forkID := "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa02"
@@ -551,5 +561,218 @@ func TestPushAdminDirectWriteUpdatesOrgSkillInPlace(t *testing.T) {
 	if entry.SuggestionID != "" || entry.SuggestDeclined {
 		t.Errorf("no suggest prompt should fire after writing the skill itself: SuggestionID=%q SuggestDeclined=%v",
 			entry.SuggestionID, entry.SuggestDeclined)
+	}
+}
+
+// A marker still tracking its hidden backup fork directly (the broken
+// pre-overlay shape from the 2026-06-11 field report) must be healed by
+// push using the listing already in hand: the edit routes down the member
+// backup path — uploaded to the backup fork, marker flipped to track the
+// upstream — instead of the explicit-fork path (which uploaded to the
+// backup row as if it were a first-class personal skill and then dangled
+// an interactive suggestion prompt).
+func TestPushHealsMarkerTrackingBackupRow(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	oldIsTTY := isTTY
+	isTTY = false
+	t.Cleanup(func() { isTTY = oldIsTTY })
+
+	upstreamID := "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa01"
+	forkID := "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa02"
+	orgID := "00000000-0000-0000-0000-000000000001"
+
+	writeEditedSkill(t, home, "home")
+
+	state := &SyncState{Version: 1, Skills: map[string]*SyncEntry{
+		"home": {
+			SkillID:      forkID, // the broken shape: tracking the backup row
+			Version:      "1.0.6",
+			ContentHash:  "stale-local-hash",
+			Tool:         "claude-code",
+			OwnerKind:    "org",
+			OwnerSlug:    "parsons-home",
+			ResolvedHash: "upstream-hash",
+			Source: &skillSource{
+				Owner:               "parsons-home",
+				Slug:                "home",
+				ID:                  upstreamID,
+				UpstreamSkillID:     upstreamID,
+				UpstreamContentHash: "upstream-hash",
+				ContentHash:         "upstream-hash",
+			},
+		},
+	}}
+	if err := saveSyncState(state); err != nil {
+		t.Fatal(err)
+	}
+
+	var upstreamPutCalls, forkPutCalls, createSkillCalls, suggestionCalls int
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/skills":
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{"skills":[
+				{"id":%q,"name":"home","slug":"home","version":"1.0.5","content_hash":"upstream-hash","tool_formats":["claude-code"],"visibility":"private","dependency_count":0,"org_id":%q},
+				{"id":%q,"name":"home","slug":"home","version":"1.0.6","content_hash":"stale-backup-hash","tool_formats":["claude-code"],"visibility":"private","dependency_count":0,"forked_from":%q,"backup":true}
+			]}`, upstreamID, orgID, forkID, upstreamID)
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/me":
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `{"id":"00000000-0000-0000-0000-000000000099","username":"poppinsparsons"}`)
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/organizations":
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{"organizations":[{"id":%q,"slug":"parsons-home","name":"Parsons Home","role":"member","member_count":2}]}`, orgID)
+		case r.Method == http.MethodPut && r.URL.Path == "/api/v1/skills/"+upstreamID+"/archive":
+			upstreamPutCalls++
+			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+		case r.Method == http.MethodPut && r.URL.Path == "/api/v1/skills/"+forkID+"/archive":
+			forkPutCalls++
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{"id":%q,"version":"1.0.7","content_hash":"new-backup-hash"}`, forkID)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/skills":
+			createSkillCalls++
+			http.Error(w, `{"error":"should not create"}`, 500)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/suggestions":
+			suggestionCalls++
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `{"id":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa03","status":"pending"}`)
+		default:
+			t.Logf("unexpected request: %s %s", r.Method, r.URL.String())
+			http.Error(w, "not handled", 404)
+		}
+	}))
+	defer srv.Close()
+
+	writeTestConfigAndToken(t, home, srv.URL)
+
+	cmd := &cobra.Command{Use: "push"}
+	captureStdout(t, func() {
+		if err := pushCmd.RunE(cmd, nil); err != nil {
+			t.Fatalf("push: %v", err)
+		}
+	})
+
+	if upstreamPutCalls != 0 {
+		t.Errorf("member push must not upload to the upstream, got %d attempts", upstreamPutCalls)
+	}
+	if createSkillCalls != 0 {
+		t.Errorf("no new skill may be created — the backup fork already exists, got %d creates", createSkillCalls)
+	}
+	if forkPutCalls != 1 {
+		t.Errorf("the edit should be uploaded to the existing backup fork once, got %d", forkPutCalls)
+	}
+
+	entry := loadSyncState().Skills["home"]
+	if entry == nil {
+		t.Fatal("marker missing after push")
+	}
+	if entry.SkillID != upstreamID {
+		t.Errorf("marker must heal to track the upstream, got SkillID=%q", entry.SkillID)
+	}
+	if entry.Backup == nil || entry.Backup.SkillID != forkID {
+		t.Errorf("Backup must reference the fork, got %+v", entry.Backup)
+	}
+	// Headless without --force-suggest: the suggest decision is DEFERRED —
+	// an agent must never auto-fire a suggestion at the upstream owner.
+	if suggestionCalls != 0 {
+		t.Errorf("headless push without --force-suggest must not create a suggestion, got %d", suggestionCalls)
+	}
+	if entry.SuggestDeclined {
+		t.Error("deferral is not a decline — the question must be re-offered")
+	}
+}
+
+// --force-suggest is the explicit non-interactive submit: same member
+// overlay edit as above, but the suggestion goes out with no prompt
+// (field report 2026-06-11, bug 2: the flag previously left the decision
+// dangling at an interactive prompt that never came).
+func TestPushForceSuggestSubmitsHeadless(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	oldIsTTY := isTTY
+	isTTY = false
+	oldForceSuggest := pushForceSuggest
+	pushForceSuggest = true
+	t.Cleanup(func() {
+		isTTY = oldIsTTY
+		pushForceSuggest = oldForceSuggest
+	})
+
+	upstreamID := "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa01"
+	forkID := "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa02"
+	orgID := "00000000-0000-0000-0000-000000000001"
+
+	writeEditedSkill(t, home, "home")
+
+	state := &SyncState{Version: 1, Skills: map[string]*SyncEntry{
+		"home": {
+			SkillID:     upstreamID,
+			Version:     "1.0.5",
+			ContentHash: "upstream-hash",
+			Tool:        "claude-code",
+			OwnerKind:   "org",
+			OwnerSlug:   "parsons-home",
+			Source: &skillSource{
+				Owner:               "parsons-home",
+				Slug:                "home",
+				ID:                  upstreamID,
+				UpstreamSkillID:     upstreamID,
+				UpstreamContentHash: "upstream-hash",
+				ContentHash:         "upstream-hash",
+			},
+		},
+	}}
+	if err := saveSyncState(state); err != nil {
+		t.Fatal(err)
+	}
+
+	var suggestionCalls int
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/skills":
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{"skills":[{"id":%q,"name":"home","slug":"home","version":"1.0.5","content_hash":"upstream-hash","tool_formats":["claude-code"],"visibility":"private","dependency_count":0,"org_id":%q}]}`, upstreamID, orgID)
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/me":
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `{"id":"00000000-0000-0000-0000-000000000099","username":"poppinsparsons"}`)
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/organizations":
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{"organizations":[{"id":%q,"slug":"parsons-home","name":"Parsons Home","role":"member","member_count":2}]}`, orgID)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/skills":
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{"id":%q,"name":"home","slug":"home","version":"1.0.6","content_hash":""}`, forkID)
+		case r.Method == http.MethodPut && r.URL.Path == "/api/v1/skills/"+forkID+"/archive":
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{"id":%q,"version":"1.0.7","content_hash":"new-backup-hash"}`, forkID)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/suggestions":
+			suggestionCalls++
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `{"id":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa03","status":"pending"}`)
+		default:
+			t.Logf("unexpected request: %s %s", r.Method, r.URL.String())
+			http.Error(w, "not handled", 404)
+		}
+	}))
+	defer srv.Close()
+
+	writeTestConfigAndToken(t, home, srv.URL)
+
+	cmd := &cobra.Command{Use: "push"}
+	captureStdout(t, func() {
+		if err := pushCmd.RunE(cmd, nil); err != nil {
+			t.Fatalf("push: %v", err)
+		}
+	})
+
+	if suggestionCalls != 1 {
+		t.Errorf("--force-suggest must submit the suggestion non-interactively, got %d calls", suggestionCalls)
+	}
+	entry := loadSyncState().Skills["home"]
+	if entry == nil || entry.SuggestionID == "" {
+		t.Errorf("marker should record the suggestion id, got %+v", entry)
 	}
 }

@@ -34,9 +34,41 @@ func agentSuggestionInstructions(prompts []pendingSuggestionPrompt) string {
 	}
 
 	b.WriteString("\nCollaborate with the user to decide, per skill, whether to send a\n")
-	b.WriteString("suggestion upstream. When you're ready, re-run 'airskills push' in an\n")
-	b.WriteString("interactive terminal and answer 's' at the prompt (with an optional\n")
-	b.WriteString("message). Doing nothing leaves these as pending — they'll be offered\n")
+	b.WriteString("suggestion upstream. To submit, run 'airskills push --force-suggest\n")
+	b.WriteString("<skill>', or re-run 'airskills push' in an interactive terminal and\n")
+	b.WriteString("answer 's' at the prompt (with an optional message). Doing nothing\n")
+	b.WriteString("leaves these as pending — they'll be offered again on the next\n")
+	b.WriteString("interactive push.\n\n")
+
+	return b.String()
+}
+
+// overlaySuggestDeferredInstructions is the block drainBackups prints when
+// a headless push (without --force-suggest) backed up edits to non-owned
+// skills but deferred the suggest decision: an agent must not auto-fire a
+// suggestion at the upstream owner. Empty when nothing was deferred.
+func overlaySuggestDeferredInstructions(deferred []pendingBackup) string {
+	if len(deferred) == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+	b.WriteString("\n=== Local edits backed up — suggestion decision deferred ===\n\n")
+	b.WriteString("You are an agent running airskills non-interactively. The skills below\n")
+	b.WriteString("carry local edits to skills the user does not own. The edits are saved\n")
+	b.WriteString("to the user's account; nothing was proposed to the upstream owner.\n\n")
+
+	for _, p := range deferred {
+		if p.source == nil {
+			continue
+		}
+		fmt.Fprintf(&b, "  • %s  (from %s/%s)\n", p.name, p.source.Owner, p.source.Slug)
+	}
+
+	b.WriteString("\nDecide with the user whether to propose the edits upstream, then\n")
+	b.WriteString("either run 'airskills push --force-suggest <skill>' to submit, or\n")
+	b.WriteString("re-run 'airskills push' in an interactive terminal and answer the\n")
+	b.WriteString("prompt. Doing nothing keeps the edits safe — the question is offered\n")
 	b.WriteString("again on the next interactive push.\n\n")
 
 	return b.String()

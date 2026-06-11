@@ -43,7 +43,12 @@ func TestPushShadowForkAdoptsServerResolvedUpstream(t *testing.T) {
 	t.Setenv("USERPROFILE", home)
 	oldIsTTY := isTTY
 	isTTY = false
-	t.Cleanup(func() { isTTY = oldIsTTY })
+	oldForceSuggest := pushForceSuggest
+	pushForceSuggest = true // suggestion assertions below opt in explicitly
+	t.Cleanup(func() {
+		isTTY = oldIsTTY
+		pushForceSuggest = oldForceSuggest
+	})
 
 	staleUpstreamID := "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa01"
 	movedUpstreamID := "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa04"

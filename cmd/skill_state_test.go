@@ -312,3 +312,68 @@ func TestClassifyEmits1RowPerSkill(t *testing.T) {
 		t.Errorf("expected 1 row, got %d: %v", len(got), names(got))
 	}
 }
+
+// A marker that still tracks the hidden backup fork directly — the broken
+// shape from the 2026-06-11 field report (skill_id = the backup row,
+// source = the upstream) — must classify as the overlay it represents:
+// ONE tracked row with the divergence on the overlay axis ("local
+// changes"). Before the fix the backup row was filtered before tracked
+// matching, the marker matched nothing, and the upstream row paired with
+// the local dir as a marker-less conflict — rendered "untracked" with
+// `pull --keep-local` advice that keep-local itself refused.
+func TestClassifyMarkerTrackingBackupRowIsOverlay(t *testing.T) {
+	forkID := testUUID("fork-1")
+	upstreamID := testUUID("upstream-1")
+	state := &SyncState{
+		Version: 1,
+		Skills: map[string]*SyncEntry{
+			"home": {
+				SkillID:      forkID.String(),
+				ContentHash:  "local-edit-hash",
+				OwnerKind:    "org",
+				OwnerSlug:    "parsons-home",
+				ResolvedHash: "upstream-hash",
+				Source: &skillSource{
+					Owner:               "parsons-home",
+					Slug:                "home",
+					ID:                  upstreamID.String(),
+					UpstreamSkillID:     upstreamID.String(),
+					UpstreamContentHash: "upstream-hash",
+				},
+			},
+		},
+	}
+	remote := []apiSkill{
+		{Id: upstreamID, Name: "home", Slug: "home", ContentHash: strPtr("upstream-hash")},
+		{Id: forkID, Name: "home", Slug: "home", ContentHash: strPtr("local-edit-hash"), ForkedFrom: &upstreamID, Backup: true},
+	}
+	local := map[string]string{"home": "/disk/home"}
+	hash := stubHasher(map[string]string{"/disk/home": "local-edit-hash"})
+
+	got := classifySkills(remote, local, state, hash)
+	if len(got) != 1 {
+		t.Fatalf("expected 1 row (backup row is plumbing), got %d: %v", len(got), names(got))
+	}
+	info := findInfo(t, got, "home")
+	if info.State != StateTracked {
+		t.Fatalf("expected tracked, got %s", info.State)
+	}
+	if info.Marker == nil {
+		t.Fatal("the broken-shape marker must still attach to the row")
+	}
+	if !info.Overlay || !info.OverlayDiverged {
+		t.Errorf("expected overlay with standing local changes, got overlay=%v diverged=%v",
+			info.Overlay, info.OverlayDiverged)
+	}
+	if info.UpstreamMoved {
+		t.Error("resolved_hash equals upstream head — UpstreamMoved must be false")
+	}
+
+	buckets := projectStatusBuckets(got, nil)
+	if len(buckets.untracked) != 0 {
+		t.Errorf("untracked bucket must be empty, got %v", buckets.untracked)
+	}
+	if len(buckets.localEdits) != 1 {
+		t.Errorf("expected one local-edits row, got %v", buckets.localEdits)
+	}
+}

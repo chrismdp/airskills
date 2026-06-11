@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -67,3 +68,89 @@ func TestPendingReviewSummaryUsesAddForce(t *testing.T) {
 	}
 }
 
+
+// add --force used to preserve a stale marker SkillID (it only set the id
+// when empty). A marker left tracking the hidden backup fork (the
+// pre-overlay 0.7.24 fork-on-push shape, since flagged backup=true
+// server-side) therefore kept that identity while owner/source/
+// resolved_hash were rewritten around it — the exact broken marker from
+// the 2026-06-11 field report. Taking upstream's bytes means tracking the
+// upstream: the old id must flip, with a confirmed backup row preserved
+// in entry.Backup.
+func TestAdoptUpstreamIdentityFlipsBackupRowMarker(t *testing.T) {
+	forkID := testUUID("fork-1")
+	upstreamID := testUUID("upstream-1")
+
+	entry := &SyncEntry{SkillID: forkID.String()}
+	lookup := func(id string) (*apiSkill, error) {
+		if id != forkID.String() {
+			t.Fatalf("looked up %q, want the old marker id", id)
+		}
+		return &apiSkill{Id: forkID, ContentHash: strPtr("backup-hash"), ForkedFrom: &upstreamID, Backup: true}, nil
+	}
+
+	adoptUpstreamIdentity(entry, upstreamID.String(), lookup)
+	if entry.SkillID != upstreamID.String() {
+		t.Errorf("SkillID = %q, want upstream %q", entry.SkillID, upstreamID.String())
+	}
+	if entry.Backup == nil || entry.Backup.SkillID != forkID.String() || entry.Backup.ContentHash != "backup-hash" {
+		t.Errorf("Backup should preserve the old backup row, got %+v", entry.Backup)
+	}
+}
+
+// A visible same-slug fork (the caller's own deliberate skill) must keep
+// its identity — add --force only takes upstream's BYTES there.
+func TestAdoptUpstreamIdentityKeepsVisibleFork(t *testing.T) {
+	forkID := testUUID("fork-1")
+	upstreamID := testUUID("upstream-1")
+
+	entry := &SyncEntry{SkillID: forkID.String()}
+	lookup := func(id string) (*apiSkill, error) {
+		return &apiSkill{Id: forkID, ForkedFrom: &upstreamID, Backup: false}, nil
+	}
+
+	adoptUpstreamIdentity(entry, upstreamID.String(), lookup)
+	if entry.SkillID != forkID.String() {
+		t.Errorf("SkillID = %q, want the visible fork %q kept", entry.SkillID, forkID.String())
+	}
+	if entry.Backup != nil {
+		t.Errorf("no Backup should be invented for a visible fork, got %+v", entry.Backup)
+	}
+}
+
+// A gone old row (404/410) flips to the upstream — keeping a dead id
+// helps nobody; a transient lookup failure changes nothing.
+func TestAdoptUpstreamIdentityGoneAndTransient(t *testing.T) {
+	upstreamID := testUUID("upstream-1")
+
+	gone := &SyncEntry{SkillID: testUUID("fork-1").String()}
+	adoptUpstreamIdentity(gone, upstreamID.String(), func(string) (*apiSkill, error) {
+		return nil, fmt.Errorf("API error (404): not found")
+	})
+	if gone.SkillID != upstreamID.String() {
+		t.Errorf("gone row: SkillID = %q, want upstream", gone.SkillID)
+	}
+
+	transient := &SyncEntry{SkillID: testUUID("fork-1").String()}
+	adoptUpstreamIdentity(transient, upstreamID.String(), func(string) (*apiSkill, error) {
+		return nil, fmt.Errorf("API error (500): boom")
+	})
+	if transient.SkillID != testUUID("fork-1").String() {
+		t.Errorf("transient failure must not change identity, got %q", transient.SkillID)
+	}
+
+	empty := &SyncEntry{}
+	adoptUpstreamIdentity(empty, upstreamID.String(), nil)
+	if empty.SkillID != upstreamID.String() {
+		t.Errorf("empty SkillID adopts the upstream, got %q", empty.SkillID)
+	}
+
+	already := &SyncEntry{SkillID: upstreamID.String()}
+	adoptUpstreamIdentity(already, upstreamID.String(), func(string) (*apiSkill, error) {
+		t.Fatal("no lookup should happen when the identity already matches")
+		return nil, nil
+	})
+	if already.SkillID != upstreamID.String() {
+		t.Errorf("matching identity must be untouched")
+	}
+}

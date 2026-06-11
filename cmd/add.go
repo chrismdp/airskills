@@ -224,9 +224,18 @@ local copy is backed up to ~/.airskills/undo/<timestamp>/ first.`,
 				// --force ResolvedHash gap). Setting it makes both axes
 				// provably clean — clean own copy, acknowledged upstream.
 				entry.ResolvedHash = newHash
-				if entry.SkillID == "" {
-					entry.SkillID = result.ID
+				// Track the upstream as identity. A stale SkillID (e.g. a
+				// marker still tracking its hidden backup fork from the
+				// pre-overlay era) must not survive here — that shape made
+				// status/list misreport the skill as "untracked" forever
+				// (field report 2026-06-11).
+				var lookup func(string) (*apiSkill, error)
+				if authHeader != "" {
+					if apiCl, cerr := newAPIClientAuto(); cerr == nil {
+						lookup = apiCl.getSkill
+					}
 				}
+				adoptUpstreamIdentity(entry, result.ID, lookup)
 				seedCopyLedgerFromDisk(entry, dirName)
 				syncState.Skills[dirName] = entry
 				saveSyncState(syncState)

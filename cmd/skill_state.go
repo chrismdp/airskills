@@ -164,10 +164,27 @@ func classifySkills(
 		state = &SyncState{Version: 1, Skills: map[string]*SyncEntry{}}
 	}
 
+	// Backup rows are plumbing (filtered below), but a legacy/broken marker
+	// may still track one directly (pre-heal shape: SkillID = the backup
+	// fork). Map such markers to the backup's upstream so they match the
+	// upstream row instead of matching nothing — without this the upstream
+	// row pairs with the local dir as a marker-less conflict and renders
+	// "untracked" (field report 2026-06-11).
+	backupUpstream := map[string]string{}
+	for i := range remote {
+		if isBackupRow(&remote[i]) {
+			backupUpstream[remote[i].Id.String()] = remote[i].ForkedFrom.String()
+		}
+	}
+
 	skillIDToName := map[string]string{}
 	for name, entry := range state.Skills {
 		if entry != nil && entry.SkillID != "" {
-			skillIDToName[entry.SkillID] = name
+			id := entry.SkillID
+			if up, ok := backupUpstream[id]; ok {
+				id = up
+			}
+			skillIDToName[id] = name
 		}
 	}
 
@@ -308,8 +325,12 @@ func deriveDivergence(info *SkillStateInfo) {
 	// my base" is not another-of-my-machines-pushed — it's the overlay's
 	// standing divergence (OverlayDiverged, rendered as "local changes"),
 	// and a genuine upstream move is measured against the BASELINE the
-	// user last incorporated.
-	if isOverlayMarker(info.Marker) {
+	// user last incorporated. The remote-id comparison covers the legacy
+	// pre-heal marker shape (SkillID = the backup fork) that classifySkills
+	// remapped onto the upstream row.
+	matchedUpstream := info.Remote != nil && info.Marker.Source != nil &&
+		info.Remote.Id.String() == sourceUpstreamID(info.Marker.Source)
+	if isOverlayMarker(info.Marker) || matchedUpstream {
 		info.Overlay = true
 		if remoteHead != "" && info.LocalHash != "" && info.LocalHash != remoteHead {
 			info.OverlayDiverged = true

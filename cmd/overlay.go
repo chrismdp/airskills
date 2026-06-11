@@ -65,6 +65,37 @@ func retireSuggestion(client *apiClient, id string) bool {
 	return false
 }
 
+// adoptUpstreamIdentity points a marker at the resolved upstream id when
+// `add owner/slug --force` finds it tracking something else. The stale id
+// is usually the hidden backup fork from the pre-overlay fork-on-push era
+// — confirmed via lookup, it moves into entry.Backup; a gone row (404/410)
+// is simply dropped. The caller's own VISIBLE fork keeps its identity
+// (--force only takes upstream's bytes there), as does anything a
+// transient lookup failure leaves unconfirmed.
+func adoptUpstreamIdentity(entry *SyncEntry, upstreamID string, lookup func(id string) (*apiSkill, error)) {
+	if entry == nil || upstreamID == "" || entry.SkillID == upstreamID {
+		return
+	}
+	if entry.SkillID == "" {
+		entry.SkillID = upstreamID
+		return
+	}
+	if entry.Backup != nil || lookup == nil {
+		return
+	}
+	old, err := lookup(entry.SkillID)
+	if err != nil {
+		if isGoneError(err) {
+			entry.SkillID = upstreamID
+		}
+		return
+	}
+	if isBackupRow(old) && old.ForkedFrom.String() == upstreamID {
+		entry.Backup = &backupRef{SkillID: entry.SkillID, ContentHash: strDeref(old.ContentHash)}
+		entry.SkillID = upstreamID
+	}
+}
+
 // healOverlayMarkers flips markers that track an owned skill whose server
 // row is flagged backup=true (set for legacy shadow-fork shapes by the
 // lineage-split backfill) into the overlay shape: SkillID becomes the

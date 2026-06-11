@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/spf13/cobra"
 )
@@ -97,6 +98,13 @@ func runDiff(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("skill %q not found locally", skillName)
 	}
 
+	// Copies that disagree with each other make a per-copy server diff look
+	// arbitrary (a stale mirror shows your additions as deletions). Say so
+	// before any diff output, so a partial-copy diff is explainable.
+	fmt.Print(diffCopiesDisagreeWarning(skillName, localDirs, func(p string) string {
+		return computeMerkleHash(readSkillFiles(p))
+	}))
+
 	// For each local copy, diff against server
 	anyChanged := false
 	for _, localDir := range localDirs {
@@ -173,6 +181,32 @@ func runDiff(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
+}
+
+// diffCopiesDisagreeWarning returns a heads-up block when a skill's
+// mirrored agent copies don't all hold the same content (mirror pending —
+// e.g. one copy was edited and sync hasn't fanned it out yet). Empty when
+// there's a single copy or all copies agree.
+func diffCopiesDisagreeWarning(skillName string, localDirs []string, hashLocal func(string) string) string {
+	if len(localDirs) < 2 {
+		return ""
+	}
+	first := hashLocal(localDirs[0])
+	agree := true
+	for _, dir := range localDirs[1:] {
+		if hashLocal(dir) != first {
+			agree = false
+			break
+		}
+	}
+	if agree {
+		return ""
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s your agent copies of %s differ from each other (mirror pending) —\n", yellow("!"), skillName)
+	b.WriteString("  each copy is diffed against the server separately below; run\n")
+	b.WriteString("  'airskills sync' to reconcile the copies first.\n\n")
+	return b.String()
 }
 
 // diffFiles runs diff -u between two files. Returns empty string if identical.
