@@ -25,8 +25,10 @@ Three flows that all end in resolve:
   - Resolved a previous review and the upstream has moved again.
 
 If you instead want to take the whole upstream, replacing your local
-copy: 'airskills pull --force <name>'. That makes you synced; resolve
-is unnecessary.
+copy: 'airskills add <owner>/<slug> --force'. That makes you synced;
+resolve is unnecessary. (Not 'pull --force' — pull talks to your own
+account's copy and only resolves conflicts there; taking an upstream's
+bytes always goes through 'add'.)
 
 For owned skills (your own namespace, no upstream) this is a no-op —
 there's no "original" to resolve against.`,

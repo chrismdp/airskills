@@ -32,6 +32,24 @@ func TestAddCmdHasForceFlag(t *testing.T) {
 	}
 }
 
+// TestAddForceNextStepsHaveNoPushHint pins the agent next-steps printed
+// after `add --force` overwrites a local copy with upstream's bytes.
+// That path sets the marker's ContentHash AND ResolvedHash to the new
+// bytes — both axes provably clean — so there is nothing to push. A
+// push hint here is vestigial pre-overlay guidance and fired even when
+// status reported fully synced (field report 2026-06-11).
+func TestAddForceNextStepsHaveNoPushHint(t *testing.T) {
+	steps := addForceNextSteps()
+	if len(steps) == 0 {
+		t.Fatal("expected at least one next step after add --force")
+	}
+	for _, s := range steps {
+		if strings.Contains(s.Cmd, "push") {
+			t.Errorf("add --force next-steps must not suggest push: %q (%s)", s.Cmd, s.Why)
+		}
+	}
+}
+
 // TestPendingReviewSummaryUsesAddForce verifies the collapsed
 // one-line-per-skill output points at `airskills add owner/slug
 // --force` rather than the old `airskills incoming` surface or the

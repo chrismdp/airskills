@@ -253,10 +253,7 @@ local copy is backed up to ~/.airskills/undo/<timestamp>/ first.`,
 					"authenticated": authHeader != "",
 					"force":         true,
 				})
-				printAgentNextSteps(os.Stdout, []agentNextStep{
-					{Cmd: "airskills status", Why: "confirm local matches upstream"},
-					{Cmd: "airskills push", Why: "push the new bytes up to your fork on the server"},
-				})
+				printAgentNextSteps(os.Stdout, addForceNextSteps())
 				return nil
 			}
 			// No local copy yet — --force is a no-op; fall through to
@@ -509,6 +506,18 @@ func countFiles(dir string) int {
 		return nil
 	})
 	return count
+}
+
+// addForceNextSteps is the agent guidance after `add --force` overwrites
+// a local copy with upstream's bytes. Deliberately no push step: the
+// force path sets both ContentHash and ResolvedHash to the new bytes, so
+// both axes are already clean and push is a no-op. The old "push the new
+// bytes up to your fork" hint was pre-overlay guidance that fired even
+// when status reported fully synced (field report 2026-06-11).
+func addForceNextSteps() []agentNextStep {
+	return []agentNextStep{
+		{Cmd: "airskills status", Why: "confirm local matches upstream and nothing is pending"},
+	}
 }
 
 func init() {
