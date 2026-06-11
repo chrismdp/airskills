@@ -116,8 +116,110 @@ func TestAdoptUpstreamIdentityFlipsBackupRowMarker(t *testing.T) {
 	}
 }
 
-// A visible same-slug fork (the caller's own deliberate skill) must keep
-// its identity — add --force only takes upstream's BYTES there.
+// retireVisibleForkOnTakeUpstream implements option (b) of
+// cli-visible-fork-take-upstream-gap.md: taking the upstream wholesale
+// retires the caller's visible fork — soft-delete the fork row, repoint
+// the marker at the upstream. Without this, add --force self-reverts on
+// the next sync (the marker still tracks the fork, whose server row
+// holds the old bytes, and pull fast-forwards them back).
+func TestRetireVisibleForkRetiresAndRepoints(t *testing.T) {
+	forkID := testUUID("fork-1")
+	upstreamID := testUUID("upstream-1")
+
+	entry := &SyncEntry{SkillID: forkID.String()}
+	deleted := ""
+	lookup := func(id string) (*apiSkill, error) {
+		return &apiSkill{Id: forkID, ForkedFrom: &upstreamID, Backup: false}, nil
+	}
+	del := func(id string) error { deleted = id; return nil }
+
+	retired, err := retireVisibleForkOnTakeUpstream(entry, upstreamID.String(), lookup, del)
+	if err != nil || !retired {
+		t.Fatalf("retired=%v err=%v, want true,nil", retired, err)
+	}
+	if deleted != forkID.String() {
+		t.Errorf("deleted %q, want the fork row %q", deleted, forkID.String())
+	}
+	if entry.SkillID != upstreamID.String() {
+		t.Errorf("SkillID = %q, want upstream %q", entry.SkillID, upstreamID.String())
+	}
+	if entry.Backup != nil {
+		t.Errorf("retired fork must not be recorded as Backup, got %+v", entry.Backup)
+	}
+}
+
+// Shapes retire must NOT touch: backup rows (adoptUpstreamIdentity owns
+// those), forks of a different upstream, non-fork rows, already-adopted
+// markers, and anonymous callers (nil delete).
+func TestRetireVisibleForkLeavesOtherShapesAlone(t *testing.T) {
+	forkID := testUUID("fork-1")
+	upstreamID := testUUID("upstream-1")
+	otherID := testUUID("other-1")
+	noDelete := func(id string) error {
+		t.Fatalf("delete must not be called, got %q", id)
+		return nil
+	}
+
+	cases := []struct {
+		name string
+		row  *apiSkill
+	}{
+		{"backup row", &apiSkill{Id: forkID, ForkedFrom: &upstreamID, Backup: true}},
+		{"fork of a different upstream", &apiSkill{Id: forkID, ForkedFrom: &otherID, Backup: false}},
+		{"not a fork", &apiSkill{Id: forkID, Backup: false}},
+	}
+	for _, c := range cases {
+		entry := &SyncEntry{SkillID: forkID.String()}
+		lookup := func(id string) (*apiSkill, error) { return c.row, nil }
+		retired, err := retireVisibleForkOnTakeUpstream(entry, upstreamID.String(), lookup, noDelete)
+		if retired || err != nil {
+			t.Errorf("%s: retired=%v err=%v, want false,nil", c.name, retired, err)
+		}
+		if entry.SkillID != forkID.String() {
+			t.Errorf("%s: SkillID changed to %q", c.name, entry.SkillID)
+		}
+	}
+
+	already := &SyncEntry{SkillID: upstreamID.String()}
+	retired, _ := retireVisibleForkOnTakeUpstream(already, upstreamID.String(), nil, noDelete)
+	if retired {
+		t.Error("already-adopted marker must be a no-op")
+	}
+
+	anonymous := &SyncEntry{SkillID: forkID.String()}
+	retired, _ = retireVisibleForkOnTakeUpstream(anonymous, upstreamID.String(),
+		func(string) (*apiSkill, error) { return &apiSkill{Id: forkID, ForkedFrom: &upstreamID}, nil }, nil)
+	if retired || anonymous.SkillID != forkID.String() {
+		t.Error("nil delete (anonymous caller) must be a no-op")
+	}
+}
+
+// A failed delete must NOT repoint the marker: an orphaned visible fork
+// row would re-enter the listing unmatched and resurrect locally as a
+// name collision. The error propagates so add --force can warn.
+func TestRetireVisibleForkDeleteFailureKeepsIdentity(t *testing.T) {
+	forkID := testUUID("fork-1")
+	upstreamID := testUUID("upstream-1")
+
+	entry := &SyncEntry{SkillID: forkID.String()}
+	lookup := func(id string) (*apiSkill, error) {
+		return &apiSkill{Id: forkID, ForkedFrom: &upstreamID, Backup: false}, nil
+	}
+	del := func(id string) error { return fmt.Errorf("API error (500): boom") }
+
+	retired, err := retireVisibleForkOnTakeUpstream(entry, upstreamID.String(), lookup, del)
+	if retired || err == nil {
+		t.Fatalf("retired=%v err=%v, want false and the delete error", retired, err)
+	}
+	if entry.SkillID != forkID.String() {
+		t.Errorf("failed delete must not repoint; SkillID = %q", entry.SkillID)
+	}
+}
+
+// A visible same-slug fork must keep its identity through
+// adoptUpstreamIdentity itself — retirement (delete + repoint) is
+// retireVisibleForkOnTakeUpstream's job, gated on a successful server
+// delete; adopt stays pure.
 func TestAdoptUpstreamIdentityKeepsVisibleFork(t *testing.T) {
 	forkID := testUUID("fork-1")
 	upstreamID := testUUID("upstream-1")

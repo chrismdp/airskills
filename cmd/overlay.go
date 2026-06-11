@@ -69,9 +69,11 @@ func retireSuggestion(client *apiClient, id string) bool {
 // `add owner/slug --force` finds it tracking something else. The stale id
 // is usually the hidden backup fork from the pre-overlay fork-on-push era
 // — confirmed via lookup, it moves into entry.Backup; a gone row (404/410)
-// is simply dropped. The caller's own VISIBLE fork keeps its identity
-// (--force only takes upstream's bytes there), as does anything a
-// transient lookup failure leaves unconfirmed.
+// is simply dropped. The caller's own VISIBLE fork keeps its identity here
+// — its retirement (server delete + repoint) is
+// retireVisibleForkOnTakeUpstream's job, which runs first and is gated on
+// the delete succeeding — as does anything a transient lookup failure
+// leaves unconfirmed.
 func adoptUpstreamIdentity(entry *SyncEntry, upstreamID string, lookup func(id string) (*apiSkill, error)) {
 	if entry == nil || upstreamID == "" || entry.SkillID == upstreamID {
 		return
@@ -94,6 +96,45 @@ func adoptUpstreamIdentity(entry *SyncEntry, upstreamID string, lookup func(id s
 		entry.Backup = &backupRef{SkillID: entry.SkillID, ContentHash: strDeref(old.ContentHash)}
 		entry.SkillID = upstreamID
 	}
+}
+
+// retireVisibleForkOnTakeUpstream implements take-upstream for the
+// visible-fork shape (marker tracks the caller's own fork of the
+// upstream): soft-delete the fork row, then repoint the marker at the
+// upstream. Taking the upstream wholesale means the fork's job is done —
+// the same retirement rule backup forks already follow. Without this,
+// add --force self-reverts: the marker keeps tracking the fork, whose
+// server row still holds the old bytes, and the next pull fast-forwards
+// them back over the upstream's
+// (doc/changes/cli-visible-fork-take-upstream-gap.md).
+//
+// The repoint is gated on the delete succeeding: repointing while the
+// fork row survives would leave it in the listing unmatched by any
+// marker, and the next pull would resurrect it locally as a name
+// collision. On delete failure the marker is untouched and the error is
+// returned so the caller can warn. Consumers pinning the fork see the
+// standard "upstream archived" event, same as a transfer.
+func retireVisibleForkOnTakeUpstream(entry *SyncEntry, upstreamID string, lookup func(id string) (*apiSkill, error), deleteSkill func(id string) error) (bool, error) {
+	if entry == nil || upstreamID == "" || entry.SkillID == "" || entry.SkillID == upstreamID {
+		return false, nil
+	}
+	if lookup == nil || deleteSkill == nil {
+		return false, nil
+	}
+	old, err := lookup(entry.SkillID)
+	if err != nil || old == nil {
+		// Gone and transient rows are adoptUpstreamIdentity's department.
+		return false, nil
+	}
+	if old.Backup || old.ForkedFrom == nil || old.ForkedFrom.String() != upstreamID {
+		return false, nil
+	}
+	if err := deleteSkill(entry.SkillID); err != nil {
+		return false, err
+	}
+	entry.SkillID = upstreamID
+	entry.Backup = nil
+	return true, nil
 }
 
 // healOverlayMarkers flips markers that track an owned skill whose server

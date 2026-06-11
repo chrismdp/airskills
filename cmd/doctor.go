@@ -206,12 +206,11 @@ func renderSyncStateReport(w io.Writer, states []SkillStateInfo) {
 					toVer = s.Remote.Version
 				}
 				versionTransition := versionMoved(fromVer, toVer)
-				dropCmd := "'pull --force'"
-				if s.Overlay {
-					// Overlays aren't pull conflicts; taking the upstream's
-					// bytes goes through add --force.
-					dropCmd = fmt.Sprintf("'airskills add %s/%s --force'", source.Owner, source.Slug)
-				}
+				// Taking the upstream's bytes goes through add --force for
+				// every sourced shape: overlays aren't pull conflicts, and a
+				// visible fork is retired by add --force (runPullForce
+				// rejects both — "not in conflict").
+				dropCmd := fmt.Sprintf("'airskills add %s/%s --force'", source.Owner, source.Slug)
 				fmt.Fprintf(w, "  %s %s — customised copy of %s/%s. Original%s since you resolved. Review and 'airskills resolve %s', or %s to drop your customised copy.\n",
 					bang, s.Name, source.Owner, source.Slug, versionTransition, s.Name, dropCmd)
 			case s.Overlay && s.OverlayDiverged && !s.LocalDirty:

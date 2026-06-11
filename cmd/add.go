@@ -230,11 +230,16 @@ local copy is backed up to ~/.airskills/undo/<timestamp>/ first.`,
 				// status/list misreport the skill as "untracked" forever
 				// (field report 2026-06-11).
 				var lookup func(string) (*apiSkill, error)
+				var deleteFn func(string) error
 				if authHeader != "" {
 					if apiCl, cerr := newAPIClientAuto(); cerr == nil {
 						lookup = apiCl.getSkill
+						deleteFn = func(id string) error {
+							return apiCl.del(fmt.Sprintf("/api/v1/skills/%s", id))
+						}
 					}
 				}
+				forkRetired, retireErr := retireVisibleForkOnTakeUpstream(entry, result.ID, lookup, deleteFn)
 				adoptUpstreamIdentity(entry, result.ID, lookup)
 				seedCopyLedgerFromDisk(entry, dirName)
 				syncState.Skills[dirName] = entry
@@ -242,6 +247,15 @@ local copy is backed up to ~/.airskills/undo/<timestamp>/ first.`,
 
 				fmt.Printf("\n  %s %s/%s overwritten with upstream's current bytes (%d agents)\n",
 					green("✓"), ownerSlug, result.Slug, len(installed))
+				if forkRetired {
+					fmt.Printf("  %s your fork retired (soft-deleted server-side) — now tracking %s/%s directly\n",
+						green("✓"), ownerSlug, result.Slug)
+				}
+				if retireErr != nil {
+					fmt.Fprintf(os.Stderr, "  %s could not retire your fork: %v\n", yellow("!"), retireErr)
+					fmt.Fprintf(os.Stderr, "    Your fork still holds its old bytes — the next sync may restore them.\n")
+					fmt.Fprintf(os.Stderr, "    Re-run 'airskills add %s/%s --force' to retry.\n", ownerSlug, result.Slug)
+				}
 				if undoPath != "" {
 					fmt.Printf("  Previous local files backed up to %s/\n", undoPath)
 				}
