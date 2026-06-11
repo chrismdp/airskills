@@ -263,7 +263,7 @@
           },
           "backup": {
             "type": "boolean",
-            "description": "True on hidden overlay-backup forks (the CLI's transparent copy of a member's edits to a non-owned skill — plumbing, never rendered as a row). False on deliberate forks and everything else."
+            "description": "True on hidden overlay-backup forks (the CLI's transparent copy of a member's edits to a non-owned skill — plumbing, never rendered as a row). False on legacy visible forks (no longer creatable) and everything else."
           },
           "moved_to": {
             "type": [
@@ -2065,7 +2065,7 @@
                   },
                   "backup": {
                     "type": "boolean",
-                    "description": "Marks a hidden overlay-backup fork (the CLI's transparent copy of a member's local edits to a non-owned skill). Requires forked_from. Deliberate forks (airskills fork) omit it."
+                    "description": "Marks a hidden overlay-backup fork (the CLI's transparent copy of a member's local edits to a non-owned skill). Requires forked_from, and is the ONLY creatable fork shape: forked_from without backup is rejected (visible forks are legacy-only)."
                   },
                   "github_url": {
                     "type": "string",

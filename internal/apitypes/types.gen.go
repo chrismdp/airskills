@@ -1149,7 +1149,7 @@ type ResolvedBundleResponseVisibility string
 type ResolvedSkillResponse struct {
 	ArchiveSize *int `json:"archive_size"`
 
-	// Backup True on hidden overlay-backup forks (the CLI's transparent copy of a member's edits to a non-owned skill — plumbing, never rendered as a row). False on deliberate forks and everything else.
+	// Backup True on hidden overlay-backup forks (the CLI's transparent copy of a member's edits to a non-owned skill — plumbing, never rendered as a row). False on legacy visible forks (no longer creatable) and everything else.
 	Backup bool `json:"backup"`
 
 	// ContentHash Merkle hash of the skill's file set. null until first push.
@@ -1224,7 +1224,7 @@ type ShareRevokedResponseStatus string
 type Skill struct {
 	ArchiveSize *int `json:"archive_size"`
 
-	// Backup True on hidden overlay-backup forks (the CLI's transparent copy of a member's edits to a non-owned skill — plumbing, never rendered as a row). False on deliberate forks and everything else.
+	// Backup True on hidden overlay-backup forks (the CLI's transparent copy of a member's edits to a non-owned skill — plumbing, never rendered as a row). False on legacy visible forks (no longer creatable) and everything else.
 	Backup bool `json:"backup"`
 
 	// ContentHash Merkle hash of the skill's file set. null until first push.
@@ -1319,7 +1319,7 @@ type SkillDependencyEdgeVisibility string
 type SkillDetail struct {
 	ArchiveSize *int `json:"archive_size"`
 
-	// Backup True on hidden overlay-backup forks (the CLI's transparent copy of a member's edits to a non-owned skill — plumbing, never rendered as a row). False on deliberate forks and everything else.
+	// Backup True on hidden overlay-backup forks (the CLI's transparent copy of a member's edits to a non-owned skill — plumbing, never rendered as a row). False on legacy visible forks (no longer creatable) and everything else.
 	Backup bool `json:"backup"`
 
 	// ContentHash Merkle hash of the skill's file set. null until first push.
@@ -1549,7 +1549,7 @@ type TokenPair struct {
 type UpdateSkillResponse struct {
 	ArchiveSize *int `json:"archive_size"`
 
-	// Backup True on hidden overlay-backup forks (the CLI's transparent copy of a member's edits to a non-owned skill — plumbing, never rendered as a row). False on deliberate forks and everything else.
+	// Backup True on hidden overlay-backup forks (the CLI's transparent copy of a member's edits to a non-owned skill — plumbing, never rendered as a row). False on legacy visible forks (no longer creatable) and everything else.
 	Backup bool `json:"backup"`
 
 	// ContentHash Merkle hash of the skill's file set. null until first push.
@@ -1710,7 +1710,7 @@ type GetApiV1SkillsParamsDeleted string
 
 // PostApiV1SkillsJSONBody defines parameters for PostApiV1Skills.
 type PostApiV1SkillsJSONBody struct {
-	// Backup Marks a hidden overlay-backup fork (the CLI's transparent copy of a member's local edits to a non-owned skill). Requires forked_from. Deliberate forks (airskills fork) omit it.
+	// Backup Marks a hidden overlay-backup fork (the CLI's transparent copy of a member's local edits to a non-owned skill). Requires forked_from, and is the ONLY creatable fork shape: forked_from without backup is rejected (visible forks are legacy-only).
 	Backup      *bool                              `json:"backup,omitempty"`
 	Content     *string                            `json:"content,omitempty"`
 	Description *string                            `json:"description,omitempty"`

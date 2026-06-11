@@ -381,7 +381,8 @@ local copy is backed up to ~/.airskills/undo/<timestamp>/ first.`,
 		// One skill, not two: `add` tracks the UPSTREAM id directly (the
 		// overlay model). No eager fork — a hidden backup fork appears only
 		// when push first finds divergence the caller can't write upstream.
-		// The only eager-fork path left is the explicit `airskills fork`.
+		// There is no deliberate fork path: forks are emergent only
+		// (doc/changes/cli-remove-explicit-fork-verb.md).
 		if token != nil && time.Now().Unix() < token.ExpiresAt {
 			entry.SkillID = result.ID
 			entry.ContentHash = upstreamHash

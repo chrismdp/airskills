@@ -829,12 +829,12 @@ config).`,
 						lines[i].pct = 0.4
 						renderProgress(lines)
 
-						var forkedFrom string
-						if s.marker != nil && s.marker.Source != nil {
-							forkedFrom = s.marker.Source.ID
-						}
-
-						skill, err := client.createSkill(s.name, "", []string{"claude-code"}, forkedFrom, createOrgID)
+						// Never pass lineage here: forks are emergent only, and the
+						// server rejects forked_from without backup: true. A sourced
+						// marker whose server row is gone creates a plain personal
+						// skill; the overlay backup path (createBackupFork) is the
+						// only lineage-creating caller.
+						skill, err := client.createSkill(s.name, "", []string{"claude-code"}, "", createOrgID)
 						if err != nil {
 							// Migration-047 effective-set collision: surface the
 							// conflicting source clearly instead of "failed".
