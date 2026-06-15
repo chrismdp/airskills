@@ -154,10 +154,16 @@ when a real skill of the same name is installed.`,
 					}
 				}
 				// Stop the subscription so the skill stops arriving on the
-				// caller's other machines. Idempotent (204 even if there was no
-				// row — e.g. added anonymously and never synced while logged in).
-				if err := client.unsubscribe(entry.SkillID); err != nil {
-					fmt.Fprintf(os.Stderr, "  %s couldn't unsubscribe %q — it may reinstall on another machine's next sync (%v)\n", yellow("!"), name, err)
+				// caller's other machines — but ONLY for a PERSONAL subscription
+				// (a non-org skill you `add`ed). An org overlay arrived via the
+				// org channel and never had a subscription row, so calling
+				// unsubscribe for it is a pointless no-op against the org's skill
+				// id. Use the upstream id (the marker's SkillID is empty for a
+				// still-anonymous add). Idempotent server-side.
+				if isPersonalSubscription(entry) {
+					if err := client.unsubscribe(sourceUpstreamID(entry.Source)); err != nil {
+						fmt.Fprintf(os.Stderr, "  %s couldn't unsubscribe %q — it may reinstall on another machine's next sync (%v)\n", yellow("!"), name, err)
+					}
 				}
 			}
 		} else if tracked && entry.SkillID != "" && !rmKeepRemote {

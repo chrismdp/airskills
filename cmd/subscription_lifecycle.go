@@ -43,6 +43,17 @@ func isPersonalSubscriptionMarker(entry *SyncEntry) bool {
 		!entry.Deleted && entry.MovedTo == ""
 }
 
+// isPersonalSubscription reports whether a sourced overlay is a PERSONAL
+// subscription — a non-org skill the caller `add`ed. Broader than
+// isPersonalSubscriptionMarker: it does NOT require Backup==nil (an EDITED
+// subscription is still a subscription) and does NOT require a SkillID (an
+// anon-added one has none yet). Used by `rm` to decide whether to unsubscribe —
+// an org overlay arrived via the org channel and has no subscription row to drop.
+func isPersonalSubscription(entry *SyncEntry) bool {
+	return entry != nil && entry.Source != nil &&
+		entry.OwnerKind != "org" && entry.Source.SkillsetSlug == ""
+}
+
 // subscriptionOwnerLabel is the upstream owner shown as "added from <owner>"
 // for a subscription. Falls back when the owner username isn't recorded (a
 // pre-b0 marker, or a fresh device that hasn't seen the listing's owner_username
@@ -62,8 +73,15 @@ const (
 )
 
 type subDisposition struct {
-	kind        int
-	successorID string
+	kind int
+	// Successor fields, set only for subUpstreamMoved. Taken from the resolve
+	// moved_to response (present ONLY when the caller can read the successor —
+	// an unreadable move returns a bare 410, classified Gone→promote). This is
+	// how re-point learns the new owner: getSkill can't, it omits owner_username.
+	successorID    string
+	successorOwner string // new owner — username (user) or org slug (org)
+	successorSlug  string // new skill slug
+	successorKind  string // "user" | "org"
 }
 
 // classifySubscriptionUpstream resolves a subscription's upstream and classifies
@@ -83,21 +101,37 @@ func classifySubscriptionUpstream(client *apiClient, source *skillSource, tracke
 		var r struct {
 			ID string `json:"id"`
 		}
-		if json.Unmarshal(body, &r) == nil && r.ID == trackedID {
+		if err := json.Unmarshal(body, &r); err != nil || r.ID == "" {
+			// A 200 we can't parse (a proxy/CDN HTML page, a truncated body) is
+			// NOT proof the skill is gone — treat it as transient, never promote.
+			return subDisposition{kind: subUpstreamTransient}
+		}
+		if r.ID == trackedID {
 			return subDisposition{kind: subUpstreamReadable}
 		}
-		// The slug now resolves to a DIFFERENT skill (the original was deleted
-		// and the name re-used) — the tracked upstream is gone.
+		// Parsed cleanly but the slug now resolves to a DIFFERENT skill (the
+		// original was deleted and the name re-used) — the tracked upstream is gone.
 		return subDisposition{kind: subUpstreamGone}
 	case status == 410:
 		var r struct {
 			MovedTo *struct {
-				SkillID string `json:"skill_id"`
+				SkillID   string `json:"skill_id"`
+				Slug      string `json:"slug"`       // new owner (username or org slug)
+				SkillSlug string `json:"skill_slug"` // new skill slug
+				Kind      string `json:"kind"`       // "user" | "org"
 			} `json:"moved_to"`
 		}
 		if json.Unmarshal(body, &r) == nil && r.MovedTo != nil && r.MovedTo.SkillID != "" {
-			return subDisposition{kind: subUpstreamMoved, successorID: r.MovedTo.SkillID}
+			return subDisposition{
+				kind:           subUpstreamMoved,
+				successorID:    r.MovedTo.SkillID,
+				successorOwner: r.MovedTo.Slug,
+				successorSlug:  r.MovedTo.SkillSlug,
+				successorKind:  r.MovedTo.Kind,
+			}
 		}
+		// Bare 410 (no readable successor): the move went somewhere the caller
+		// can't see — orphan it like any other gone-away skill.
 		return subDisposition{kind: subUpstreamGone}
 	case status == 404 || status == 401:
 		// Deleted or made private — RLS gives the same answer, not distinguished.
@@ -123,28 +157,61 @@ func reconcileSubscriptions(client *apiClient, syncState *SyncState, inListing m
 	}
 	for _, name := range names {
 		entry := syncState.Skills[name]
-		if !isPersonalSubscriptionMarker(entry) {
+		if !isReconcilableSubscription(entry) {
 			continue
 		}
-		if inListing[entry.SkillID] {
-			continue // already a live subscription (or otherwise reachable) — nothing to do
+		// subID is the upstream this subscription targets. It is the marker's
+		// SkillID for an established overlay, and Source.UpstreamSkillID for a
+		// marker added while anonymous (which has no SkillID yet — that's the
+		// "registers on first login" case).
+		subID := sourceUpstreamID(entry.Source)
+		if inListing[subID] {
+			// Already a live subscription (or otherwise reachable). Adopt the id
+			// onto an anon marker so future syncs track it as an established
+			// overlay.
+			if entry.SkillID == "" {
+				entry.SkillID = subID
+			}
+			continue
 		}
-		switch d := classifySubscriptionUpstream(client, entry.Source, entry.SkillID); d.kind {
+		switch d := classifySubscriptionUpstream(client, entry.Source, subID); d.kind {
 		case subUpstreamTransient:
 			// Not definitive — leave it; the next sync retries.
 		case subUpstreamReadable:
 			// Backfill: register the subscription. A 403 means it became
 			// unreadable between resolve and subscribe (a private-flip race) →
-			// promote rather than retry a doomed subscribe.
-			if err := client.subscribe(entry.SkillID); err != nil && isForbiddenError(err) {
+			// promote rather than retry a doomed subscribe. A transient error is
+			// surfaced (not swallowed) so the user knows it'll retry.
+			switch err := client.subscribe(subID); {
+			case err == nil:
+				entry.SkillID = subID // anon marker is now an established overlay
+			case isForbiddenError(err):
 				promoteSubscription(client, syncState, name, entry, localSkills, owners)
+			default:
+				fmt.Fprintf(os.Stderr, "  %s couldn't register a subscription for %q (%v) — will retry next sync\n",
+					yellow("!"), name, err)
 			}
 		case subUpstreamMoved:
-			repointSubscription(client, syncState, name, entry, d.successorID, localSkills, owners)
+			repointSubscription(client, syncState, name, entry, d, localSkills, owners)
 		case subUpstreamGone:
 			promoteSubscription(client, syncState, name, entry, localSkills, owners)
 		}
 	}
+}
+
+// isReconcilableSubscription is the reconcile-pass predicate. It is broader than
+// the presentation predicate isPersonalSubscriptionMarker: it ALSO matches a
+// marker added while ANONYMOUS, which has no SkillID yet (only
+// Source.UpstreamSkillID). Backfill needs that case — it's exactly the "added
+// while logged out, then logged in" path that registers the subscription.
+func isReconcilableSubscription(entry *SyncEntry) bool {
+	if entry == nil || entry.Source == nil || entry.Backup != nil ||
+		entry.OwnerKind == "org" || entry.Source.SkillsetSlug != "" ||
+		entry.Deleted || entry.MovedTo != "" {
+		return false
+	}
+	subID := sourceUpstreamID(entry.Source)
+	return subID != "" && (entry.SkillID == "" || entry.SkillID == subID)
 }
 
 // promoteSubscription turns a vanished subscription into an owned skill, keeping
@@ -153,6 +220,10 @@ func reconcileSubscriptions(client *apiClient, syncState *SyncState, inListing m
 // owned skill (existing flipMarkerToPersonal — shared with the backup-promote
 // arm so the two cannot drift).
 func promoteSubscription(client *apiClient, syncState *SyncState, name string, entry *SyncEntry, localSkills map[string]string, owners *ownerResolver) {
+	// subID is the source skill id the promote RPC keys provenance/idempotency
+	// on — the marker's SkillID for an established overlay, Source.UpstreamSkillID
+	// for a marker added while anonymous (SkillID still empty).
+	subID := sourceUpstreamID(entry.Source)
 	upstream := entry.Source.Owner + "/" + entry.Source.Slug
 	dir := localSkills[name]
 	files := map[string][]byte{}
@@ -162,7 +233,7 @@ func promoteSubscription(client *apiClient, syncState *SyncState, name string, e
 	if len(files) == 0 {
 		// Nothing on disk to promote — the upstream is gone and we have no
 		// bytes. Drop the dead subscription row so it stops being retried.
-		_ = client.unsubscribe(entry.SkillID)
+		_ = client.unsubscribe(subID)
 		return
 	}
 	archive, err := createTarGz(dir)
@@ -170,7 +241,7 @@ func promoteSubscription(client *apiClient, syncState *SyncState, name string, e
 		return // can't build the archive — retry next sync
 	}
 	hash := computeMerkleHash(files)
-	skill, _, err := client.promote(entry.SkillID, archive, name, name, entry.Version, hash)
+	skill, _, err := client.promote(subID, archive, name, name, entry.Version, hash)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "  %s %s: upstream %s is gone; saving your copy as your own skill failed (%v) — will retry next sync\n",
 			yellow("!"), name, upstream, err)
@@ -181,40 +252,41 @@ func promoteSubscription(client *apiClient, syncState *SyncState, name string, e
 	fmt.Printf("  %s %s: %s is no longer available — saved as your own skill\n", yellow("!"), name, upstream)
 }
 
-// repointSubscription follows a transferred upstream to its successor: subscribe
-// to the successor (readability-guarded server-side), drop the old row, and
-// retrack the marker. There is no atomic UPDATE endpoint, so this is
-// subscribe-then-unsubscribe — eventual-consistent (a failed second call is
-// cleared next sync). If the successor is unreadable the subscribe 403s → fall
-// through to promote.
-func repointSubscription(client *apiClient, syncState *SyncState, name string, entry *SyncEntry, successorID string, localSkills map[string]string, owners *ownerResolver) {
-	if err := client.subscribe(successorID); err != nil {
+// repointSubscription follows a transferred upstream to a successor the caller
+// can READ: subscribe to it, retrack the marker at its new home, drop the old
+// row. There is no atomic UPDATE endpoint, so this is subscribe-then-unsubscribe
+// — eventual-consistent (a failed second call is cleared next sync).
+//
+// "As if you'd added it from the new owner": the new owner/slug come from the
+// resolve moved_to response (d), NOT getSkill — getSkill omits owner_username,
+// which would blank Source.Owner and leave a marker that can never be re-resolved
+// if the successor itself later vanishes. If the caller has LOST read access to
+// the successor, subscribe 403s and we orphan it (promote) like any gone-away
+// skill — matching the bare-410 path, which never reaches here.
+func repointSubscription(client *apiClient, syncState *SyncState, name string, entry *SyncEntry, d subDisposition, localSkills map[string]string, owners *ownerResolver) {
+	if err := client.subscribe(d.successorID); err != nil {
 		if isForbiddenError(err) {
+			// Lost read access to the successor between resolve and subscribe —
+			// orphan it, exactly like a gone-away skill.
 			promoteSubscription(client, syncState, name, entry, localSkills, owners)
 		}
 		return // transient → retry next sync
 	}
-	oldID := entry.SkillID
-	successor, gerr := client.getSkill(successorID)
-	if gerr != nil || successor == nil {
-		// Subscribed, but couldn't read the successor's metadata to retrack the
-		// marker now. Leave the marker; next sync sees the successor in the
-		// listing and links it. Still drop the dead old row.
-		_ = client.unsubscribe(oldID)
-		return
+	oldID := sourceUpstreamID(entry.Source)
+	entry.SkillID = d.successorID
+	entry.Source.Owner = d.successorOwner
+	entry.Source.Slug = d.successorSlug
+	entry.Source.ID = d.successorID
+	entry.Source.UpstreamSkillID = d.successorID
+	if d.successorKind != "" {
+		entry.OwnerKind = d.successorKind
 	}
-	entry.SkillID = successorID
-	if src := owners.sourceFor(successor); src != nil {
-		entry.Source = src
+	if d.successorOwner != "" {
+		entry.OwnerSlug = d.successorOwner
 	}
-	if kind, slug := owners.resolve(successor); kind != "" {
-		entry.OwnerKind = kind
-		entry.OwnerSlug = slug
-	}
-	entry.ContentHash = strDeref(successor.ContentHash)
-	entry.Version = successor.Version
 	seedCopyLedgerFromDisk(entry, name)
 	syncState.Skills[name] = entry
 	_ = client.unsubscribe(oldID)
-	fmt.Printf("  %s %s: upstream was transferred — now following its new home\n", green("✓"), name)
+	fmt.Printf("  %s %s: upstream was transferred — now following %s/%s\n",
+		green("✓"), name, d.successorOwner, d.successorSlug)
 }

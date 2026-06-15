@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -910,6 +911,12 @@ func (c *apiClient) subscribe(skillID string) error {
 		return err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusForbidden {
+		// Private / deleted / never-existed — not distinguished. Carried as a
+		// typed sentinel (not a substring of the message) so callers classify
+		// on the actual status, never on body text.
+		return errSubscribeForbidden
+	}
 	if resp.StatusCode >= 400 {
 		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("API error (%d): %s", resp.StatusCode, strings.TrimSpace(string(body)))
@@ -970,12 +977,17 @@ func (c *apiClient) promote(sourceSkillID string, archive []byte, slug, name, ve
 	return &skill, resp.StatusCode, nil
 }
 
-// isForbiddenError reports whether an API error carries HTTP 403 — the subscribe
-// readability guard's answer for a skill the caller can no longer read (private
-// / deleted / never-existed, deliberately not distinguished). Distinct from a
-// transport error, which must NOT be treated as definitive.
+// errSubscribeForbidden is subscribe()'s typed answer for HTTP 403 — the
+// readability guard's verdict for a skill the caller can no longer read
+// (private / deleted / never-existed, not distinguished).
+var errSubscribeForbidden = errors.New("subscribe: skill not readable (403)")
+
+// isForbiddenError reports whether a subscribe error is the definitive 403.
+// Matched on the typed sentinel, NEVER on a substring of the message — a 5xx
+// whose body happens to contain "(403)" must not be read as forbidden (the
+// false-promote the substring form risked).
 func isForbiddenError(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "(403)")
+	return errors.Is(err, errSubscribeForbidden)
 }
 
 // slugify mirrors the platform's lib/api-utils.ts slugify so the CLI

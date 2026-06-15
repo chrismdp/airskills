@@ -1,9 +1,10 @@
 package cmd
 
 import (
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 )
 
@@ -48,7 +49,24 @@ func TestSubscribeForbidden(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected an error on 403")
 	}
-	if !strings.Contains(err.Error(), "(403)") {
-		t.Errorf("expected 403 in error, got %v", err)
+	// #3: classified on a typed sentinel, not a substring of the message.
+	if !errors.Is(err, errSubscribeForbidden) {
+		t.Errorf("403 should return the errSubscribeForbidden sentinel, got %v", err)
+	}
+	if !isForbiddenError(err) {
+		t.Errorf("isForbiddenError should be true for a 403")
+	}
+}
+
+// #3 — TestIsForbiddenErrorNotSubstring: a non-403 error whose message merely
+// CONTAINS "(403)" must NOT be read as forbidden (the false-promote the old
+// substring form risked on a 5xx body).
+func TestIsForbiddenErrorNotSubstring(t *testing.T) {
+	err := fmt.Errorf("API error (500): upstream proxy mentioned (403) in its log")
+	if isForbiddenError(err) {
+		t.Errorf("a 500 error containing the text '(403)' must not match the forbidden sentinel")
+	}
+	if isForbiddenError(nil) {
+		t.Errorf("nil is not forbidden")
 	}
 }
