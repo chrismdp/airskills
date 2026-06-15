@@ -126,6 +126,10 @@ func listStateLabel(info SkillStateInfo) string {
 			return "local changes"
 		case info.LocalDirty:
 			return "modified"
+		case isPersonalSubscriptionMarker(info.Marker):
+			// A clean subscription — added from someone else, not owned. Show
+			// the upstream owner so it never reads as one of your own skills.
+			return "added from " + subscriptionOwnerLabel(info.Marker)
 		default:
 			return "synced"
 		}

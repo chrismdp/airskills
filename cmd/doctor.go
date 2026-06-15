@@ -189,6 +189,7 @@ func renderSyncStateReport(w io.Writer, states []SkillStateInfo) {
 
 	bang := red("!")
 	syncedCount := 0
+	subscribedCount := 0
 	for _, s := range sorted {
 		// Tracked skills: the divergence booleans drive the line, not a flat
 		// state value. A clean, non-moved tracked skill collapses into the
@@ -232,6 +233,10 @@ func renderSyncStateReport(w io.Writer, states []SkillStateInfo) {
 			case s.LocalDirty:
 				fmt.Fprintf(w, "  %s %s — local has unpublished changes. Run 'airskills push' to publish.\n",
 					bang, s.Name)
+			case isPersonalSubscriptionMarker(s.Marker):
+				// A clean subscription — healthy, but counted apart from your
+				// own skills so it never reads as owned.
+				subscribedCount++
 			default:
 				syncedCount++
 			}
@@ -251,6 +256,9 @@ func renderSyncStateReport(w io.Writer, states []SkillStateInfo) {
 			fmt.Fprintf(w, "  %s %s — on server, not installed here ('airskills sync' or 'airskills add').\n",
 				bang, s.Name)
 		}
+	}
+	if subscribedCount > 0 {
+		fmt.Fprintf(w, "  %s %d added from others (subscriptions — they follow you across machines).\n", green("✓"), subscribedCount)
 	}
 	if syncedCount > 0 {
 		fmt.Fprintf(w, "  %s %d synced.\n", green("✓"), syncedCount)

@@ -29,6 +29,14 @@ func TestListStateLabel(t *testing.T) {
 		{"adoptable", SkillStateInfo{State: StateAdoptable}, "untracked"},
 		{"conflict", SkillStateInfo{State: StateConflict}, "untracked"},
 		{"available", SkillStateInfo{State: StateAvailable}, "—"},
+		// A clean subscription shows the upstream owner, never plain "synced" —
+		// so it never reads as one of your own skills.
+		{"clean subscription", SkillStateInfo{State: StateTracked, Marker: &SyncEntry{
+			SkillID: "up-1", OwnerKind: "user",
+			Source: &skillSource{Owner: "alice", Slug: "retro", ID: "up-1", UpstreamSkillID: "up-1"},
+		}}, "added from alice"},
+		// An owned skill stays "synced".
+		{"owned synced", SkillStateInfo{State: StateTracked, Marker: &SyncEntry{SkillID: "mine"}}, "synced"},
 	}
 	for _, c := range cases {
 		got := listStateLabel(c.info)

@@ -43,6 +43,17 @@ func isPersonalSubscriptionMarker(entry *SyncEntry) bool {
 		!entry.Deleted && entry.MovedTo == ""
 }
 
+// subscriptionOwnerLabel is the upstream owner shown as "added from <owner>"
+// for a subscription. Falls back when the owner username isn't recorded (a
+// pre-b0 marker, or a fresh device that hasn't seen the listing's owner_username
+// yet).
+func subscriptionOwnerLabel(m *SyncEntry) string {
+	if m != nil && m.Source != nil && m.Source.Owner != "" {
+		return m.Source.Owner
+	}
+	return "another user"
+}
+
 const (
 	subUpstreamReadable  = iota // resolve 200, same skill → backfill subscribe
 	subUpstreamMoved            // resolve 410 + readable successor → re-point
