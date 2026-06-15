@@ -924,6 +924,60 @@ func (c *apiClient) unsubscribe(skillID string) error {
 	return c.del(fmt.Sprintf("/api/v1/skills/%s/subscribe", skillID))
 }
 
+// promote turns the caller's vanished subscription into an owned skill in ONE
+// transactional server call: it uploads the local files (the caller's edits, if
+// any) and the server creates a visible owned skill — recording sourceSkillID
+// as provenance — AND deletes the subscription row, with no two-row window.
+// Cross-machine idempotent on (owner, source): a second machine converges on the
+// one owned skill (200); the first returns 201; a slug clash with an UNRELATED
+// owned skill is 409. Mirrors the archive PUT's tar.gz-body + metadata-headers
+// convention; the promoted copy is private. Returns the owned skill + status.
+func (c *apiClient) promote(sourceSkillID string, archive []byte, slug, name, version, contentHash string) (*apiSkill, int, error) {
+	url := c.baseURL + fmt.Sprintf("/api/v1/skills/%s/promote", sourceSkillID)
+	req, err := http.NewRequest("POST", url, bytes.NewReader(archive))
+	if err != nil {
+		return nil, 0, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Content-Type", "application/gzip")
+	setStandardHeaders(req)
+	req.Header.Set("X-Slug", slug)
+	if name != "" {
+		req.Header.Set("X-Name", name)
+	}
+	if version != "" {
+		req.Header.Set("X-Version", version)
+	}
+	req.Header.Set("X-Visibility", "private")
+	if contentHash != "" {
+		req.Header.Set("X-Content-Hash", contentHash)
+	}
+
+	resp, err := doRequest(c.httpArchive, req)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, resp.StatusCode, err
+	}
+	var skill apiSkill
+	_ = json.Unmarshal(body, &skill)
+	if resp.StatusCode >= 400 {
+		return &skill, resp.StatusCode, fmt.Errorf("API error (%d): %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	return &skill, resp.StatusCode, nil
+}
+
+// isForbiddenError reports whether an API error carries HTTP 403 — the subscribe
+// readability guard's answer for a skill the caller can no longer read (private
+// / deleted / never-existed, deliberately not distinguished). Distinct from a
+// transport error, which must NOT be treated as definitive.
+func isForbiddenError(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "(403)")
+}
+
 // slugify mirrors the platform's lib/api-utils.ts slugify so the CLI
 // can predict which slug the server will produce from a given name.
 // Used to populate SkillConflictError.Slug when the server rejects.

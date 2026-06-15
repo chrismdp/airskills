@@ -201,14 +201,24 @@ func runPull(cmd *cobra.Command, args []string) error {
 	}
 	rememberSkillsetAfterSuccess(cfg, resolvedSlug)
 
+	// Snapshot the SERVER's effective-set membership BEFORE the probe loop and
+	// shadow filtering mutate remoteSkills. reconcileSubscriptions uses it to
+	// tell a live subscription (present in the set) from one needing backfill /
+	// promote / re-point (absent) — a probe-fetched, not-yet-subscribed marker
+	// must still count as ABSENT so backfill fires for it.
+	serverListingIDs := make(map[string]bool, len(remoteSkills))
+	for i := range remoteSkills {
+		serverListingIDs[remoteSkills[i].Id.String()] = true
+	}
+
 	owners := newOwnerResolver(client)
 
-	// Overlay upstreams that never appear in the caller's effective listing
-	// — user-owned skills installed via `add` track the OTHER user's skill
-	// id directly under the overlay model. Fetch them individually so the
-	// normal pull rules (fast-forward when clean, incoming when diverged)
-	// still apply. Cost: one GET per such skill, in line with the per-pull
-	// resolve the moved-source notices already pay.
+	// Transient fallback for overlay markers whose subscription hasn't landed
+	// yet (added anonymously and not yet reconciled, or an in-flight subscribe).
+	// Once subscribed, such a skill is in the effective listing and this loop
+	// skips it (listedIDs) — so the old per-pull probe tax is gone for the
+	// common case; reconcileSubscriptions (below) registers the subscription so
+	// the next sync needs no probe at all.
 	listedIDs := make(map[string]bool, len(remoteSkills))
 	for i := range remoteSkills {
 		listedIDs[remoteSkills[i].Id.String()] = true
@@ -293,6 +303,7 @@ func runPull(cmd *cobra.Command, args []string) error {
 			fmt.Println("\n--- Transferred upstreams ---")
 			printMovedSourceNotices(movedSourceNotices)
 		}
+		reconcileSubscriptions(client, syncState, serverListingIDs, localSkills, owners)
 		notifyResolvedSuggestions(client, syncState)
 		saveSyncState(syncState)
 		fmt.Printf("  %s all up to date\n", green("✓"))
@@ -604,6 +615,7 @@ func runPull(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	reconcileSubscriptions(client, syncState, serverListingIDs, localSkills, owners)
 	notifyResolvedSuggestions(client, syncState)
 
 	saveSyncState(syncState)
