@@ -155,7 +155,13 @@ func (r *ownerResolver) sourceFor(skill *apiSkill) *skillSource {
 			UpstreamVersion:     skill.Version,
 		}
 	}
+	// Another user's personal skill — a subscription. The effective listing
+	// (GET /api/v1/skills) now carries the upstream owner's username, so the
+	// marker can record it for "added from <owner>" and anon-pull resolution
+	// without a probe. Empty when absent (pre-b0 server, or getSkill which
+	// doesn't project it) — same as the old behaviour.
 	return &skillSource{
+		Owner:               strDeref(skill.OwnerUsername),
 		Slug:                skill.Slug,
 		ID:                  skill.Id.String(),
 		ContentHash:         strDeref(skill.ContentHash),

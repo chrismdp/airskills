@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/chrismdp/airskills/config"
 	"github.com/spf13/cobra"
 )
 
@@ -105,6 +106,8 @@ when a real skill of the same name is installed.`,
 			if isOverlay && !rmKeepRemote {
 				if entry.Backup != nil {
 					parts = append(parts, "your backup copy of this non-owned skill (the upstream is untouched)")
+				} else {
+					parts = append(parts, "your subscription (it stops arriving on your other machines; the upstream is untouched)")
 				}
 			} else if tracked && entry.SkillID != "" && !rmKeepRemote {
 				parts = append(parts, "remote skill")
@@ -124,19 +127,37 @@ when a real skill of the same name is installed.`,
 		// Delete on server first — if it fails, leave local intact so the user
 		// can retry without ending up in a half-deleted state.
 		if isOverlay && !rmKeepRemote {
-			if entry.Backup != nil || entry.SuggestionID != "" {
-				client, err := newAPIClientAuto()
-				if err != nil {
-					return fmt.Errorf("removing your backup copy requires login: %w", err)
+			// Overlay markers track a skill the caller does NOT own — never
+			// delete the upstream. Two caller-owned things live server-side:
+			// (a) the subscription row that makes this `add` follow them across
+			// machines, and (b) any hidden backup fork of their edits plus a
+			// pending suggestion. Clear both; the upstream is untouched.
+			needsBackupCleanup := entry.Backup != nil || entry.SuggestionID != ""
+			client, cerr := newAPIClientAuto()
+			if cerr != nil {
+				// A backup / suggestion can only exist for a logged-in user, so
+				// its cleanup genuinely needs login. A bare subscription added
+				// while anonymous has no server row to remove — skip quietly.
+				if needsBackupCleanup {
+					return fmt.Errorf("removing your backup copy requires login: %w", cerr)
 				}
-				if !retireSuggestion(client, entry.SuggestionID) {
-					return fmt.Errorf("could not withdraw the pending suggestion for %q — try again (deleting the backup first would break the owner's review)", name)
-				}
-				if entry.Backup != nil {
-					if err := client.del(fmt.Sprintf("/api/v1/skills/%s", entry.Backup.SkillID)); err != nil {
-						return fmt.Errorf("deleting your backup copy: %w", err)
+			} else {
+				if needsBackupCleanup {
+					if !retireSuggestion(client, entry.SuggestionID) {
+						return fmt.Errorf("could not withdraw the pending suggestion for %q — try again (deleting the backup first would break the owner's review)", name)
 					}
-					fmt.Printf("  %s your backup copy deleted (the upstream skill is untouched)\n", green("✓"))
+					if entry.Backup != nil {
+						if err := client.del(fmt.Sprintf("/api/v1/skills/%s", entry.Backup.SkillID)); err != nil {
+							return fmt.Errorf("deleting your backup copy: %w", err)
+						}
+						fmt.Printf("  %s your backup copy deleted (the upstream skill is untouched)\n", green("✓"))
+					}
+				}
+				// Stop the subscription so the skill stops arriving on the
+				// caller's other machines. Idempotent (204 even if there was no
+				// row — e.g. added anonymously and never synced while logged in).
+				if err := client.unsubscribe(entry.SkillID); err != nil {
+					fmt.Fprintf(os.Stderr, "  %s couldn't unsubscribe %q — it may reinstall on another machine's next sync (%v)\n", yellow("!"), name, err)
 				}
 			}
 		} else if tracked && entry.SkillID != "" && !rmKeepRemote {
@@ -165,6 +186,17 @@ when a real skill of the same name is installed.`,
 		delete(syncState.Skills, name)
 		if err := saveSyncState(syncState); err != nil {
 			return fmt.Errorf("saving sync state: %w", err)
+		}
+
+		// A kept subscription (overlay + --keep-remote) still lives in the
+		// caller's account, so it reinstalls here on the next sync. Warn, so
+		// --keep-remote isn't mistaken for "stop it everywhere". Only relevant
+		// when logged in — an anonymous overlay has no row to keep.
+		if isOverlay && rmKeepRemote {
+			if tok, _ := config.LoadToken(); tok != nil {
+				fmt.Printf("  %s kept your subscription — %q reinstalls on this machine's next sync. To stop it everywhere, run 'airskills rm %s' without --keep-remote.\n",
+					yellow("!"), name, name)
+			}
 		}
 
 		return nil

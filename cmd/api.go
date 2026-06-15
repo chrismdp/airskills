@@ -892,6 +892,38 @@ func (c *apiClient) promoteBackupSkill(id string) error {
 	return nil
 }
 
+// subscribe attaches an upstream skill to the caller's personal default
+// skillset (a subscription), so a logged-in `add` follows them across machines.
+// Idempotent server-side: 204 even if already subscribed. A 403 means the skill
+// isn't readable by the caller — private / deleted / never-existed, deliberately
+// not distinguished so subscribing can't probe a skill's existence; the caller
+// treats that as "upstream gone" rather than retrying forever.
+func (c *apiClient) subscribe(skillID string) error {
+	req, err := http.NewRequest("POST", c.baseURL+fmt.Sprintf("/api/v1/skills/%s/subscribe", skillID), nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	setStandardHeaders(req)
+	resp, err := doRequest(c.http, req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("API error (%d): %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	return nil
+}
+
+// unsubscribe removes the caller's subscription row for an upstream skill, so
+// it stops arriving on their other machines. Idempotent: 204 even if there was
+// no row (e.g. a skill added anonymously and never synced while logged in).
+func (c *apiClient) unsubscribe(skillID string) error {
+	return c.del(fmt.Sprintf("/api/v1/skills/%s/subscribe", skillID))
+}
+
 // slugify mirrors the platform's lib/api-utils.ts slugify so the CLI
 // can predict which slug the server will produce from a given name.
 // Used to populate SkillConflictError.Slug when the server rejects.

@@ -259,6 +259,7 @@ local copy is backed up to ~/.airskills/undo/<timestamp>/ first.`,
 				if undoPath != "" {
 					fmt.Printf("  Previous local files backed up to %s/\n", undoPath)
 				}
+				subscribeOnAdd(cfg, token, result.ID, username, slug)
 				telemetry.Capture("cli_add", map[string]interface{}{
 					"owner":         username,
 					"slug":          slug,
@@ -301,6 +302,7 @@ local copy is backed up to ~/.airskills/undo/<timestamp>/ first.`,
 				}
 				seedCopyLedgerFromDisk(syncState.Skills[dirName], dirName)
 				saveSyncState(syncState)
+				subscribeOnAdd(cfg, token, result.ID, username, slug)
 				fmt.Printf("\n  %s %s/%s %s\n", green("·"), ownerSlug, result.Slug, dim("linked (bytes match server, no download needed)"))
 				telemetry.Capture("cli_add", map[string]interface{}{
 					"owner":         username,
@@ -397,6 +399,8 @@ local copy is backed up to ~/.airskills/undo/<timestamp>/ first.`,
 		seedCopyLedgerFromDisk(entry, dirName)
 		syncState.Skills[dirName] = entry
 		saveSyncState(syncState)
+
+		subscribeOnAdd(cfg, token, result.ID, username, slug)
 
 		fmt.Println()
 		for _, line := range installed {
@@ -532,6 +536,27 @@ func countFiles(dir string) int {
 func addForceNextSteps() []agentNextStep {
 	return []agentNextStep{
 		{Cmd: "airskills status", Why: "confirm local matches upstream and nothing is pending"},
+	}
+}
+
+// subscribeOnAdd attaches a just-added upstream skill to the caller's account
+// (a subscription) so the `add` follows them onto their other machines. The
+// overlay marker `add` already wrote is unchanged — this is the only new
+// server-side effect. Logged-in only: an anonymous add has nothing to attach
+// to (today's behaviour). Non-fatal — the skill is already installed locally,
+// so a transient failure just prints a hint and the next sync's reconcile
+// retries. Subscribing to your OWN skill is a harmless server-side no-op
+// (auto_absorb already holds that row, so the insert is an idempotent 204),
+// so callers don't need to pre-check ownership. Covers `--as` (a local rename)
+// and `--force` (a conflict resolution) — both still track a non-owned upstream.
+func subscribeOnAdd(cfg *config.Config, token *config.TokenData, skillID, owner, slug string) {
+	if token == nil || time.Now().Unix() >= token.ExpiresAt {
+		return
+	}
+	client := newAPIClient(cfg, token)
+	if err := client.subscribe(skillID); err != nil {
+		fmt.Fprintf(os.Stderr, "  %s couldn't attach %s/%s to your account yet (%v) — your next 'airskills sync' will retry.\n",
+			yellow("!"), owner, slug, err)
 	}
 }
 

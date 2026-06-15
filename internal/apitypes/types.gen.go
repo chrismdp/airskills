@@ -318,6 +318,30 @@ func (e ResolvedBundleResponseVisibility) Valid() bool {
 	}
 }
 
+// Defines values for ResolvedSkillResponseSource.
+const (
+	ResolvedSkillResponseSourceLessThannil  ResolvedSkillResponseSource = "<nil>"
+	ResolvedSkillResponseSourceOrg          ResolvedSkillResponseSource = "org"
+	ResolvedSkillResponseSourceSubscription ResolvedSkillResponseSource = "subscription"
+	ResolvedSkillResponseSourceUser         ResolvedSkillResponseSource = "user"
+)
+
+// Valid indicates whether the value is a known member of the ResolvedSkillResponseSource enum.
+func (e ResolvedSkillResponseSource) Valid() bool {
+	switch e {
+	case ResolvedSkillResponseSourceLessThannil:
+		return true
+	case ResolvedSkillResponseSourceOrg:
+		return true
+	case ResolvedSkillResponseSourceSubscription:
+		return true
+	case ResolvedSkillResponseSourceUser:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ResolvedSkillResponseType.
 const (
 	ResolvedSkillResponseTypeSkill ResolvedSkillResponseType = "skill"
@@ -363,6 +387,30 @@ const (
 func (e ShareRevokedResponseStatus) Valid() bool {
 	switch e {
 	case Revoked:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SkillSource.
+const (
+	SkillSourceLessThannil  SkillSource = "<nil>"
+	SkillSourceOrg          SkillSource = "org"
+	SkillSourceSubscription SkillSource = "subscription"
+	SkillSourceUser         SkillSource = "user"
+)
+
+// Valid indicates whether the value is a known member of the SkillSource enum.
+func (e SkillSource) Valid() bool {
+	switch e {
+	case SkillSourceLessThannil:
+		return true
+	case SkillSourceOrg:
+		return true
+	case SkillSourceSubscription:
+		return true
+	case SkillSourceUser:
 		return true
 	default:
 		return false
@@ -447,6 +495,30 @@ func (e SkillDependencyEdgeVisibility) Valid() bool {
 	}
 }
 
+// Defines values for SkillDetailSource.
+const (
+	SkillDetailSourceLessThannil  SkillDetailSource = "<nil>"
+	SkillDetailSourceOrg          SkillDetailSource = "org"
+	SkillDetailSourceSubscription SkillDetailSource = "subscription"
+	SkillDetailSourceUser         SkillDetailSource = "user"
+)
+
+// Valid indicates whether the value is a known member of the SkillDetailSource enum.
+func (e SkillDetailSource) Valid() bool {
+	switch e {
+	case SkillDetailSourceLessThannil:
+		return true
+	case SkillDetailSourceOrg:
+		return true
+	case SkillDetailSourceSubscription:
+		return true
+	case SkillDetailSourceUser:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for SkillDetailVisibility.
 const (
 	SkillDetailVisibilityPrivate  SkillDetailVisibility = "private"
@@ -494,19 +566,22 @@ func (e SuggestionStatus) Valid() bool {
 
 // Defines values for SyncSkillShadowedReason.
 const (
-	CrossOrg    SyncSkillShadowedReason = "cross-org"
-	LessThannil SyncSkillShadowedReason = "<nil>"
-	UserVsOrg   SyncSkillShadowedReason = "user-vs-org"
+	SyncSkillShadowedReasonCrossOrg             SyncSkillShadowedReason = "cross-org"
+	SyncSkillShadowedReasonLessThannil          SyncSkillShadowedReason = "<nil>"
+	SyncSkillShadowedReasonSubscriptionShadowed SyncSkillShadowedReason = "subscription-shadowed"
+	SyncSkillShadowedReasonUserVsOrg            SyncSkillShadowedReason = "user-vs-org"
 )
 
 // Valid indicates whether the value is a known member of the SyncSkillShadowedReason enum.
 func (e SyncSkillShadowedReason) Valid() bool {
 	switch e {
-	case CrossOrg:
+	case SyncSkillShadowedReasonCrossOrg:
 		return true
-	case LessThannil:
+	case SyncSkillShadowedReasonLessThannil:
 		return true
-	case UserVsOrg:
+	case SyncSkillShadowedReasonSubscriptionShadowed:
+		return true
+	case SyncSkillShadowedReasonUserVsOrg:
 		return true
 	default:
 		return false
@@ -515,8 +590,9 @@ func (e SyncSkillShadowedReason) Valid() bool {
 
 // Defines values for SyncSkillSource.
 const (
-	SyncSkillSourceOrg  SyncSkillSource = "org"
-	SyncSkillSourceUser SyncSkillSource = "user"
+	SyncSkillSourceOrg          SyncSkillSource = "org"
+	SyncSkillSourceSubscription SyncSkillSource = "subscription"
+	SyncSkillSourceUser         SyncSkillSource = "user"
 )
 
 // Valid indicates whether the value is a known member of the SyncSkillSource enum.
@@ -524,7 +600,33 @@ func (e SyncSkillSource) Valid() bool {
 	switch e {
 	case SyncSkillSourceOrg:
 		return true
+	case SyncSkillSourceSubscription:
+		return true
 	case SyncSkillSourceUser:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for UpdateSkillResponseSource.
+const (
+	UpdateSkillResponseSourceLessThannil  UpdateSkillResponseSource = "<nil>"
+	UpdateSkillResponseSourceOrg          UpdateSkillResponseSource = "org"
+	UpdateSkillResponseSourceSubscription UpdateSkillResponseSource = "subscription"
+	UpdateSkillResponseSourceUser         UpdateSkillResponseSource = "user"
+)
+
+// Valid indicates whether the value is a known member of the UpdateSkillResponseSource enum.
+func (e UpdateSkillResponseSource) Valid() bool {
+	switch e {
+	case UpdateSkillResponseSourceLessThannil:
+		return true
+	case UpdateSkillResponseSourceOrg:
+		return true
+	case UpdateSkillResponseSourceSubscription:
+		return true
+	case UpdateSkillResponseSourceUser:
 		return true
 	default:
 		return false
@@ -662,19 +764,40 @@ func (e PutApiV1SkillsIdJSONBodyVisibility) Valid() bool {
 
 // Defines values for PutApiV1SkillsIdArchiveParamsXVisibility.
 const (
-	Private  PutApiV1SkillsIdArchiveParamsXVisibility = "private"
-	Public   PutApiV1SkillsIdArchiveParamsXVisibility = "public"
-	Unlisted PutApiV1SkillsIdArchiveParamsXVisibility = "unlisted"
+	PutApiV1SkillsIdArchiveParamsXVisibilityPrivate  PutApiV1SkillsIdArchiveParamsXVisibility = "private"
+	PutApiV1SkillsIdArchiveParamsXVisibilityPublic   PutApiV1SkillsIdArchiveParamsXVisibility = "public"
+	PutApiV1SkillsIdArchiveParamsXVisibilityUnlisted PutApiV1SkillsIdArchiveParamsXVisibility = "unlisted"
 )
 
 // Valid indicates whether the value is a known member of the PutApiV1SkillsIdArchiveParamsXVisibility enum.
 func (e PutApiV1SkillsIdArchiveParamsXVisibility) Valid() bool {
 	switch e {
-	case Private:
+	case PutApiV1SkillsIdArchiveParamsXVisibilityPrivate:
 		return true
-	case Public:
+	case PutApiV1SkillsIdArchiveParamsXVisibilityPublic:
 		return true
-	case Unlisted:
+	case PutApiV1SkillsIdArchiveParamsXVisibilityUnlisted:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PostApiV1SkillsIdPromoteParamsXVisibility.
+const (
+	PostApiV1SkillsIdPromoteParamsXVisibilityPrivate  PostApiV1SkillsIdPromoteParamsXVisibility = "private"
+	PostApiV1SkillsIdPromoteParamsXVisibilityPublic   PostApiV1SkillsIdPromoteParamsXVisibility = "public"
+	PostApiV1SkillsIdPromoteParamsXVisibilityUnlisted PostApiV1SkillsIdPromoteParamsXVisibility = "unlisted"
+)
+
+// Valid indicates whether the value is a known member of the PostApiV1SkillsIdPromoteParamsXVisibility enum.
+func (e PostApiV1SkillsIdPromoteParamsXVisibility) Valid() bool {
+	switch e {
+	case PostApiV1SkillsIdPromoteParamsXVisibilityPrivate:
+		return true
+	case PostApiV1SkillsIdPromoteParamsXVisibilityPublic:
+		return true
+	case PostApiV1SkillsIdPromoteParamsXVisibilityUnlisted:
 		return true
 	default:
 		return false
@@ -1180,9 +1303,15 @@ type ResolvedSkillResponse struct {
 	OrgId   *openapi_types.UUID `json:"org_id"`
 
 	// OwnerId null on org-owned skills (XOR with org_id).
-	OwnerId           *openapi_types.UUID `json:"owner_id"`
-	PinnedArchivePath *string             `json:"pinned_archive_path"`
-	Slug              string              `json:"slug"`
+	OwnerId *openapi_types.UUID `json:"owner_id"`
+
+	// OwnerUsername Upstream owner: the user's username (user-owned/subscription) or the org slug (org-owned). Populated ONLY on the effective listing (GET /api/v1/skills); lets the CLI render 'added from <owner>' and reconstruct Source on a fresh device without a probe. null elsewhere.
+	OwnerUsername     *string `json:"owner_username"`
+	PinnedArchivePath *string `json:"pinned_archive_path"`
+	Slug              string  `json:"slug"`
+
+	// Source Which side the skill comes from in the caller's effective set. Populated ONLY on the effective listing (GET /api/v1/skills); null on every other endpoint that returns a Skill. 'subscription' = a skill you `add`ed but don't own, attached to your personal default skillset (precedence org > user > subscription).
+	Source *ResolvedSkillResponseSource `json:"source"`
 
 	// ToolFormats e.g. ['claude-code']
 	ToolFormats []string                  `json:"tool_formats"`
@@ -1196,6 +1325,9 @@ type ResolvedSkillResponse struct {
 	Version    string                          `json:"version"`
 	Visibility ResolvedSkillResponseVisibility `json:"visibility"`
 }
+
+// ResolvedSkillResponseSource Which side the skill comes from in the caller's effective set. Populated ONLY on the effective listing (GET /api/v1/skills); null on every other endpoint that returns a Skill. 'subscription' = a skill you `add`ed but don't own, attached to your personal default skillset (precedence org > user > subscription).
+type ResolvedSkillResponseSource string
 
 // ResolvedSkillResponseType defines model for ResolvedSkillResponse.Type.
 type ResolvedSkillResponseType string
@@ -1252,9 +1384,15 @@ type Skill struct {
 	OrgId   *openapi_types.UUID `json:"org_id"`
 
 	// OwnerId null on org-owned skills (XOR with org_id).
-	OwnerId           *openapi_types.UUID `json:"owner_id"`
-	PinnedArchivePath *string             `json:"pinned_archive_path"`
-	Slug              string              `json:"slug"`
+	OwnerId *openapi_types.UUID `json:"owner_id"`
+
+	// OwnerUsername Upstream owner: the user's username (user-owned/subscription) or the org slug (org-owned). Populated ONLY on the effective listing (GET /api/v1/skills); lets the CLI render 'added from <owner>' and reconstruct Source on a fresh device without a probe. null elsewhere.
+	OwnerUsername     *string `json:"owner_username"`
+	PinnedArchivePath *string `json:"pinned_archive_path"`
+	Slug              string  `json:"slug"`
+
+	// Source Which side the skill comes from in the caller's effective set. Populated ONLY on the effective listing (GET /api/v1/skills); null on every other endpoint that returns a Skill. 'subscription' = a skill you `add`ed but don't own, attached to your personal default skillset (precedence org > user > subscription).
+	Source *SkillSource `json:"source"`
 
 	// ToolFormats e.g. ['claude-code']
 	ToolFormats []string  `json:"tool_formats"`
@@ -1267,6 +1405,9 @@ type Skill struct {
 	Version    string          `json:"version"`
 	Visibility SkillVisibility `json:"visibility"`
 }
+
+// SkillSource Which side the skill comes from in the caller's effective set. Populated ONLY on the effective listing (GET /api/v1/skills); null on every other endpoint that returns a Skill. 'subscription' = a skill you `add`ed but don't own, attached to your personal default skillset (precedence org > user > subscription).
+type SkillSource string
 
 // SkillVisibility defines model for Skill.Visibility.
 type SkillVisibility string
@@ -1360,9 +1501,15 @@ type SkillDetail struct {
 	} `json:"owner"`
 
 	// OwnerId null on org-owned skills (XOR with org_id).
-	OwnerId           *openapi_types.UUID `json:"owner_id"`
-	PinnedArchivePath *string             `json:"pinned_archive_path"`
-	Slug              string              `json:"slug"`
+	OwnerId *openapi_types.UUID `json:"owner_id"`
+
+	// OwnerUsername Upstream owner: the user's username (user-owned/subscription) or the org slug (org-owned). Populated ONLY on the effective listing (GET /api/v1/skills); lets the CLI render 'added from <owner>' and reconstruct Source on a fresh device without a probe. null elsewhere.
+	OwnerUsername     *string `json:"owner_username"`
+	PinnedArchivePath *string `json:"pinned_archive_path"`
+	Slug              string  `json:"slug"`
+
+	// Source Which side the skill comes from in the caller's effective set. Populated ONLY on the effective listing (GET /api/v1/skills); null on every other endpoint that returns a Skill. 'subscription' = a skill you `add`ed but don't own, attached to your personal default skillset (precedence org > user > subscription).
+	Source *SkillDetailSource `json:"source"`
 
 	// ToolFormats e.g. ['claude-code']
 	ToolFormats []string  `json:"tool_formats"`
@@ -1375,6 +1522,9 @@ type SkillDetail struct {
 	Version    string                `json:"version"`
 	Visibility SkillDetailVisibility `json:"visibility"`
 }
+
+// SkillDetailSource Which side the skill comes from in the caller's effective set. Populated ONLY on the effective listing (GET /api/v1/skills); null on every other endpoint that returns a Skill. 'subscription' = a skill you `add`ed but don't own, attached to your personal default skillset (precedence org > user > subscription).
+type SkillDetailSource string
 
 // SkillDetailVisibility defines model for SkillDetail.Visibility.
 type SkillDetailVisibility string
@@ -1517,14 +1667,17 @@ type SyncSkill struct {
 	// OrgSlug Owning org slug when source='org'; null for user-owned.
 	OrgSlug *string `json:"org_slug"`
 
-	// Shadowed True when an org skill with the same slug is winning the partition; the CLI should skip writing this skill to disk and surface a warning.
+	// OwnerUsername Upstream owner: the user's username (user-owned/subscription) or the org slug (org-owned). Lets the CLI render 'added from <owner>' and reconstruct Source on a fresh device without a probe.
+	OwnerUsername *string `json:"owner_username"`
+
+	// Shadowed True when a higher-precedence skill with the same slug is winning the partition; the CLI should skip writing this skill to disk and surface a warning.
 	Shadowed bool `json:"shadowed"`
 
 	// ShadowedReason Why this row is shadowed; null when shadowed=false.
 	ShadowedReason *SyncSkillShadowedReason `json:"shadowed_reason"`
 	Slug           string                   `json:"slug"`
 
-	// Source Which side the skill comes from in the caller's effective set (migration 047).
+	// Source Which side the skill comes from in the caller's effective set. 'subscription' = a skill you `add`ed but don't own, attached to your personal default skillset (precedence org > user > subscription).
 	Source    SyncSkillSource `json:"source"`
 	UpdatedAt time.Time       `json:"updated_at"`
 	Version   string          `json:"version"`
@@ -1533,7 +1686,7 @@ type SyncSkill struct {
 // SyncSkillShadowedReason Why this row is shadowed; null when shadowed=false.
 type SyncSkillShadowedReason string
 
-// SyncSkillSource Which side the skill comes from in the caller's effective set (migration 047).
+// SyncSkillSource Which side the skill comes from in the caller's effective set. 'subscription' = a skill you `add`ed but don't own, attached to your personal default skillset (precedence org > user > subscription).
 type SyncSkillSource string
 
 // TokenPair defines model for TokenPair.
@@ -1577,8 +1730,11 @@ type UpdateSkillResponse struct {
 	OrgId   *openapi_types.UUID `json:"org_id"`
 
 	// OwnerId null on org-owned skills (XOR with org_id).
-	OwnerId           *openapi_types.UUID `json:"owner_id"`
-	PinnedArchivePath *string             `json:"pinned_archive_path"`
+	OwnerId *openapi_types.UUID `json:"owner_id"`
+
+	// OwnerUsername Upstream owner: the user's username (user-owned/subscription) or the org slug (org-owned). Populated ONLY on the effective listing (GET /api/v1/skills); lets the CLI render 'added from <owner>' and reconstruct Source on a fresh device without a probe. null elsewhere.
+	OwnerUsername     *string `json:"owner_username"`
+	PinnedArchivePath *string `json:"pinned_archive_path"`
 
 	// PrivateDependencies Returned when changing visibility to public WITHOUT make_deps_public:true and private dependencies exist. The skill is still updated; the caller decides whether to make them public.
 	PrivateDependencies *[]struct {
@@ -1587,6 +1743,9 @@ type UpdateSkillResponse struct {
 		Slug string             `json:"slug"`
 	} `json:"private_dependencies,omitempty"`
 	Slug string `json:"slug"`
+
+	// Source Which side the skill comes from in the caller's effective set. Populated ONLY on the effective listing (GET /api/v1/skills); null on every other endpoint that returns a Skill. 'subscription' = a skill you `add`ed but don't own, attached to your personal default skillset (precedence org > user > subscription).
+	Source *UpdateSkillResponseSource `json:"source"`
 
 	// ToolFormats e.g. ['claude-code']
 	ToolFormats []string  `json:"tool_formats"`
@@ -1599,6 +1758,9 @@ type UpdateSkillResponse struct {
 	Version    string                        `json:"version"`
 	Visibility UpdateSkillResponseVisibility `json:"visibility"`
 }
+
+// UpdateSkillResponseSource Which side the skill comes from in the caller's effective set. Populated ONLY on the effective listing (GET /api/v1/skills); null on every other endpoint that returns a Skill. 'subscription' = a skill you `add`ed but don't own, attached to your personal default skillset (precedence org > user > subscription).
+type UpdateSkillResponseSource string
 
 // UpdateSkillResponseVisibility defines model for UpdateSkillResponse.Visibility.
 type UpdateSkillResponseVisibility string
@@ -1774,6 +1936,30 @@ type PutApiV1SkillsIdArchiveParams struct {
 
 // PutApiV1SkillsIdArchiveParamsXVisibility defines parameters for PutApiV1SkillsIdArchive.
 type PutApiV1SkillsIdArchiveParamsXVisibility string
+
+// PostApiV1SkillsIdPromoteParams defines parameters for PostApiV1SkillsIdPromote.
+type PostApiV1SkillsIdPromoteParams struct {
+	// XSlug Slug for the new owned skill (the local dir name). Required.
+	XSlug string `json:"X-Slug"`
+
+	// XName Display name. Defaults to X-Slug.
+	XName *string `json:"X-Name,omitempty"`
+
+	// XVersion Semver. Defaults to 1.0.0.
+	XVersion *string `json:"X-Version,omitempty"`
+
+	// XVisibility Defaults to private.
+	XVisibility *PostApiV1SkillsIdPromoteParamsXVisibility `json:"X-Visibility,omitempty"`
+
+	// XDescription Falls back to the uploaded SKILL.md frontmatter description.
+	XDescription *string `json:"X-Description,omitempty"`
+
+	// XContentHash Client-computed Merkle hash of the upload; server cross-checks.
+	XContentHash *string `json:"X-Content-Hash,omitempty"`
+}
+
+// PostApiV1SkillsIdPromoteParamsXVisibility defines parameters for PostApiV1SkillsIdPromote.
+type PostApiV1SkillsIdPromoteParamsXVisibility string
 
 // PostApiV1SkillsIdRestoreJSONBody defines parameters for PostApiV1SkillsIdRestore.
 type PostApiV1SkillsIdRestoreJSONBody struct {

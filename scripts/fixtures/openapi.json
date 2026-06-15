@@ -312,6 +312,26 @@
               "null"
             ],
             "description": "Why the skill was soft-deleted (e.g. 'user_deleted', 'transferred'). null on live skills."
+          },
+          "source": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "user",
+              "org",
+              "subscription",
+              null
+            ],
+            "description": "Which side the skill comes from in the caller's effective set. Populated ONLY on the effective listing (GET /api/v1/skills); null on every other endpoint that returns a Skill. 'subscription' = a skill you `add`ed but don't own, attached to your personal default skillset (precedence org > user > subscription)."
+          },
+          "owner_username": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Upstream owner: the user's username (user-owned/subscription) or the org slug (org-owned). Populated ONLY on the effective listing (GET /api/v1/skills); lets the CLI render 'added from <owner>' and reconstruct Source on a fresh device without a probe. null elsewhere."
           }
         },
         "required": [
@@ -336,7 +356,9 @@
           "upstream_content_hash",
           "dependency_count",
           "deleted_at",
-          "deletion_reason"
+          "deletion_reason",
+          "source",
+          "owner_username"
         ]
       },
       "SkillConflictResponse": {
@@ -994,9 +1016,10 @@
             "type": "string",
             "enum": [
               "user",
-              "org"
+              "org",
+              "subscription"
             ],
-            "description": "Which side the skill comes from in the caller's effective set (migration 047)."
+            "description": "Which side the skill comes from in the caller's effective set. 'subscription' = a skill you `add`ed but don't own, attached to your personal default skillset (precedence org > user > subscription)."
           },
           "org_slug": {
             "type": [
@@ -1005,9 +1028,16 @@
             ],
             "description": "Owning org slug when source='org'; null for user-owned."
           },
+          "owner_username": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Upstream owner: the user's username (user-owned/subscription) or the org slug (org-owned). Lets the CLI render 'added from <owner>' and reconstruct Source on a fresh device without a probe."
+          },
           "shadowed": {
             "type": "boolean",
-            "description": "True when an org skill with the same slug is winning the partition; the CLI should skip writing this skill to disk and surface a warning."
+            "description": "True when a higher-precedence skill with the same slug is winning the partition; the CLI should skip writing this skill to disk and surface a warning."
           },
           "shadowed_reason": {
             "type": [
@@ -1017,6 +1047,7 @@
             "enum": [
               "user-vs-org",
               "cross-org",
+              "subscription-shadowed",
               null
             ],
             "description": "Why this row is shadowed; null when shadowed=false."
@@ -1032,6 +1063,7 @@
           "updated_at",
           "source",
           "org_slug",
+          "owner_username",
           "shadowed",
           "shadowed_reason"
         ]
@@ -2380,6 +2412,226 @@
           },
           "404": {
             "description": "Not found"
+          }
+        }
+      }
+    },
+    "/api/v1/skills/{id}/subscribe": {
+      "post": {
+        "summary": "Subscribe to a skill (idempotent)",
+        "description": "Attaches the skill to the caller's personal default skillset as an unowned subscription, so a logged-in `add` follows the user across machines (it then surfaces in sync as source='subscription'). Goes through the user client: 403 if the skill isn't readable by the caller (the same answer for private/deleted/never-existed, so it can't be used to probe). Idempotent.",
+        "tags": [
+          "skills"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Skill UUID."
+            },
+            "required": true,
+            "description": "Skill UUID.",
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Subscribed (or already subscribed, idempotent)."
+          },
+          "400": {
+            "description": "Database error"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "403": {
+            "description": "Skill not found or not accessible (no existence leak)."
+          },
+          "404": {
+            "description": "Caller has no default skillset."
+          }
+        }
+      },
+      "delete": {
+        "summary": "Unsubscribe from a skill",
+        "description": "Removes the subscription row from the caller's default skillset, so the skill stops arriving on the user's other machines. Idempotent.",
+        "tags": [
+          "skills"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Skill UUID."
+            },
+            "required": true,
+            "description": "Skill UUID.",
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Unsubscribed (or was not subscribed, idempotent)."
+          },
+          "400": {
+            "description": "Database error"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "404": {
+            "description": "Caller has no default skillset."
+          }
+        }
+      }
+    },
+    "/api/v1/skills/{id}/promote": {
+      "post": {
+        "summary": "Promote an unreachable subscription to an owned skill",
+        "description": "{id} is the upstream (source) skill the caller subscribed to, now unreachable (deleted or made private — not distinguished). In ONE transaction the server creates a visible owned skill from the uploaded files (recording {id} as source_skill_id provenance) and removes the caller's subscription row — no two-row window. Cross-machine idempotent on (owner, source): a second machine promoting the same subscription converges on the one owned skill (200, no duplicate, no extra commit); the first promote returns 201. A slug clash with an UNRELATED owned skill is 409. Body is the tar.gz of the local files (the caller's edits, if any, are promoted); metadata rides in headers, mirroring the archive PUT.",
+        "tags": [
+          "skills"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Skill UUID."
+            },
+            "required": true,
+            "description": "Skill UUID.",
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Slug for the new owned skill (the local dir name). Required."
+            },
+            "required": true,
+            "description": "Slug for the new owned skill (the local dir name). Required.",
+            "name": "X-Slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Display name. Defaults to X-Slug."
+            },
+            "required": false,
+            "description": "Display name. Defaults to X-Slug.",
+            "name": "X-Name",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Semver. Defaults to 1.0.0."
+            },
+            "required": false,
+            "description": "Semver. Defaults to 1.0.0.",
+            "name": "X-Version",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "private",
+                "unlisted",
+                "public"
+              ],
+              "description": "Defaults to private."
+            },
+            "required": false,
+            "description": "Defaults to private.",
+            "name": "X-Visibility",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Falls back to the uploaded SKILL.md frontmatter description."
+            },
+            "required": false,
+            "description": "Falls back to the uploaded SKILL.md frontmatter description.",
+            "name": "X-Description",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Client-computed Merkle hash of the upload; server cross-checks."
+            },
+            "required": false,
+            "description": "Client-computed Merkle hash of the upload; server cross-checks.",
+            "name": "X-Content-Hash",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/gzip": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Already promoted on another machine — the existing owned skill.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Skill"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Promoted — the new owned skill.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Skill"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing X-Slug, empty archive, hash mismatch, or SKILL.md name/slug mismatch."
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "409": {
+            "description": "Caller already owns an unrelated skill with that slug."
+          },
+          "500": {
+            "description": "Storage write or commit RPC failure."
           }
         }
       }

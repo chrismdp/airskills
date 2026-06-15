@@ -114,3 +114,62 @@ func TestOwnerResolverResolvesPersonalAndOrgSkills(t *testing.T) {
 		t.Errorf("expected lazy init to hit each endpoint at most once, got me=%d orgs=%d", meHits, orgsHits)
 	}
 }
+
+// TestSourceForUsesOwnerUsernameForSubscription verifies that the marker
+// Source for a subscription (another user's personal skill) records the
+// upstream owner's username from the effective listing's owner_username field
+// (b0). Before that field existed, Source.Owner was left empty for another
+// user's skill, breaking "added from <owner>" and anon-pull resolution on a
+// fresh device.
+func TestSourceForUsesOwnerUsernameForSubscription(t *testing.T) {
+	const (
+		userID    = "11111111-1111-1111-1111-111111111111"
+		username  = "me"
+		strangeID = "99999999-9999-9999-9999-999999999999"
+		skillID   = "33333333-3333-3333-3333-333333333333"
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/me":
+			fmt.Fprintf(w, `{"id":%q,"username":%q,"role":"user","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}`, userID, username)
+		case "/api/v1/organizations":
+			fmt.Fprint(w, `{"organizations":[]}`)
+		default:
+			http.Error(w, "not found", 404)
+		}
+	}))
+	defer srv.Close()
+
+	c := &apiClient{baseURL: srv.URL, token: "t", http: srv.Client()}
+	r := newOwnerResolver(c)
+
+	mustUUID := func(s string) openapi_types.UUID {
+		var u openapi_types.UUID
+		if err := u.UnmarshalText([]byte(s)); err != nil {
+			t.Fatalf("parse uuid %s: %v", s, err)
+		}
+		return u
+	}
+	strangerOwner := mustUUID(strangeID)
+	sid := mustUUID(skillID)
+	upstreamOwner := "alice"
+
+	src := r.sourceFor(&apiSkill{Id: sid, OwnerId: &strangerOwner, Slug: "retro", OwnerUsername: &upstreamOwner})
+	if src == nil {
+		t.Fatalf("sourceFor returned nil for a non-owned skill (a subscription)")
+	}
+	if src.Owner != "alice" {
+		t.Errorf("Source.Owner: want %q (from owner_username), got %q", "alice", src.Owner)
+	}
+	if src.Slug != "retro" || src.ID != skillID {
+		t.Errorf("Source slug/id wrong: %+v", src)
+	}
+
+	// The caller's own skill → no Source, regardless of owner_username.
+	mineOwner := mustUUID(userID)
+	mineName := username
+	if r.sourceFor(&apiSkill{Id: sid, OwnerId: &mineOwner, Slug: "retro", OwnerUsername: &mineName}) != nil {
+		t.Errorf("sourceFor should be nil for a caller-owned skill")
+	}
+}
