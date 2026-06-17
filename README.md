@@ -12,14 +12,18 @@ airskills manages your AI skills from a single source of truth. Install once, sy
 
 ## Install
 
+The fastest start needs nothing installed — `npx` fetches the CLI and runs it:
+
 ```bash
-curl -fsSL https://airskills.ai/install.sh | bash
+npx airskills add chrismdp/retro
 ```
 
-Windows:
+Or install it permanently:
 
-```powershell
-irm https://airskills.ai/install.ps1 | iex
+```bash
+npm install -g airskills                              # npm
+curl -fsSL https://airskills.ai/install.sh | bash     # macOS / Linux
+irm https://airskills.ai/install.ps1 | iex            # Windows (PowerShell)
 ```
 
 ## Get started
@@ -39,13 +43,23 @@ airskills add github.com/user/skill     # also accepts GitHub-style paths
 
 This fetches the skill and writes it to every detected AI agent on your machine (`~/.cursor/skills/`, `~/.claude/skills/`, etc.).
 
+## Use without installing (MCP)
+
+Any tool that supports [MCP](https://modelcontextprotocol.io) can load skills from airskills without the CLI, without files on disk, and without setup. Add this as a remote MCP server in your tool:
+
+```
+https://airskills.ai/mcp
+```
+
+Works with Claude Code, Cursor, Copilot, Windsurf, Cline, ChatGPT, and any tool that supports remote MCP servers. Without auth, only public skills are visible; sign in to reach private and team skills. The endpoint is read-only and enforces the same row-level security as the API.
+
 ## For teams
 
 Your best engineer wrote the code review skill and updates it weekly, but nobody else knows it exists. New joiners spend hours hunting for config files, and when someone pushes a bad update, 50 developers are affected with no rollback.
 
 airskills lets you curate skills so your team does not have to. Publish once, everyone receives automatically. Version history with rollback. Conflict detection across machines and teammates. Visibility into who has what installed.
 
-[Book a call about teams](https://calendar.app.google/Qx52oPwCe1vRSi5t6)
+[Apply for a team trial](https://airskills.ai/team-trial)
 
 ## Supported agents
 
@@ -75,7 +89,7 @@ Full list: Cursor, GitHub Copilot, Claude Code, Cowork, Windsurf, Codex, Cline, 
 | `airskills status` | Check for updates |
 | `airskills share <user/skill> --with <email>` | Share a skill |
 | `airskills export <skill>` | Export a skill to a portable archive |
-| `airskills configure <key> <value>` | Set config (e.g. `api_url`) |
+| `airskills config set <key> <value>` | Set config (e.g. `api_url` to point at your own server) |
 | `airskills self-update` | Update the CLI |
 | `airskills whoami` | Show current user |
 | `airskills feedback -m "msg"` | Send feedback |
@@ -98,17 +112,25 @@ No silent overwrites, no picking a winner automatically. You always see exactly 
 
 ## What data does the CLI send?
 
-Only your skill files (SKILL.md content) when you push, and auth tokens. Never your code, git history, or file system. No telemetry. The source is here for you to verify.
+Only your skill files (SKILL.md content) when you push, and auth tokens. Never your code, git history, or file system. Telemetry is lightweight and can be disabled with `AIRSKILLS_NO_TELEMETRY=1`. The source is here for you to verify.
 
-## API
+## API and self-hosting
 
-Everything the CLI does is available via the REST API at `airskills.ai/api/v1`. Authenticate with a Bearer token. Full spec at [airskills.ai/llms.txt](https://airskills.ai/llms.txt).
+Everything the CLI does is available via the REST API at `airskills.ai/api/v1`. Authenticate with a Bearer token. The full contract is published as OpenAPI at [airskills.ai/openapi.json](https://airskills.ai/openapi.json) (also as [airskills.ai/llms.txt](https://airskills.ai/llms.txt)).
 
 Use the API to pull skills programmatically, push updates from CI, or wire your agents directly.
 
-## Free tier
+**Run your own server.** The CLI talks to any backend that implements the OpenAPI contract — nothing is hardcoded to `airskills.ai`. Point it at your own host:
 
-Free accounts get 100 skills with cross-machine sync. Teams and orgs on [airskills.ai](https://airskills.ai).
+```bash
+airskills config set api_url https://skills.your-company.com
+```
+
+The spec is the single source of truth: the hosted server generates it from the same schemas it validates requests against, and the CLI's typed API shapes are generated from that spec. Implement the contract and the CLI works against your server unchanged.
+
+## Pricing
+
+Free for individuals and small workspaces (up to 2 users), with full cross-machine sync. Team plans add distribution across larger teams. See [airskills.ai/pricing](https://airskills.ai/pricing).
 
 ## License
 
