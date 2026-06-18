@@ -2269,7 +2269,7 @@
       },
       "put": {
         "summary": "Update skill metadata",
-        "description": "Metadata only. The handler does ad-hoc allowlist validation (name, description, visibility, plus the operational toggles pull_upstream/confirm_public/make_deps_public); the Zod schema below documents the wire shape but is not yet enforced at runtime — see the comment on UpdateSkillSchema in lib/schemas.ts. Renames record a slug redirect so old links keep working. Setting visibility to 'public' requires confirm_public: true; if private dependencies exist they appear in the 200 response unless make_deps_public: true is also set.",
+        "description": "Metadata only. The request body is validated at runtime against UpdateSkillSchema via parseBody (unknown fields are stripped; an empty body is rejected with validation_failed). Persistable fields are name, description, and visibility; pull_upstream, confirm_public, and make_deps_public are operational toggles consumed as control flow, not stored. Renames record a slug redirect so old links keep working. Setting visibility to 'public' requires confirm_public: true; if private dependencies exist they appear in the 200 response unless make_deps_public: true is also set.",
         "tags": [
           "skills"
         ],
@@ -4779,7 +4779,7 @@
     "/api/v1/skills/{id}/share": {
       "post": {
         "summary": "Share a skill with an email address",
-        "description": "Inserts a share row. The recipient sees the skill via the shares table when they sign in with the matching email.",
+        "description": "Inserts a share row. The recipient sees the skill via the shares table when they sign in with the matching email. Idempotent: re-sharing the same email returns the existing row with 200 instead of creating a duplicate.",
         "tags": [
           "skills"
         ],
@@ -4822,6 +4822,16 @@
           }
         },
         "responses": {
+          "200": {
+            "description": "Share already existed (idempotent re-share)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShareRecord"
+                }
+              }
+            }
+          },
           "201": {
             "description": "Share created",
             "content": {
