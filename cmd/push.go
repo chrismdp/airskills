@@ -706,6 +706,20 @@ config).`,
 						}
 					}
 					if !adminWrite {
+						// No standing edits relative to the upstream baseline →
+						// nothing to back up. A bare subscription that still
+						// matches its upstream (e.g. one the first logged-in sync
+						// just backfilled from an anonymous add) must NOT spawn a
+						// hidden backup fork — that fork is an owned row sharing
+						// the slug, which shadows the subscription and makes the
+						// listing's `source` flip user↔subscription by row order.
+						// Only genuine local edits get backed up.
+						if !overlayHasLocalEdits(s.marker, contentHash) {
+							lines[i].status = "unchanged"
+							lines[i].pct = 1
+							renderProgress(lines)
+							return
+						}
 						if s.marker.Backup != nil && s.marker.Backup.ContentHash == contentHash &&
 							!overlayAdvanced && (s.marker.SuggestionID != "" || s.marker.SuggestDeclined) {
 							lines[i].status = "backed up"

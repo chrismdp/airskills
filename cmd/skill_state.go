@@ -119,6 +119,25 @@ func markerUpstreamBase(m *SyncEntry) string {
 	return m.Source.ContentHash
 }
 
+// overlayHasLocalEdits reports whether an overlay marker's local copy diverges
+// from the upstream baseline the consumer last incorporated — i.e. the member
+// has standing edits that warrant a hidden backup fork on push. A bare
+// subscription whose local content still matches the baseline (the common case
+// immediately after the first logged-in `sync` backfills an anonymous add) has
+// NO edits: backing it up would mint a phantom owned fork that shadows the
+// subscription (the row's `source` then flips between "user" and "subscription"
+// by listing order — the anon-backfill e2e flake). When the baseline is unknown
+// (a legacy marker with no UpstreamContentHash) or the local hash is unknown, we
+// cannot prove non-divergence, so we conservatively report true and let the
+// existing backup path run.
+func overlayHasLocalEdits(m *SyncEntry, localHash string) bool {
+	base := markerUpstreamBase(m)
+	if base == "" || localHash == "" {
+		return true
+	}
+	return localHash != base
+}
+
 // skillUpstreamMoved is the model's `upstreamMoved` — the ONLY correct "new
 // upstream available" signal: the parent skill moved past the upstream
 // version I last acknowledged (`parent_head ≠ upstream_base`).

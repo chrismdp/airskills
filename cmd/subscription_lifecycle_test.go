@@ -40,6 +40,45 @@ func TestIsPersonalSubscriptionMarker(t *testing.T) {
 	}
 }
 
+// TestOverlayHasLocalEdits guards the anon-backfill flake: a bare subscription
+// whose local copy still matches the upstream baseline has NO edits, so push
+// must NOT back it up (a backup fork shadows the subscription and flips the
+// listed source between "user" and "subscription"). Only genuine divergence
+// from the last-incorporated baseline counts as an edit.
+func TestOverlayHasLocalEdits(t *testing.T) {
+	mk := func(base string) *SyncEntry {
+		return &SyncEntry{
+			SkillID:   "up-1",
+			OwnerKind: "user",
+			Source: &skillSource{
+				Owner: "alice", Slug: "retro", ID: "up-1", UpstreamSkillID: "up-1",
+				UpstreamContentHash: base,
+			},
+		}
+	}
+	cases := []struct {
+		name      string
+		marker    *SyncEntry
+		localHash string
+		want      bool
+	}{
+		{"unedited: local == baseline", mk("h-base"), "h-base", false},
+		{"edited: local != baseline", mk("h-base"), "h-edited", true},
+		{"no baseline recorded → conservative back up", mk(""), "h-local", true},
+		{"empty local hash → conservative back up", mk("h-base"), "", true},
+		{
+			"ResolvedHash is the baseline when set",
+			func() *SyncEntry { e := mk("h-old-upstream"); e.ResolvedHash = "h-ack"; return e }(),
+			"h-ack", false,
+		},
+	}
+	for _, tc := range cases {
+		if got := overlayHasLocalEdits(tc.marker, tc.localHash); got != tc.want {
+			t.Errorf("%s: want %v, got %v", tc.name, tc.want, got)
+		}
+	}
+}
+
 // TestClassifySubscriptionUpstream is the heart of the lifecycle: classification
 // must be by HTTP STATUS, never by substring. The "blip" case (a 503 whose body
 // contains "not found") must NOT be read as gone — that would false-promote on a
