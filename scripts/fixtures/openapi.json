@@ -292,11 +292,11 @@
               "string",
               "null"
             ],
-            "description": "Live content_hash of the parent skill (forks only). null when no parent or unreadable."
+            "description": "Live content_hash of the parent skill (forks only). null when no parent or unreadable. Listing-only: key absent off GET /api/v1/skills."
           },
           "dependency_count": {
             "type": "integer",
-            "description": "Number of resolved dependency rows."
+            "description": "Number of resolved dependency rows. Listing-only: key absent off GET /api/v1/skills."
           },
           "deleted_at": {
             "type": [
@@ -353,12 +353,8 @@
           "pinned_archive_path",
           "created_at",
           "updated_at",
-          "upstream_content_hash",
-          "dependency_count",
           "deleted_at",
-          "deletion_reason",
-          "source",
-          "owner_username"
+          "deletion_reason"
         ]
       },
       "SkillConflictResponse": {
@@ -3624,8 +3620,8 @@
         }
       },
       "post": {
-        "summary": "Create a skillset",
-        "description": "Creates a user-owned skillset. Setting set_default: true unsets any existing default in one operation.",
+        "summary": "Create a skillset (removed)",
+        "description": "Removed (migration 047). User-owned skillsets no longer exist — each user has a single implicit `default`. Create an org and use an org skillset instead. Always returns 410.",
         "tags": [
           "skillsets"
         ],
@@ -3634,56 +3630,9 @@
             "bearerAuth": []
           }
         ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "name": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 128
-                  },
-                  "slug": {
-                    "type": "string",
-                    "maxLength": 128
-                  },
-                  "description": {
-                    "type": "string",
-                    "maxLength": 2048
-                  },
-                  "set_default": {
-                    "type": "boolean"
-                  },
-                  "auto_absorb": {
-                    "type": "boolean"
-                  }
-                },
-                "required": [
-                  "name"
-                ]
-              }
-            }
-          }
-        },
         "responses": {
-          "201": {
-            "description": "Created",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Skillset"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Validation failed, invalid slug, or DB error."
-          },
-          "401": {
-            "description": "Missing or invalid token"
+          "410": {
+            "description": "User-owned skillsets were removed; use an org skillset."
           }
         }
       }
@@ -3764,8 +3713,8 @@
         }
       },
       "post": {
-        "summary": "Create a skillset by owner",
-        "description": "Creates a skillset in a user or org namespace. User owners can create personal skillsets; org admins and owners can create org skillsets.",
+        "summary": "Create an org skillset",
+        "description": "Creates a skillset in an org namespace (org admins and owners only). A user namespace returns 410 — user-owned skillsets were removed (migration 047); each user has a single implicit `default`.",
         "tags": [
           "skillsets"
         ],
@@ -3845,6 +3794,9 @@
           },
           "409": {
             "description": "Slug already exists in this namespace."
+          },
+          "410": {
+            "description": "User-owned skillsets were removed; the personal default is implicit."
           }
         }
       }

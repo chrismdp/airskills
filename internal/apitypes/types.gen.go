@@ -1288,8 +1288,8 @@ type ResolvedSkillResponse struct {
 	// DeletionReason Why the skill was soft-deleted (e.g. 'user_deleted', 'transferred'). null on live skills.
 	DeletionReason *string `json:"deletion_reason"`
 
-	// DependencyCount Number of resolved dependency rows.
-	DependencyCount int     `json:"dependency_count"`
+	// DependencyCount Number of resolved dependency rows. Listing-only: key absent off GET /api/v1/skills.
+	DependencyCount *int    `json:"dependency_count,omitempty"`
 	Description     *string `json:"description"`
 
 	// ForkedFrom Parent skill of a genuine fork. Always references a live skill — transfer relocation is moved_to, not lineage.
@@ -1306,20 +1306,20 @@ type ResolvedSkillResponse struct {
 	OwnerId *openapi_types.UUID `json:"owner_id"`
 
 	// OwnerUsername Upstream owner: the user's username (user-owned/subscription) or the org slug (org-owned). Populated ONLY on the effective listing (GET /api/v1/skills); lets the CLI render 'added from <owner>' and reconstruct Source on a fresh device without a probe. null elsewhere.
-	OwnerUsername     *string `json:"owner_username"`
+	OwnerUsername     *string `json:"owner_username,omitempty"`
 	PinnedArchivePath *string `json:"pinned_archive_path"`
 	Slug              string  `json:"slug"`
 
 	// Source Which side the skill comes from in the caller's effective set. Populated ONLY on the effective listing (GET /api/v1/skills); null on every other endpoint that returns a Skill. 'subscription' = a skill you `add`ed but don't own, attached to your personal default skillset (precedence org > user > subscription).
-	Source *ResolvedSkillResponseSource `json:"source"`
+	Source *ResolvedSkillResponseSource `json:"source,omitempty"`
 
 	// ToolFormats e.g. ['claude-code']
 	ToolFormats []string                  `json:"tool_formats"`
 	Type        ResolvedSkillResponseType `json:"type"`
 	UpdatedAt   time.Time                 `json:"updated_at"`
 
-	// UpstreamContentHash Live content_hash of the parent skill (forks only). null when no parent or unreadable.
-	UpstreamContentHash *string `json:"upstream_content_hash"`
+	// UpstreamContentHash Live content_hash of the parent skill (forks only). null when no parent or unreadable. Listing-only: key absent off GET /api/v1/skills.
+	UpstreamContentHash *string `json:"upstream_content_hash,omitempty"`
 
 	// Version Semver-ish label — not authoritative; use content_hash.
 	Version    string                          `json:"version"`
@@ -1369,8 +1369,8 @@ type Skill struct {
 	// DeletionReason Why the skill was soft-deleted (e.g. 'user_deleted', 'transferred'). null on live skills.
 	DeletionReason *string `json:"deletion_reason"`
 
-	// DependencyCount Number of resolved dependency rows.
-	DependencyCount int     `json:"dependency_count"`
+	// DependencyCount Number of resolved dependency rows. Listing-only: key absent off GET /api/v1/skills.
+	DependencyCount *int    `json:"dependency_count,omitempty"`
 	Description     *string `json:"description"`
 
 	// ForkedFrom Parent skill of a genuine fork. Always references a live skill — transfer relocation is moved_to, not lineage.
@@ -1387,19 +1387,19 @@ type Skill struct {
 	OwnerId *openapi_types.UUID `json:"owner_id"`
 
 	// OwnerUsername Upstream owner: the user's username (user-owned/subscription) or the org slug (org-owned). Populated ONLY on the effective listing (GET /api/v1/skills); lets the CLI render 'added from <owner>' and reconstruct Source on a fresh device without a probe. null elsewhere.
-	OwnerUsername     *string `json:"owner_username"`
+	OwnerUsername     *string `json:"owner_username,omitempty"`
 	PinnedArchivePath *string `json:"pinned_archive_path"`
 	Slug              string  `json:"slug"`
 
 	// Source Which side the skill comes from in the caller's effective set. Populated ONLY on the effective listing (GET /api/v1/skills); null on every other endpoint that returns a Skill. 'subscription' = a skill you `add`ed but don't own, attached to your personal default skillset (precedence org > user > subscription).
-	Source *SkillSource `json:"source"`
+	Source *SkillSource `json:"source,omitempty"`
 
 	// ToolFormats e.g. ['claude-code']
 	ToolFormats []string  `json:"tool_formats"`
 	UpdatedAt   time.Time `json:"updated_at"`
 
-	// UpstreamContentHash Live content_hash of the parent skill (forks only). null when no parent or unreadable.
-	UpstreamContentHash *string `json:"upstream_content_hash"`
+	// UpstreamContentHash Live content_hash of the parent skill (forks only). null when no parent or unreadable. Listing-only: key absent off GET /api/v1/skills.
+	UpstreamContentHash *string `json:"upstream_content_hash,omitempty"`
 
 	// Version Semver-ish label — not authoritative; use content_hash.
 	Version    string          `json:"version"`
@@ -1474,8 +1474,8 @@ type SkillDetail struct {
 	DeletionReason *string               `json:"deletion_reason"`
 	Dependencies   []SkillDependencyEdge `json:"dependencies"`
 
-	// DependencyCount Number of resolved dependency rows.
-	DependencyCount int         `json:"dependency_count"`
+	// DependencyCount Number of resolved dependency rows. Listing-only: key absent off GET /api/v1/skills.
+	DependencyCount *int        `json:"dependency_count,omitempty"`
 	Description     *string     `json:"description"`
 	Files           []SkillFile `json:"files"`
 
@@ -1504,19 +1504,19 @@ type SkillDetail struct {
 	OwnerId *openapi_types.UUID `json:"owner_id"`
 
 	// OwnerUsername Upstream owner: the user's username (user-owned/subscription) or the org slug (org-owned). Populated ONLY on the effective listing (GET /api/v1/skills); lets the CLI render 'added from <owner>' and reconstruct Source on a fresh device without a probe. null elsewhere.
-	OwnerUsername     *string `json:"owner_username"`
+	OwnerUsername     *string `json:"owner_username,omitempty"`
 	PinnedArchivePath *string `json:"pinned_archive_path"`
 	Slug              string  `json:"slug"`
 
 	// Source Which side the skill comes from in the caller's effective set. Populated ONLY on the effective listing (GET /api/v1/skills); null on every other endpoint that returns a Skill. 'subscription' = a skill you `add`ed but don't own, attached to your personal default skillset (precedence org > user > subscription).
-	Source *SkillDetailSource `json:"source"`
+	Source *SkillDetailSource `json:"source,omitempty"`
 
 	// ToolFormats e.g. ['claude-code']
 	ToolFormats []string  `json:"tool_formats"`
 	UpdatedAt   time.Time `json:"updated_at"`
 
-	// UpstreamContentHash Live content_hash of the parent skill (forks only). null when no parent or unreadable.
-	UpstreamContentHash *string `json:"upstream_content_hash"`
+	// UpstreamContentHash Live content_hash of the parent skill (forks only). null when no parent or unreadable. Listing-only: key absent off GET /api/v1/skills.
+	UpstreamContentHash *string `json:"upstream_content_hash,omitempty"`
 
 	// Version Semver-ish label — not authoritative; use content_hash.
 	Version    string                `json:"version"`
@@ -1715,8 +1715,8 @@ type UpdateSkillResponse struct {
 	// DeletionReason Why the skill was soft-deleted (e.g. 'user_deleted', 'transferred'). null on live skills.
 	DeletionReason *string `json:"deletion_reason"`
 
-	// DependencyCount Number of resolved dependency rows.
-	DependencyCount int     `json:"dependency_count"`
+	// DependencyCount Number of resolved dependency rows. Listing-only: key absent off GET /api/v1/skills.
+	DependencyCount *int    `json:"dependency_count,omitempty"`
 	Description     *string `json:"description"`
 
 	// ForkedFrom Parent skill of a genuine fork. Always references a live skill — transfer relocation is moved_to, not lineage.
@@ -1733,7 +1733,7 @@ type UpdateSkillResponse struct {
 	OwnerId *openapi_types.UUID `json:"owner_id"`
 
 	// OwnerUsername Upstream owner: the user's username (user-owned/subscription) or the org slug (org-owned). Populated ONLY on the effective listing (GET /api/v1/skills); lets the CLI render 'added from <owner>' and reconstruct Source on a fresh device without a probe. null elsewhere.
-	OwnerUsername     *string `json:"owner_username"`
+	OwnerUsername     *string `json:"owner_username,omitempty"`
 	PinnedArchivePath *string `json:"pinned_archive_path"`
 
 	// PrivateDependencies Returned when changing visibility to public WITHOUT make_deps_public:true and private dependencies exist. The skill is still updated; the caller decides whether to make them public.
@@ -1745,14 +1745,14 @@ type UpdateSkillResponse struct {
 	Slug string `json:"slug"`
 
 	// Source Which side the skill comes from in the caller's effective set. Populated ONLY on the effective listing (GET /api/v1/skills); null on every other endpoint that returns a Skill. 'subscription' = a skill you `add`ed but don't own, attached to your personal default skillset (precedence org > user > subscription).
-	Source *UpdateSkillResponseSource `json:"source"`
+	Source *UpdateSkillResponseSource `json:"source,omitempty"`
 
 	// ToolFormats e.g. ['claude-code']
 	ToolFormats []string  `json:"tool_formats"`
 	UpdatedAt   time.Time `json:"updated_at"`
 
-	// UpstreamContentHash Live content_hash of the parent skill (forks only). null when no parent or unreadable.
-	UpstreamContentHash *string `json:"upstream_content_hash"`
+	// UpstreamContentHash Live content_hash of the parent skill (forks only). null when no parent or unreadable. Listing-only: key absent off GET /api/v1/skills.
+	UpstreamContentHash *string `json:"upstream_content_hash,omitempty"`
 
 	// Version Semver-ish label — not authoritative; use content_hash.
 	Version    string                        `json:"version"`
@@ -1995,15 +1995,6 @@ type PostApiV1SkillsIdVersionsJSONBody struct {
 	VersionId *openapi_types.UUID `json:"version_id,omitempty"`
 }
 
-// PostApiV1SkillsetsJSONBody defines parameters for PostApiV1Skillsets.
-type PostApiV1SkillsetsJSONBody struct {
-	AutoAbsorb  *bool   `json:"auto_absorb,omitempty"`
-	Description *string `json:"description,omitempty"`
-	Name        string  `json:"name"`
-	SetDefault  *bool   `json:"set_default,omitempty"`
-	Slug        *string `json:"slug,omitempty"`
-}
-
 // PostApiV1SkillsetsOwnerJSONBody defines parameters for PostApiV1SkillsetsOwner.
 type PostApiV1SkillsetsOwnerJSONBody struct {
 	AutoAbsorb  *bool   `json:"auto_absorb,omitempty"`
@@ -2128,9 +2119,6 @@ type PostApiV1SkillsIdTransferJSONRequestBody PostApiV1SkillsIdTransferJSONBody
 
 // PostApiV1SkillsIdVersionsJSONRequestBody defines body for PostApiV1SkillsIdVersions for application/json ContentType.
 type PostApiV1SkillsIdVersionsJSONRequestBody PostApiV1SkillsIdVersionsJSONBody
-
-// PostApiV1SkillsetsJSONRequestBody defines body for PostApiV1Skillsets for application/json ContentType.
-type PostApiV1SkillsetsJSONRequestBody PostApiV1SkillsetsJSONBody
 
 // PostApiV1SkillsetsOwnerJSONRequestBody defines body for PostApiV1SkillsetsOwner for application/json ContentType.
 type PostApiV1SkillsetsOwnerJSONRequestBody PostApiV1SkillsetsOwnerJSONBody
