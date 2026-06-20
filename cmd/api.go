@@ -211,27 +211,6 @@ func (c *apiClient) listSkillsets() ([]apitypes.SkillsetListItem, error) {
 	return skillsets, nil
 }
 
-// createSkillset creates a personal skillset. Server-side: the POST
-// handler in app/api/v1/skillsets/route.ts owns slug defaulting and
-// the (owner_user_id, slug) uniqueness enforcement. Returns the bare
-// apitypes.Skillset (the create response has no skill_count yet).
-func (c *apiClient) createSkillset(slug, name, description string) (*apitypes.Skillset, error) {
-	payload := map[string]string{
-		"slug":        slug,
-		"name":        name,
-		"description": description,
-	}
-	body, err := c.post("/api/v1/skillsets", payload)
-	if err != nil {
-		return nil, err
-	}
-	var ss apitypes.Skillset
-	if err := json.Unmarshal(body, &ss); err != nil {
-		return nil, err
-	}
-	return &ss, nil
-}
-
 // listOrgSkillsets fetches skillsets owned by an org namespace.
 func (c *apiClient) listOrgSkillsets(orgSlug string) ([]apitypes.SkillsetListItem, error) {
 	body, err := c.get("/api/v1/skillsets/" + url.PathEscape(orgSlug))
