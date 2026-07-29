@@ -58,13 +58,16 @@ That is a deliberate, consumer-visible move; rename is not.`,
 					// Parse the latter and surface a clear hint; fall
 					// through to the generic error otherwise.
 					if status == 409 {
-						parsed := parseSkillConflict(fmt.Errorf("API error (409): %s", string(body)))
+						parsed := parseSkillConflict(httpError(status, body))
 						if parsed != nil {
 							parsed.Slug = newName
 							return parsed
 						}
 					}
-					return fmt.Errorf("renaming on server (status %d): %s", status, string(body))
+					if err != nil {
+						return fmt.Errorf("renaming on server: %w", err)
+					}
+					return fmt.Errorf("renaming on server: %w", httpError(status, body))
 				}
 				fmt.Printf("  %s remote skill renamed\n", green("✓"))
 			}

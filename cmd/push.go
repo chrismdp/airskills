@@ -764,9 +764,13 @@ config).`,
 							lines[i].status = "failed"
 							renderProgress(lines)
 							mu.Lock()
+							renameErr := perr
+							if renameErr == nil {
+								renameErr = httpError(status, body)
+							}
 							warnings = append(warnings, fmt.Sprintf(
-								"%s: server rename failed (%s → %s, status %d): %s",
-								s.name, oldName, s.name, status, strings.TrimSpace(string(body)),
+								"%s: server rename failed (%s → %s): %v",
+								s.name, oldName, s.name, renameErr,
 							))
 							mu.Unlock()
 							atomic.AddInt64(&failed, 1)
@@ -982,7 +986,7 @@ config).`,
 						var resp struct {
 							Message string `json:"message"`
 						}
-						json.Unmarshal([]byte(err.Error()), &resp)
+						json.Unmarshal(httpErrorBody(err), &resp)
 						msg := resp.Message
 						if msg == "" {
 							msg = "skill was deleted server-side"
@@ -999,7 +1003,7 @@ config).`,
 						var conflictResp struct {
 							RemoteContentHash string `json:"remote_content_hash"`
 						}
-						json.Unmarshal([]byte(err.Error()), &conflictResp)
+						json.Unmarshal(httpErrorBody(err), &conflictResp)
 
 						// Auto-detect: if local already matches remote, the marker is stale.
 						// Link the marker silently without uploading.

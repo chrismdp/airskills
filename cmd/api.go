@@ -67,6 +67,57 @@ var (
 	reExecFn        = reExec
 )
 
+const maxHTTPErrorBodyChars = 300
+
+type httpResponseError struct {
+	status int
+	body   []byte
+}
+
+func (e *httpResponseError) Error() string {
+	body := strings.TrimSpace(string(e.body))
+	if body == "" {
+		return fmt.Sprintf("HTTP %d: server returned an empty error response", e.status)
+	}
+
+	lowerBody := strings.ToLower(body)
+	if strings.HasPrefix(lowerBody, "<!doctype") || strings.HasPrefix(lowerBody, "<html") {
+		return fmt.Sprintf("HTTP %d: HTML error page returned (possibly a WAF/proxy block)", e.status)
+	}
+
+	runes := []rune(body)
+	if len(runes) > maxHTTPErrorBodyChars {
+		body = string(runes[:maxHTTPErrorBodyChars]) + "…"
+	}
+	return fmt.Sprintf("HTTP %d: %s", e.status, body)
+}
+
+// httpError turns an HTTP error response into a bounded, non-empty CLI error.
+// The original body remains available internally for callers that need to
+// inspect structured conflict responses.
+func httpError(status int, body []byte) error {
+	return &httpResponseError{
+		status: status,
+		body:   append([]byte(nil), body...),
+	}
+}
+
+func httpErrorBody(err error) []byte {
+	var responseErr *httpResponseError
+	if errors.As(err, &responseErr) {
+		return responseErr.body
+	}
+	return nil
+}
+
+func httpErrorStatus(err error) (int, bool) {
+	var responseErr *httpResponseError
+	if errors.As(err, &responseErr) {
+		return responseErr.status, true
+	}
+	return 0, false
+}
+
 // doRequest is the single entry point for issuing API HTTP requests.
 // It wraps client.Do() with hardcoded-floor recovery: on HTTP 426
 // Upgrade Required, attempt to auto-self-update and re-exec the
@@ -180,7 +231,7 @@ func (c *apiClient) pullUpstream(skillID string) (*apiSkill, error) {
 		return nil, err
 	}
 	if statusCode >= 400 {
-		return nil, fmt.Errorf("API error (%d): %s", statusCode, string(body))
+		return nil, httpError(statusCode, body)
 	}
 	var skill apiSkill
 	if err := json.Unmarshal(body, &skill); err != nil {
@@ -259,7 +310,7 @@ func (c *apiClient) addSkillToOrgSkillset(orgSlug, skillsetSlug, skillOwner, ski
 		return err
 	}
 	if status >= 400 {
-		return fmt.Errorf("API error (%d): %s", status, string(body))
+		return httpError(status, body)
 	}
 	return nil
 }
@@ -400,7 +451,7 @@ func refreshAccessToken(apiURL, refreshToken string) (*config.TokenData, error) 
 
 	if resp.StatusCode != 200 {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("refresh returned HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		return nil, fmt.Errorf("refresh failed: %w", httpError(resp.StatusCode, body))
 	}
 
 	var token config.TokenData
@@ -430,7 +481,7 @@ func (c *apiClient) get(path string) ([]byte, error) {
 	}
 
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("API error (%d): %s", resp.StatusCode, string(body))
+		return nil, httpError(resp.StatusCode, body)
 	}
 	return body, nil
 }
@@ -486,7 +537,7 @@ func (c *apiClient) post(path string, payload interface{}) ([]byte, error) {
 	}
 
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("API error (%d): %s", resp.StatusCode, string(body))
+		return nil, httpError(resp.StatusCode, body)
 	}
 	return body, nil
 }
@@ -535,7 +586,7 @@ func (c *apiClient) del(path string) error {
 
 	if resp.StatusCode >= 400 {
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("API error (%d): %s", resp.StatusCode, string(body))
+		return httpError(resp.StatusCode, body)
 	}
 	return nil
 }
@@ -602,10 +653,10 @@ func (c *apiClient) listPersonalSkillsInSkillset(skillset string) ([]apiSkill, s
 				Available:     errResp.Available,
 			}
 		}
-		return nil, "", fmt.Errorf("API error (404): %s", string(body))
+		return nil, "", httpError(resp.StatusCode, body)
 	}
 	if resp.StatusCode >= 400 {
-		return nil, "", fmt.Errorf("API error (%d): %s", resp.StatusCode, string(body))
+		return nil, "", httpError(resp.StatusCode, body)
 	}
 
 	var parsed struct {
@@ -867,7 +918,7 @@ func (c *apiClient) promoteBackupSkill(id string) error {
 		return err
 	}
 	if status >= 400 {
-		return fmt.Errorf("API error (%d): %s", status, strings.TrimSpace(string(body)))
+		return httpError(status, body)
 	}
 	return nil
 }
@@ -898,7 +949,7 @@ func (c *apiClient) subscribe(skillID string) error {
 	}
 	if resp.StatusCode >= 400 {
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("API error (%d): %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		return httpError(resp.StatusCode, body)
 	}
 	return nil
 }
@@ -951,7 +1002,7 @@ func (c *apiClient) promote(sourceSkillID string, archive []byte, slug, name, ve
 	var skill apiSkill
 	_ = json.Unmarshal(body, &skill)
 	if resp.StatusCode >= 400 {
-		return &skill, resp.StatusCode, fmt.Errorf("API error (%d): %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		return &skill, resp.StatusCode, httpError(resp.StatusCode, body)
 	}
 	return &skill, resp.StatusCode, nil
 }
@@ -1004,9 +1055,13 @@ func parseSkillConflict(apiErr error) *SkillConflictError {
 		return nil
 	}
 	msg := apiErr.Error()
-	// post() formats errors as "API error (%d): %s"; only the body of
-	// a 409 carries the conflict_with payload.
-	if !strings.Contains(msg, "(409)") {
+	var responseErr *httpResponseError
+	if errors.As(apiErr, &responseErr) {
+		if responseErr.status != http.StatusConflict {
+			return nil
+		}
+		msg = string(responseErr.body)
+	} else if !strings.Contains(msg, "(409)") && !strings.HasPrefix(msg, "HTTP 409:") {
 		return nil
 	}
 	idx := strings.Index(msg, "{")
@@ -1061,7 +1116,7 @@ func (c *apiClient) postWithStatus(path string, payload interface{}) ([]byte, er
 	}
 
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("API error (%d): %s", resp.StatusCode, string(body))
+		return nil, httpError(resp.StatusCode, body)
 	}
 	return body, nil
 }
@@ -1121,7 +1176,7 @@ func (c *apiClient) putArchive(skillID string, archive []byte, expectedHash, con
 	json.Unmarshal(body, &skill)
 
 	if resp.StatusCode >= 400 {
-		return &skill, resp.StatusCode, fmt.Errorf("%s", string(body))
+		return &skill, resp.StatusCode, httpError(resp.StatusCode, body)
 	}
 	return &skill, resp.StatusCode, nil
 }
@@ -1203,7 +1258,7 @@ func (c *apiClient) countSuggestions(role, status, skillID string) (int, error) 
 		return c.countSuggestionsLegacy(role, status, skillID)
 	}
 	if statusCode >= 400 {
-		return 0, fmt.Errorf("API error (%d): %s", statusCode, string(body))
+		return 0, httpError(statusCode, body)
 	}
 	var resp struct {
 		Count int `json:"count"`
@@ -1293,7 +1348,7 @@ func (c *apiClient) updateSuggestion(id, status, responseMessage string) (*apity
 		return nil, err
 	}
 	if statusCode >= 400 {
-		return nil, fmt.Errorf("API error (%d): %s", statusCode, string(body))
+		return nil, httpError(statusCode, body)
 	}
 	var s apitypes.Suggestion
 	if err := json.Unmarshal(body, &s); err != nil {

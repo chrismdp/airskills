@@ -16,6 +16,84 @@ import (
 	"github.com/chrismdp/airskills/config"
 )
 
+func TestPutArchiveHTTPErrorMessages(t *testing.T) {
+	tests := []struct {
+		name         string
+		status       int
+		body         string
+		wantContains []string
+		wantExcludes []string
+	}{
+		{
+			name:         "empty body includes status",
+			status:       http.StatusInternalServerError,
+			wantContains: []string{"500"},
+		},
+		{
+			name:         "whitespace body includes status",
+			status:       http.StatusInternalServerError,
+			body:         " \n\t ",
+			wantContains: []string{"500"},
+		},
+		{
+			name:         "HTML body is summarized",
+			status:       http.StatusForbidden,
+			body:         " \n<!DOCTYPE html><html><body>Cloudflare challenge</body></html>",
+			wantContains: []string{"HTTP 403", "HTML error page returned"},
+			wantExcludes: []string{"<!DOCTYPE", "<html>"},
+		},
+		{
+			name:         "short JSON body is preserved",
+			status:       http.StatusUnprocessableEntity,
+			body:         `{"error":"bad archive"}`,
+			wantContains: []string{`HTTP 422: {"error":"bad archive"}`},
+		},
+		{
+			name:         "long body is truncated",
+			status:       http.StatusBadGateway,
+			body:         strings.Repeat("x", 400),
+			wantContains: []string{"HTTP 502: " + strings.Repeat("x", 300) + "…"},
+			wantExcludes: []string{strings.Repeat("x", 301)},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tt.status)
+				_, _ = w.Write([]byte(tt.body))
+			}))
+			defer srv.Close()
+
+			client := &apiClient{
+				baseURL:     srv.URL,
+				token:       "test-token",
+				httpArchive: srv.Client(),
+			}
+			_, status, err := client.putArchive("skill-id", []byte("archive"), "", "")
+			if err == nil {
+				t.Fatal("putArchive returned nil error")
+			}
+			if status != tt.status {
+				t.Fatalf("status = %d, want %d", status, tt.status)
+			}
+			if err.Error() == "" {
+				t.Fatal("putArchive returned an empty error message")
+			}
+			for _, want := range tt.wantContains {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error %q does not contain %q", err, want)
+				}
+			}
+			for _, unwanted := range tt.wantExcludes {
+				if strings.Contains(err.Error(), unwanted) {
+					t.Errorf("error %q unexpectedly contains %q", err, unwanted)
+				}
+			}
+		})
+	}
+}
+
 // TestCountSuggestionsPrefersNewEndpoint verifies that countSuggestions
 // hits the new /api/v1/suggestions/count route by default, not the legacy
 // polymorphic /api/v1/suggestions?count=1 form.

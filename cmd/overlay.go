@@ -389,6 +389,9 @@ func promoteBackupToVisible(client *apiClient, syncState *SyncState, name string
 // isGoneError reports whether an API error means the skill no longer
 // exists (or is invisible) — 404/410 — as opposed to a transient failure.
 func isGoneError(err error) bool {
+	if status, ok := httpErrorStatus(err); ok {
+		return status == 404 || status == 410
+	}
 	msg := err.Error()
 	return strings.Contains(msg, "(404)") || strings.Contains(msg, "(410)") || strings.Contains(msg, "not found")
 }

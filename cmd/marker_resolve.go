@@ -201,8 +201,11 @@ func classifyMarkerSkill(c *apiClient, marker *SyncEntry) (markerState, error) {
 	}
 	body, err := c.get(fmt.Sprintf("/api/v1/skills/%s", marker.SkillID))
 	if err != nil {
-		// 404 manifests as an API error; the get helper doesn't expose status.
-		// Treat any "not found" wording as orphan.
+		if status, ok := httpErrorStatus(err); ok && status == 404 {
+			return markerState{kind: markerStateOrphan}, nil
+		}
+		// Keep recognizing older/fake error values that predate typed HTTP
+		// response errors.
 		msg := err.Error()
 		if strings.Contains(msg, "(404)") || strings.Contains(msg, "not found") {
 			return markerState{kind: markerStateOrphan}, nil

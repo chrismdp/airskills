@@ -76,7 +76,7 @@ var publishCmd = &cobra.Command{
 			return fmt.Errorf("failed to publish: %w", err)
 		}
 		if statusCode >= 400 {
-			return fmt.Errorf("API error (%d): %s", statusCode, string(body))
+			return httpError(statusCode, body)
 		}
 
 		// Check for private dependencies warning
