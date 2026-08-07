@@ -7,15 +7,16 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/chrismdp/airskills/config"
 )
 
 // foundSkill holds metadata for a skill discovered inside a tarball.
 type foundSkill struct {
-	FullPath string             // full parent dir path in tarball (empty for root-level)
-	LeafName string             // last path component of FullPath (empty for root-level)
-	Files    map[string][]byte  // relative paths within the skill dir → content
+	FullPath string            // full parent dir path in tarball (empty for root-level)
+	LeafName string            // last path component of FullPath (empty for root-level)
+	Files    map[string][]byte // relative paths within the skill dir → content
 }
 
 // isGitHubURL returns true if the raw input (before prefix stripping) is an
@@ -30,10 +31,11 @@ func isGitHubURL(raw string) bool {
 // parseGitHubURL extracts owner, repo, and optional skill path from a GitHub URL.
 // Returns (owner, repo, skillPath, error).
 // Handles:
-//   github.com/owner/repo                          → ("owner", "repo", "")
-//   github.com/owner/repo/skill-name               → ("owner", "repo", "skill-name")
-//   github.com/owner/repo/tree/main/skill-name     → ("owner", "repo", "skill-name")
-//   https://github.com/owner/repo.git              → ("owner", "repo", "")
+//
+//	github.com/owner/repo                          → ("owner", "repo", "")
+//	github.com/owner/repo/skill-name               → ("owner", "repo", "skill-name")
+//	github.com/owner/repo/tree/main/skill-name     → ("owner", "repo", "skill-name")
+//	https://github.com/owner/repo.git              → ("owner", "repo", "")
 func parseGitHubURL(raw string) (string, string, string, error) {
 	s := strings.TrimPrefix(raw, "https://")
 	s = strings.TrimPrefix(s, "http://")
@@ -57,6 +59,10 @@ func parseGitHubURL(raw string) (string, string, string, error) {
 	skillPath := strings.Join(remaining, "/")
 	return owner, repo, skillPath, nil
 }
+
+// downloadGitHubTarballFn is the seam the update path fetches through, so
+// tests can supply repo bytes without touching the network.
+var downloadGitHubTarballFn = downloadGitHubTarball
 
 // downloadGitHubTarball fetches the default-branch tarball from GitHub's API
 // and returns the extracted files as a map. Public repos need no auth.
@@ -281,13 +287,26 @@ func installOneGitHubSkill(owner, repo, githubURL string, skill foundSkill) erro
 		}
 	}
 
+	// Re-adding over an existing local copy overwrites bytes the user may
+	// have edited — the `--force` half of "take theirs". Back them up first
+	// so that exit is undoable, exactly as the airskills-native path does.
+	home, _ := os.UserHomeDir()
+	undoPath := ""
+	if _, statErr := os.Stat(filepath.Join(home, ".claude", "skills", dirName)); statErr == nil {
+		ts := time.Now().UTC().Format("20060102T150405Z")
+		path, backupErr := backupSkillToUndo(dirName, ts)
+		if backupErr != nil {
+			return fmt.Errorf("%s: backup failed before install: %w. No files modified.", dirName, backupErr)
+		}
+		undoPath = path
+	}
+
 	installed, err := installSkillToAgents(dirName, skill.Files)
 	if err != nil {
 		return err
 	}
 
 	// Compute content hash for the installed files.
-	home, _ := os.UserHomeDir()
 	primaryDir := filepath.Join(home, ".claude", "skills", dirName)
 	originalContent, _ := os.ReadFile(filepath.Join(primaryDir, "SKILL.md"))
 
@@ -295,11 +314,17 @@ func installOneGitHubSkill(owner, repo, githubURL string, skill foundSkill) erro
 		Version: "github",
 		Tool:    "claude-code",
 		Source: &skillSource{
-			Owner:       owner,
-			Slug:        slug,
-			ContentHash: sha256Hex(originalContent),
-			GitHubURL:   githubURL,
-			GitHubSkill: skill.LeafName,
+			Owner: owner,
+			Slug:  slug,
+			// Two baselines, because install can rewrite SKILL.md's name
+			// field to match the directory: ContentHash is what landed on
+			// disk (the "did the user edit it" baseline) and
+			// UpstreamContentHash is the repo's own bytes (the "has
+			// upstream moved" baseline, read by markerUpstreamBase).
+			ContentHash:         sha256Hex(originalContent),
+			UpstreamContentHash: sha256Hex(skill.Files["SKILL.md"]),
+			GitHubURL:           githubURL,
+			GitHubSkill:         skill.LeafName,
 		},
 	}
 
@@ -323,6 +348,9 @@ func installOneGitHubSkill(owner, repo, githubURL string, skill foundSkill) erro
 	}
 	fmt.Printf("Installed %s from GitHub to %d agents\n", slug, len(installed))
 	fmt.Printf("  %s %s\n", dim("Source:"), githubURL)
+	if undoPath != "" {
+		fmt.Printf("  Previous local files backed up to %s/\n", undoPath)
+	}
 	return nil
 }
 
@@ -471,8 +499,82 @@ func previewSkill(owner, repo string, skill foundSkill) error {
 	return nil
 }
 
-// syncGitHubSkills checks GitHub for updates to any GitHub-sourced skills
-// and pushes changes to the airskills platform.
+// githubUpdateAction is what a moved GitHub upstream earns: nothing, an
+// in-place update, or a hands-off warning.
+type githubUpdateAction string
+
+const (
+	gitHubUpdateNone      githubUpdateAction = "none"
+	gitHubUpdateTake      githubUpdateAction = "take"
+	gitHubUpdateKeepLocal githubUpdateAction = "keep-local"
+)
+
+// decideGitHubUpdate is the pure core of syncGitHubSkills, and gives a
+// GitHub source the same semantics as any other non-owned upstream: an
+// upstream that moved is only written to disk when the local copy still
+// matches the bytes we installed. Local edits are never overwritten —
+// the user takes upstream with `add --force` (which backs up first) or
+// keeps theirs with `resolve`.
+//
+// The acknowledge axis is markerUpstreamBase, shared with the
+// airskills-native path: once `resolve` records an upstream hash, that
+// upstream stays quiet until it moves again.
+//
+// An unknown local hash cannot be proven clean, so it counts as edited —
+// the same conservative side overlayHasLocalEdits takes.
+func decideGitHubUpdate(marker *SyncEntry, upstreamHash, localHash string) githubUpdateAction {
+	if marker == nil || marker.Source == nil || marker.Source.GitHubURL == "" {
+		return gitHubUpdateNone
+	}
+	if upstreamHash == "" || upstreamHash == markerUpstreamBase(marker) {
+		return gitHubUpdateNone
+	}
+	if localHash == "" || localHash != marker.Source.ContentHash {
+		return gitHubUpdateKeepLocal
+	}
+	return gitHubUpdateTake
+}
+
+// gitHubUpstreamHash returns the sha256 of one skill's SKILL.md inside a
+// repo tarball, or "" when the repo no longer carries that skill.
+func gitHubUpstreamHash(allFiles map[string][]byte, leafName string) string {
+	files := gitHubSkillFiles(allFiles, leafName)
+	if files == nil {
+		return ""
+	}
+	skillMd, ok := files["SKILL.md"]
+	if !ok {
+		return ""
+	}
+	return sha256Hex(skillMd)
+}
+
+// gitHubSkillFiles picks one skill out of a repo tarball by leaf name. Raw
+// scan — the caller already knows which skill it wants.
+func gitHubSkillFiles(allFiles map[string][]byte, leafName string) map[string][]byte {
+	for _, s := range scanSkillRoots(allFiles) {
+		if s.LeafName == leafName {
+			return s.Files
+		}
+	}
+	return nil
+}
+
+// localSkillHash hashes the installed SKILL.md for a skill directory, or
+// returns "" when it cannot be read.
+func localSkillHash(dirName string) string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	content, err := os.ReadFile(filepath.Join(home, ".claude", "skills", dirName, "SKILL.md"))
+	if err != nil {
+		return ""
+	}
+	return sha256Hex(content)
+}
+
+// syncGitHubSkills checks GitHub for updates to any GitHub-sourced skills.
 func syncGitHubSkills() {
 	syncState := loadSyncState()
 
@@ -487,50 +589,55 @@ func syncGitHubSkills() {
 			continue
 		}
 
-		allFiles, err := downloadGitHubTarball(owner, repo)
+		allFiles, err := downloadGitHubTarballFn(owner, repo)
 		if err != nil {
 			continue
 		}
 
-		// Use raw scan — we know which skill we want by leaf name.
-		skills := scanSkillRoots(allFiles)
-		var selectedFiles map[string][]byte
-		for _, s := range skills {
-			if s.LeafName == src.GitHubSkill {
-				selectedFiles = s.Files
-				break
+		newHash := gitHubUpstreamHash(allFiles, src.GitHubSkill)
+		switch decideGitHubUpdate(entry, newHash, localSkillHash(dirName)) {
+		case gitHubUpdateNone:
+			continue
+
+		case gitHubUpdateKeepLocal:
+			// Name the one skill, not the whole repo — a multi-skill repo
+			// would otherwise re-prompt for which one.
+			takeURL := src.GitHubURL
+			if src.GitHubSkill != "" {
+				takeURL = strings.TrimSuffix(takeURL, "/") + "/" + src.GitHubSkill
 			}
-		}
-		if selectedFiles == nil {
+			fmt.Printf("  %s %s: upstream %s/%s advanced — your local edits were kept.\n",
+				yellow("⚠"), dirName, src.Owner, src.Slug)
+			fmt.Printf("    Take theirs: airskills add %s --force  (backs your copy up to ~/.airskills/undo/)\n", takeURL)
+			fmt.Printf("    Keep yours:  airskills resolve %s\n", dirName)
 			continue
+
+		case gitHubUpdateTake:
+			selectedFiles := gitHubSkillFiles(allFiles, src.GitHubSkill)
+			if selectedFiles == nil {
+				continue
+			}
+			home, _ := os.UserHomeDir()
+			primaryDir := filepath.Join(home, ".claude", "skills", dirName)
+			for relPath, data := range selectedFiles {
+				fullPath := filepath.Join(primaryDir, relPath)
+				os.MkdirAll(filepath.Dir(fullPath), 0755)
+				os.WriteFile(fullPath, data, 0644)
+			}
+
+			// Mirror to other agents.
+			installSkillToAgents(dirName, selectedFiles)
+
+			// Both axes move together: the bytes on disk ARE upstream's, so
+			// there is nothing left to review. ResolvedHash is set (not just
+			// left) because a previous `resolve` would otherwise shadow the
+			// new baseline in markerUpstreamBase and re-take every sync.
+			entry.Source.ContentHash = localSkillHash(dirName)
+			entry.Source.UpstreamContentHash = newHash
+			entry.ResolvedHash = newHash
+			saveSyncState(syncState)
+
+			fmt.Printf("  %s Updated %s from GitHub\n", green("✓"), dirName)
 		}
-
-		// Check if SKILL.md content changed.
-		newContent, hasSkillMd := selectedFiles["SKILL.md"]
-		if !hasSkillMd {
-			continue
-		}
-		newHash := sha256Hex(newContent)
-		if newHash == src.ContentHash {
-			continue // no changes
-		}
-
-		// Update local files.
-		home, _ := os.UserHomeDir()
-		primaryDir := filepath.Join(home, ".claude", "skills", dirName)
-		for relPath, data := range selectedFiles {
-			fullPath := filepath.Join(primaryDir, relPath)
-			os.MkdirAll(filepath.Dir(fullPath), 0755)
-			os.WriteFile(fullPath, data, 0644)
-		}
-
-		// Mirror to other agents.
-		installSkillToAgents(dirName, selectedFiles)
-
-		// Update sync state.
-		entry.Source.ContentHash = newHash
-		saveSyncState(syncState)
-
-		fmt.Printf("  %s Updated %s from GitHub\n", green("✓"), dirName)
 	}
 }

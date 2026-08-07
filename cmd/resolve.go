@@ -108,10 +108,14 @@ func runResolve(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// fetchUpstreamHash fetches the current upstream skill from the server
-// and returns its content_hash. Resolves by Source.ID (the original
-// skill's stable id, recorded at 'airskills add' time).
+// fetchUpstreamHash fetches the current upstream skill and returns its
+// content hash. Resolves by Source.ID (the original skill's stable id,
+// recorded at 'airskills add' time), or — for a GitHub source, which has
+// no server-side row — by hashing SKILL.md in the repo tarball.
 func fetchUpstreamHash(entry *SyncEntry) (string, error) {
+	if entry.Source != nil && entry.Source.GitHubURL != "" {
+		return fetchGitHubUpstreamHash(entry.Source)
+	}
 	if entry.Source == nil || entry.Source.ID == "" {
 		return "", fmt.Errorf("marker has no upstream id")
 	}
@@ -132,3 +136,22 @@ func fetchUpstreamHash(entry *SyncEntry) (string, error) {
 	return resp.ContentHash, nil
 }
 
+// fetchGitHubUpstreamHash reads the current upstream hash for a
+// GitHub-sourced skill straight from the repo. No account, no auth: the
+// repo IS the upstream, so `resolve` works for a skill that was never on
+// airskills.ai.
+func fetchGitHubUpstreamHash(src *skillSource) (string, error) {
+	owner, repo, _, err := parseGitHubURL(src.GitHubURL)
+	if err != nil {
+		return "", err
+	}
+	allFiles, err := downloadGitHubTarballFn(owner, repo)
+	if err != nil {
+		return "", err
+	}
+	hash := gitHubUpstreamHash(allFiles, src.GitHubSkill)
+	if hash == "" {
+		return "", fmt.Errorf("%s/%s no longer contains a skill named %q", owner, repo, src.GitHubSkill)
+	}
+	return hash, nil
+}
