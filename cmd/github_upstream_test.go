@@ -203,7 +203,19 @@ func TestBackfillGitHubUpstreamHash(t *testing.T) {
 
 // --- behaviour at the boundary: what lands on disk ---
 
-// installedSkill writes a skill into the fake HOME as though airskills had
+// fakeHome returns a scratch directory and points the process's home at it
+// for the test. BOTH vars are required: os.UserHomeDir reads USERPROFILE on
+// Windows and HOME everywhere else, so setting one leaves the test writing
+// into the real home on the other platform.
+func fakeHome(t *testing.T) string {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	return home
+}
+
+// installedSkill writes a skill into the fake home as though airskills had
 // installed it, and returns the primary SKILL.md path.
 func installedSkill(t *testing.T, home, name, body string) string {
 	t.Helper()
@@ -239,8 +251,7 @@ func writeSyncState(t *testing.T, home string, state *SyncState) {
 }
 
 func TestSyncGitHubSkillsKeepsLocalEdits(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := fakeHome(t)
 
 	original := "---\nname: simple-english\n---\nupstream v1"
 	edited := "---\nname: simple-english\n---\nMY LOCAL EDITS"
@@ -274,8 +285,7 @@ func TestSyncGitHubSkillsKeepsLocalEdits(t *testing.T) {
 }
 
 func TestSyncGitHubSkillsTakesUpstreamWhenLocalIsClean(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := fakeHome(t)
 
 	original := "---\nname: simple-english\n---\nupstream v1"
 	upstream := "---\nname: simple-english\n---\nupstream v2"
@@ -310,8 +320,7 @@ func TestSyncGitHubSkillsTakesUpstreamWhenLocalIsClean(t *testing.T) {
 }
 
 func TestSyncGitHubSkillsStaysQuietAfterResolve(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := fakeHome(t)
 
 	original := "---\nname: simple-english\n---\nupstream v1"
 	upstream := "---\nname: simple-english\n---\nupstream v2"
@@ -341,8 +350,7 @@ func TestSyncGitHubSkillsStaysQuietAfterResolve(t *testing.T) {
 // took upstream on the very first sync — a pointless rewrite, and a
 // pointless warning for anyone holding local edits.
 func TestSyncGitHubSkillsMigratesPreSplitMarkerSilently(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := fakeHome(t)
 
 	repoBytes := []byte("---\nname: SimpleEnglish\n---\nbody")
 	onDisk, _ := fixSkillNameInContent("simple-english", repoBytes)
@@ -373,8 +381,7 @@ func TestSyncGitHubSkillsMigratesPreSplitMarkerSilently(t *testing.T) {
 // promise has to hold on the GitHub path too — it is the only exit that
 // discards local edits, so it is the one that must be undoable.
 func TestGitHubInstallBacksUpAnExistingLocalCopy(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := fakeHome(t)
 
 	edited := "---\nname: simple-english\n---\nMY LOCAL EDITS"
 	skillPath := installedSkill(t, home, "simple-english", edited)
