@@ -560,6 +560,39 @@ func gitHubSkillFiles(allFiles map[string][]byte, leafName string) map[string][]
 	return nil
 }
 
+// backfillGitHubUpstreamHash migrates a pre-split marker in place. Those
+// markers hold one hash — the bytes that landed on DISK — and reading it as
+// the upstream baseline makes an untouched repo look like it moved,
+// because install rewrites SKILL.md's name field to match the directory.
+//
+// The repair is exact rather than a guess. We know what install does, so we
+// replay it: when the repo's bytes hash to the recorded baseline either raw
+// or name-rewritten, upstream has not moved since the install, and the
+// repo's raw hash is the upstream baseline that was never recorded.
+//
+// When neither matches, upstream really did move while the marker was in
+// the old shape. There is nothing to prove and nothing to repair, so leave
+// it: the ContentHash fallback in markerUpstreamBase reads "moved", which
+// is the truth.
+//
+// Silent by design. This corrects our own bookkeeping and changes no files.
+// Reports whether the marker was repaired, so the caller can persist it.
+func backfillGitHubUpstreamHash(marker *SyncEntry, dirName string, upstreamSkillMd []byte) bool {
+	if marker == nil || marker.Source == nil || marker.Source.UpstreamContentHash != "" {
+		return false
+	}
+	if len(upstreamSkillMd) == 0 {
+		return false
+	}
+	rawHash := sha256Hex(upstreamSkillMd)
+	fixed, _ := fixSkillNameInContent(dirName, upstreamSkillMd)
+	if marker.Source.ContentHash == rawHash || marker.Source.ContentHash == sha256Hex(fixed) {
+		marker.Source.UpstreamContentHash = rawHash
+		return true
+	}
+	return false
+}
+
 // localSkillHash hashes the installed SKILL.md for a skill directory, or
 // returns "" when it cannot be read.
 func localSkillHash(dirName string) string {
@@ -594,7 +627,18 @@ func syncGitHubSkills() {
 			continue
 		}
 
-		newHash := gitHubUpstreamHash(allFiles, src.GitHubSkill)
+		selectedFiles := gitHubSkillFiles(allFiles, src.GitHubSkill)
+		upstreamSkillMd := selectedFiles["SKILL.md"]
+		newHash := ""
+		if len(upstreamSkillMd) > 0 {
+			newHash = sha256Hex(upstreamSkillMd)
+		}
+
+		// Repair a pre-split marker before any decision reads it.
+		if backfillGitHubUpstreamHash(entry, dirName, upstreamSkillMd) {
+			saveSyncState(syncState)
+		}
+
 		switch decideGitHubUpdate(entry, newHash, localSkillHash(dirName)) {
 		case gitHubUpdateNone:
 			continue
@@ -613,10 +657,6 @@ func syncGitHubSkills() {
 			continue
 
 		case gitHubUpdateTake:
-			selectedFiles := gitHubSkillFiles(allFiles, src.GitHubSkill)
-			if selectedFiles == nil {
-				continue
-			}
 			home, _ := os.UserHomeDir()
 			primaryDir := filepath.Join(home, ".claude", "skills", dirName)
 			for relPath, data := range selectedFiles {

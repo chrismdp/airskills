@@ -142,6 +142,65 @@ func TestGitHubUpstreamHash(t *testing.T) {
 	}
 }
 
+// Markers written before the two-baseline split carry only ContentHash —
+// the hash of the bytes that landed on disk, which install may have
+// rewritten (SKILL.md's name field is forced to match the directory).
+// Reading that as the upstream baseline makes an untouched repo look like
+// it moved. Backfill repairs those markers in place, with no user action
+// and no message, whenever we can prove upstream has NOT moved since the
+// install.
+func TestBackfillGitHubUpstreamHash(t *testing.T) {
+	// A repo whose SKILL.md declares a name that does NOT match the local
+	// directory, so install rewrites it and the disk bytes differ.
+	repoBytes := []byte("---\nname: SimpleEnglish\n---\nbody")
+	rawHash := sha256Hex(repoBytes)
+	fixed, changed := fixSkillNameInContent("simple-english", repoBytes)
+	if !changed {
+		t.Fatal("fixture must trigger the name rewrite, otherwise it tests nothing")
+	}
+	fixedHash := sha256Hex(fixed)
+
+	cases := []struct {
+		name       string
+		marker     *SyncEntry
+		wantFilled string
+	}{
+		{
+			name: "already migrated markers are left alone",
+			marker: func() *SyncEntry {
+				m := githubMarker(fixedHash)
+				m.Source.UpstreamContentHash = "already-set"
+				return m
+			}(),
+			wantFilled: "already-set",
+		},
+		{
+			name:       "install did not rewrite: baseline is the repo hash",
+			marker:     githubMarker(rawHash),
+			wantFilled: rawHash,
+		},
+		{
+			name:       "install rewrote the name: baseline is still the repo hash",
+			marker:     githubMarker(fixedHash),
+			wantFilled: rawHash,
+		},
+		{
+			name:       "upstream genuinely moved since install: do not guess",
+			marker:     githubMarker(sha256Hex([]byte("something else entirely"))),
+			wantFilled: "",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			backfillGitHubUpstreamHash(tc.marker, "simple-english", repoBytes)
+			if got := tc.marker.Source.UpstreamContentHash; got != tc.wantFilled {
+				t.Errorf("UpstreamContentHash = %q, want %q", got, tc.wantFilled)
+			}
+		})
+	}
+}
+
 // --- behaviour at the boundary: what lands on disk ---
 
 // installedSkill writes a skill into the fake HOME as though airskills had
@@ -274,6 +333,38 @@ func TestSyncGitHubSkillsStaysQuietAfterResolve(t *testing.T) {
 	got, _ := os.ReadFile(skillPath)
 	if string(got) != edited {
 		t.Errorf("resolved skill must keep local bytes, got %q", got)
+	}
+}
+
+// The migration in place: a pre-split marker whose install rewrote the
+// name field must not read as a moved upstream. Before backfill this
+// took upstream on the very first sync — a pointless rewrite, and a
+// pointless warning for anyone holding local edits.
+func TestSyncGitHubSkillsMigratesPreSplitMarkerSilently(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	repoBytes := []byte("---\nname: SimpleEnglish\n---\nbody")
+	onDisk, _ := fixSkillNameInContent("simple-english", repoBytes)
+	installedSkill(t, home, "simple-english", string(onDisk))
+
+	// Pre-split marker: one hash, and it is the DISK hash.
+	writeSyncState(t, home, &SyncState{Version: 1, Skills: map[string]*SyncEntry{
+		"simple-english": githubMarker(sha256Hex(onDisk)),
+	}})
+
+	stubTarball(t, map[string][]byte{"skills/simple-english/SKILL.md": repoBytes})
+
+	syncGitHubSkills()
+
+	after := loadSyncState().Skills["simple-english"]
+	if after.Source.UpstreamContentHash != sha256Hex(repoBytes) {
+		t.Errorf("UpstreamContentHash = %q, want the repo hash %q — marker was not migrated",
+			after.Source.UpstreamContentHash, sha256Hex(repoBytes))
+	}
+	if after.Source.ContentHash != sha256Hex(onDisk) {
+		t.Errorf("ContentHash = %q, want the disk hash — the local baseline must not move",
+			after.Source.ContentHash)
 	}
 }
 
